@@ -23,7 +23,7 @@ dotnet test AgentX.sln --no-build
 dotnet run --project src/AgentX.App
 ```
 
-In the app, copy a large packet, select **Paste packet**, and use **Copy full text** or **Export full text** to retrieve the untouched original. **Load 100k-line sample** gives a repeatable manual UI stress case.
+In the app, copy a large packet, select **Paste packet**, and use **Copy full text** or **Export full text** to retrieve the untouched original. The **Load 100k-line sample**, **Load 25 MiB sample**, and **Load 1M-line sample** buttons create repeatable UI stress inputs. The 25 MiB sample is exactly 25 MiB of ASCII text (102,400 lines).
 
 ## Verification and performance plan
 

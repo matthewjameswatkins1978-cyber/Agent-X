@@ -14,6 +14,8 @@
     <WrapPanel Grid.Row="1" Orientation="Horizontal" ItemSpacing="8">
       <Button Content="Paste packet" Click="PastePacket_OnClick" />
       <Button Content="Load 100k-line sample" Click="LoadSample_OnClick" />
+      <Button Content="Load 25 MiB sample" Click="Load25MiB_OnClick" />
+      <Button Content="Load 1M-line sample" Click="LoadMillionSample_OnClick" />
       <Button Content="Copy full text" Click="CopyFullText_OnClick" />
       <Button Content="Export full text" Click="ExportFullText_OnClick" />
     </WrapPanel>

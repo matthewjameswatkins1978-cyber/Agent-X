@@ -36,20 +36,45 @@ public partial class MainWindow : Window
     }
 
     private async void LoadSample_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => await LoadGeneratedSampleAsync("100k-line sample", () => GenerateLineSample(100_000));
+
+    private async void Load25MiB_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => await LoadGeneratedSampleAsync("25 MiB sample", Generate25MiBSample);
+
+    private async void LoadMillionSample_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => await LoadGeneratedSampleAsync("1M-line sample", () => GenerateLineSample(1_000_000));
+
+    private async Task LoadGeneratedSampleAsync(string sourceName, Func<string> generator)
     {
-        StatusText.Text = "Preparing the 100,000-line sample…";
-        var text = await Task.Run(() =>
+        StatusText.Text = $"Preparing {sourceName}…";
+        var text = await Task.Run(generator);
+        await ImportAsync(new TranscriptImportRequest(text, sourceName));
+    }
+
+    private static string GenerateLineSample(int lineCount)
+    {
+        var builder = new StringBuilder(lineCount * 64);
+        for (var i = 0; i < lineCount; i++)
         {
-            var builder = new StringBuilder(8_000_000);
-            for (var i = 0; i < 100_000; i++)
-            {
-                builder.Append('[').Append(i.ToString("D6")).Append("] sample agent event — full source remains available\n");
-            }
+            builder.Append('[').Append(i.ToString("D6")).Append("] sample agent event — full source remains available\n");
+        }
 
-            return builder.ToString();
-        });
+        return builder.ToString();
+    }
 
-        await ImportAsync(new TranscriptImportRequest(text, "100k-line sample"));
+    private static string Generate25MiBSample()
+    {
+        const int targetBytes = 25 * 1024 * 1024;
+        const int charactersPerLine = 256;
+        const int lineCount = targetBytes / charactersPerLine;
+        var builder = new StringBuilder(targetBytes);
+
+        for (var i = 0; i < lineCount; i++)
+        {
+            builder.Append('[').Append(i.ToString("D7")).Append("] ").Append('x', 245).Append('\n');
+        }
+
+        return builder.ToString();
     }
 
     private async Task ImportAsync(TranscriptImportRequest request)
