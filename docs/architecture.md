@@ -1,0 +1,26 @@
+# Agent X architecture and decisions
+
+## Product shape
+
+Agent X is an AI-first, native and dependable agent environment. Its resident AI operates the environment through typed capabilities. The managed Garden owns toolchains and plugin admission/testing. Pi is the protected, initially unmodified agent kernel. Plugins integrate with Agent X contracts, not Pi internals. Human and AI clients invoke the same operations and receive the same verifiable results.
+
+## Current vertical slice
+
+`Avalonia UI → TranscriptImporter.Import(TranscriptImportRequest) → TranscriptDocument → virtualized line view`
+
+The core owns the exact imported string, UTF-8 byte count, and compact line start/length indexes. It does not depend on Avalonia. The UI asks the core to import clipboard text, presents lines through a `ListBox`, and copies or exports the original full text rather than the rendered subset. Clipboard transfer awaits the platform, and parsing/indexing runs on a worker task before the UI binds the result. The ListBox uses a VirtualizingStackPanel over a lazy, read-only IList source, so line text is materialized on demand. Larger-size behavior still needs measurement.
+
+## Decisions
+
+1. **Prototype Avalonia 12.1.4 on .NET 10.** Avalonia is the requested framework, its latest stable release at bootstrap is 12.1.4, the package supports net10.0, and the framework is MIT-licensed. Keep the version pinned. Reassess startup cost, accessibility, text rendering, and distribution after measuring the native build.
+2. **Keep domain data and operations outside the GUI.** `TranscriptImportRequest` is the first typed operation. A future agent transport should call this same application boundary rather than automate a separate UI-only workflow.
+3. **Protect Pi behind an Agent X boundary.** Do not patch Pi or make plugins depend on its private internals. Kernel integration remains a later decision after Pi behavior and license/provenance are reviewed.
+4. **Treat rendered rows as a view.** The immutable original text is authoritative; line entries are lazy slices and the UI must not become the data store.
+
+## Explicitly deferred
+
+Garden lifecycle and isolation, resident AI/provider routing, plugin manifests and test admission, durable transcript persistence, streaming log append, cancellation/backpressure, operation authorization, and the client protocol. Do not infer their details from this demo.
+
+## Next milestone
+
+Run the large-packet UI cases from README, including a 25 MiB paste and a 1,000,000-line document. Capture timings and working set, verify full-text export equality, and tune the virtualized view only if measurements show a problem. Then define the smallest streamed-log operation and its typed result before building Garden or plugin infrastructure.

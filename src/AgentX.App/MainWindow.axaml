@@ -1,0 +1,41 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:core="using:AgentX.Core"
+        x:Class="AgentX.App.MainWindow"
+        Title="Agent X — Transcript"
+        Width="1100" Height="760" MinWidth="720" MinHeight="480"
+        Background="#101318">
+  <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="24" RowSpacing="16">
+    <StackPanel Grid.Row="0" Spacing="4">
+      <TextBlock Text="Agent X" FontSize="26" FontWeight="SemiBold" />
+      <TextBlock Text="A fast, faithful view of the whole conversation." Foreground="#AAB2BF" />
+    </StackPanel>
+
+    <WrapPanel Grid.Row="1" Orientation="Horizontal" ItemSpacing="8">
+      <Button Content="Paste packet" Click="PastePacket_OnClick" />
+      <Button Content="Load 100k-line sample" Click="LoadSample_OnClick" />
+      <Button Content="Copy full text" Click="CopyFullText_OnClick" />
+      <Button Content="Export full text" Click="ExportFullText_OnClick" />
+    </WrapPanel>
+
+    <Border Grid.Row="2" BorderBrush="#343B47" BorderThickness="1" CornerRadius="8" Padding="8">
+      <ListBox x:Name="TranscriptList" Background="Transparent" BorderThickness="0">
+        <ListBox.ItemsPanel>
+          <ItemsPanelTemplate>
+            <VirtualizingStackPanel />
+          </ItemsPanelTemplate>
+        </ListBox.ItemsPanel>
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="core:TranscriptLine">
+            <TextBlock Text="{Binding Text}" FontFamily="Cascadia Code, Consolas, monospace"
+                       FontSize="13" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                       Margin="6,3" />
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </Border>
+
+    <TextBlock x:Name="StatusText" Grid.Row="3" Text="Copy a packet, then select Paste packet."
+               Foreground="#AAB2BF" TextWrapping="Wrap" />
+  </Grid>
+</Window>
