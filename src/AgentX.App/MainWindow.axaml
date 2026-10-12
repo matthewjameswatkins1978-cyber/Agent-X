@@ -6,59 +6,50 @@
         Title="Agent X"
         Width="1200" Height="800" MinWidth="720" MinHeight="480"
         Background="#101318">
-  <Grid Margin="16" ColumnSpacing="8">
-    <Grid.ColumnDefinitions>
-      <ColumnDefinition Width="Auto" MinWidth="0" />
-      <ColumnDefinition Width="Auto" />
-      <ColumnDefinition Width="*" MinWidth="0" />
-    </Grid.ColumnDefinitions>
-    <!-- Left: project navigation (collapsible, resizable). No file explorer yet. -->
-    <Border x:Name="NavPanel" Grid.Column="0" MinWidth="200" MaxWidth="300" BorderBrush="#343B47" BorderThickness="1"
-            CornerRadius="8" Padding="12" VerticalAlignment="Stretch">
-      <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-        <StackPanel Spacing="8">
-          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-            <TextBlock x:Name="NavTitle" Text="Agent X" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" />
-          </Grid>
-          <StackPanel x:Name="NavContent" Spacing="8">
-          <TextBlock Text="Workspace" FontWeight="SemiBold" />
-          <ComboBox x:Name="WorkspaceCombo" HorizontalAlignment="Stretch"
-                    SelectionChanged="WorkspaceCombo_OnChanged" />
-          <WrapPanel Orientation="Horizontal" ItemSpacing="8">
-            <Button x:Name="AddWorkspaceButton" Content="Add project…" Click="AddWorkspace_OnClick" />
-          </WrapPanel>
-          <StackPanel x:Name="PendingConfirmPanel" Spacing="6" IsVisible="False">
-            <TextBlock x:Name="PendingConfirmText" Text="" Foreground="#E5C07B" FontSize="12"
-                       TextWrapping="Wrap" />
-            <StackPanel Orientation="Horizontal" Spacing="8">
-              <Button Content="Confirm registration" Click="ConfirmWorkspace_OnClick" />
-              <Button Content="Cancel" Click="CancelWorkspace_OnClick" />
-            </StackPanel>
-          </StackPanel>
+  <Grid Margin="12" RowSpacing="8" RowDefinitions="Auto,Auto,*,Auto">
+    <!-- Top row: workspace tabs + add. Scrolls on overflow; arrow keys work. -->
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+      <ScrollViewer Grid.Column="0" HorizontalScrollBarVisibility="Auto"
+                    VerticalScrollBarVisibility="Disabled">
+        <TabStrip x:Name="WorkspaceTabs" SelectionChanged="WorkspaceTabs_OnChanged" />
+      </ScrollViewer>
+      <Button Grid.Column="1" Content="+" Click="AddWorkspace_OnClick"
+              ToolTip.Tip="Add project" VerticalAlignment="Center" />
+    </Grid>
+
+    <!-- Second row: pages. Live is default. -->
+    <TabStrip Grid.Row="1" x:Name="PageTabs" SelectionChanged="PageTabs_OnChanged">
+      <TabStripItem Content="Overview" />
+      <TabStripItem Content="Live" IsSelected="True" />
+      <TabStripItem Content="Settings" />
+    </TabStrip>
+
+    <!-- Pages. Only one visible; controls persist so scroll, selection,
+         composer input and feed survive page switches. -->
+    <Grid Grid.Row="2">
+      <!-- Overview: real workspace state, activity, evidence. No invented cards. -->
+      <ScrollViewer x:Name="OverviewPanel" IsVisible="False"
+                    VerticalScrollBarVisibility="Auto"
+                    HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Spacing="8" MaxWidth="900" HorizontalAlignment="Left">
+          <TextBlock Text="Workspace" FontSize="16" FontWeight="SemiBold" />
           <TextBlock x:Name="WorkspaceDetailText" Text="Select a workspace, then Connect."
                      Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />
-          <TextBlock Text="Session" FontWeight="SemiBold" />
-          <WrapPanel Orientation="Horizontal" ItemSpacing="8">
-            <Button Content="Connect" Click="ConnectPi_OnClick" />
-            <Button Content="Disconnect" Click="DisconnectPi_OnClick" />
-            <Button Content="Reconnect" Click="ReconnectPi_OnClick" />
-          </WrapPanel>
-          <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-            <TextBlock Text="State" Foreground="#AAB2BF" FontSize="12" VerticalAlignment="Center" />
-            <TextBlock x:Name="PiConnectionState" Grid.Column="1" Text="Disconnected"
-                       Foreground="#AAB2BF" FontSize="12" VerticalAlignment="Center" />
-          </Grid>
-          <TextBlock x:Name="PiModelText" Text="Pi engine not connected."
+          <TextBlock x:Name="OverviewConnectionText" Text="Not connected."
                      Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />
-          <Expander Header="Session map" IsExpanded="False" HorizontalAlignment="Stretch">
+          <TextBlock Text="Session file" FontWeight="SemiBold" />
+          <TextBlock x:Name="OverviewSessionFileText" Text="No session file yet."
+                     Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />
+          <TextBlock Text="Recent activity" FontWeight="SemiBold" />
+          <TextBlock x:Name="OverviewFactsText" Text="Nothing observed yet."
+                     Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />
+          <StackPanel x:Name="OverviewMilestones" Spacing="4" />
+          <Expander Header="Session map detail" IsExpanded="False" HorizontalAlignment="Stretch">
             <StackPanel Spacing="8">
               <SelectableTextBlock x:Name="SessionMapText" Text="Connect to Pi to build the session map."
                                      TextWrapping="Wrap" FontSize="12" />
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <Button Content="Copy session map" Click="CopySessionMap_OnClick" />
-                <CheckBox x:Name="VerboseMapCheck" Content="Verbose" IsChecked="False"
-                          IsCheckedChanged="VerboseMapCheck_OnChanged" />
-              </StackPanel>
+              <Button Content="Copy session map" Click="CopySessionMap_OnClick"
+                      HorizontalAlignment="Left" />
             </StackPanel>
           </Expander>
           <Expander Header="Packet tools" IsExpanded="False" HorizontalAlignment="Stretch">
@@ -90,65 +81,141 @@
               </ListBox>
             </StackPanel>
           </Expander>
-          </StackPanel>
         </StackPanel>
       </ScrollViewer>
-    </Border>
-    <GridSplitter x:Name="NavSplitter" Grid.Column="1" Width="4" ResizeDirection="Columns"
-                  Background="Transparent" />
 
-    <!-- Centre: conversation (dominant) + anchored composer. -->
-    <Grid Grid.Column="2" RowDefinitions="Auto,*,Auto" RowSpacing="8">
-      <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,*,Auto" ColumnSpacing="8">
-        <Button x:Name="NavCollapseButton" Content="«" Click="NavCollapse_OnClick"
-                ToolTip.Tip="Hide navigation panel" VerticalAlignment="Center" />
-        <TextBlock Grid.Column="1" Text="Conversation" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
-        <CheckBox Grid.Column="2" x:Name="AutoScrollCheck" Content="Auto-scroll" IsChecked="True" />
-        <Button Grid.Column="3" Content="Copy selected message" Click="CopySelectedMessage_OnClick"
-                HorizontalAlignment="Left" />
-        <Button Grid.Column="4" Content="Copy full conversation" Click="CopyFullConversation_OnClick" />
+      <!-- Live: dominant conversation + anchored composer. -->
+      <Grid x:Name="LivePanel" RowDefinitions="Auto,*,Auto" RowSpacing="8">
+        <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,*,Auto" ColumnSpacing="8">
+          <WrapPanel Orientation="Horizontal" ItemSpacing="8">
+            <Button Content="Connect" Click="ConnectPi_OnClick" />
+            <Button Content="Disconnect" Click="DisconnectPi_OnClick" />
+            <Button Content="Reconnect" Click="ReconnectPi_OnClick" />
+          </WrapPanel>
+          <CheckBox Grid.Column="1" x:Name="AutoScrollCheck" Content="Auto-scroll"
+                    IsChecked="True" IsCheckedChanged="AutoScrollCheck_OnChanged"
+                    VerticalAlignment="Center" />
+          <Button Grid.Column="3" Content="Copy selected message" Click="CopySelectedMessage_OnClick"
+                  HorizontalAlignment="Left" />
+          <Button Grid.Column="4" Content="Copy full conversation" Click="CopyFullConversation_OnClick" />
+        </Grid>
+
+        <Grid Grid.Row="1">
+          <Border BorderBrush="#343B47" BorderThickness="1" CornerRadius="8" Padding="4">
+            <ListBox x:Name="ConversationList" Background="Transparent" BorderThickness="0"
+                     SelectionMode="Single">
+              <ListBox.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <VirtualizingStackPanel />
+                </ItemsPanelTemplate>
+              </ListBox.ItemsPanel>
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="app:ConversationViewItem">
+                  <StackPanel Spacing="2" Margin="8,6"
+                              AutomationProperties.Name="{Binding Header}">
+                    <TextBlock Text="{Binding Header}" Foreground="{Binding RoleBrush}"
+                               FontSize="11" FontWeight="SemiBold" />
+                    <SelectableTextBlock Text="{Binding DisplayText}" TextWrapping="Wrap"
+                                         FontFamily="Cascadia Code, Consolas, monospace" FontSize="13" />
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Border>
+          <!-- Inviting empty state, not a wizard. Auto-hides with content. -->
+          <Border x:Name="EmptyStatePanel" IsVisible="False" HorizontalAlignment="Center"
+                  VerticalAlignment="Center" Background="#161B22" BorderBrush="#343B47"
+                  BorderThickness="1" CornerRadius="8" Padding="20" MaxWidth="520">
+            <StackPanel Spacing="8">
+              <TextBlock Text="Start with your project" FontSize="16" FontWeight="SemiBold"
+                         HorizontalAlignment="Center" />
+              <TextBlock x:Name="EmptyStateText" Text="Connect a workspace, then ask your first question."
+                         Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap"
+                         HorizontalAlignment="Center" TextAlignment="Center" />
+              <Button Content="List the top-level files and explain the layout"
+                      Tag="List the top-level files in this project and explain the layout briefly."
+                      Click="Suggestion_OnClick" HorizontalAlignment="Stretch" />
+              <Button Content="Summarise recent changes" Tag="Summarise the recent changes in this project."
+                      Click="Suggestion_OnClick" HorizontalAlignment="Stretch" />
+              <Button Content="What tests exist and how do I run them"
+                      Tag="What tests exist in this project and how do I run them?"
+                      Click="Suggestion_OnClick" HorizontalAlignment="Stretch" />
+            </StackPanel>
+          </Border>
+        </Grid>
+
+        <Border Grid.Row="2" BorderBrush="#343B47" BorderThickness="1" CornerRadius="8" Padding="8">
+          <StackPanel Spacing="6">
+            <TextBlock x:Name="PiActivityText" Text="" Foreground="#7DD3A8" FontSize="12"
+                       TextWrapping="Wrap" />
+            <TextBlock x:Name="PiRunStatus" Text="" Foreground="#AAB2BF" FontSize="12"
+                       TextWrapping="Wrap" />
+            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+              <TextBox x:Name="PiPromptBox" PlaceholderText="Ask Pi anything… (Ctrl+Enter to send)"
+                       AcceptsReturn="True" TextWrapping="Wrap" MinHeight="64" MaxHeight="220"
+                       ScrollViewer.VerticalScrollBarVisibility="Auto"
+                       KeyDown="PiPromptBox_OnKeyDown" />
+              <Button Grid.Column="1" x:Name="PiSendButton" Content="Send" Click="SendPrompt_OnClick" />
+              <Button Grid.Column="2" x:Name="PiCancelButton" Content="Cancel" Click="CancelPrompt_OnClick" IsEnabled="False" />
+            </Grid>
+          </StackPanel>
+        </Border>
       </Grid>
 
-      <Border Grid.Row="1" BorderBrush="#343B47" BorderThickness="1" CornerRadius="8" Padding="4">
-        <ListBox x:Name="ConversationList" Background="Transparent" BorderThickness="0"
-                 SelectionMode="Single">
-          <ListBox.ItemsPanel>
-            <ItemsPanelTemplate>
-              <VirtualizingStackPanel />
-            </ItemsPanelTemplate>
-          </ListBox.ItemsPanel>
-          <ListBox.ItemTemplate>
-            <DataTemplate x:DataType="app:ConversationViewItem">
-              <StackPanel Spacing="2" Margin="8,6"
-                          AutomationProperties.Name="{Binding Header}">
-                <TextBlock Text="{Binding Header}" Foreground="{Binding RoleBrush}"
-                           FontSize="11" FontWeight="SemiBold" />
-                <SelectableTextBlock Text="{Binding DisplayText}" TextWrapping="Wrap"
-                                     FontFamily="Cascadia Code, Consolas, monospace" FontSize="13" />
-              </StackPanel>
-            </DataTemplate>
-          </ListBox.ItemTemplate>
-        </ListBox>
-      </Border>
-
-      <Border Grid.Row="2" BorderBrush="#343B47" BorderThickness="1" CornerRadius="8" Padding="8">
-        <StackPanel Spacing="6">
-          <TextBlock x:Name="PiActivityText" Text="" Foreground="#7DD3A8" FontSize="12"
-                     TextWrapping="Wrap" />
-          <TextBlock x:Name="PiRunStatus" Text="" Foreground="#AAB2BF" FontSize="12"
-                     TextWrapping="Wrap" />
-          <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
-            <TextBox x:Name="PiPromptBox" PlaceholderText="Ask Pi anything… (Ctrl+Enter to send)"
-                     AcceptsReturn="True" TextWrapping="Wrap" MinHeight="64" MaxHeight="220"
-                     ScrollViewer.VerticalScrollBarVisibility="Auto"
-                     KeyDown="PiPromptBox_OnKeyDown" />
-            <Button Grid.Column="1" x:Name="PiSendButton" Content="Send" Click="SendPrompt_OnClick" />
-            <Button Grid.Column="2" x:Name="PiCancelButton" Content="Cancel" Click="CancelPrompt_OnClick" IsEnabled="False" />
+      <!-- Settings: only genuine, working controls. -->
+      <ScrollViewer x:Name="SettingsPanel" IsVisible="False"
+                    VerticalScrollBarVisibility="Auto"
+                    HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Spacing="8" MaxWidth="900" HorizontalAlignment="Left">
+          <TextBlock Text="Preferences" FontSize="16" FontWeight="SemiBold" />
+          <CheckBox x:Name="SettingsAutoScrollCheck" Content="Auto-scroll conversation"
+                    IsCheckedChanged="SettingsAutoScrollCheck_OnChanged" />
+          <CheckBox x:Name="SettingsVerboseCheck" Content="Verbose session-map milestones"
+                    IsCheckedChanged="SettingsVerboseCheck_OnChanged" />
+          <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+            <TextBlock Text="Theme" VerticalAlignment="Center" />
+            <ComboBox Grid.Column="1" x:Name="ThemeCombo" MinWidth="160"
+                      SelectionChanged="ThemeCombo_OnChanged" />
           </Grid>
-          <TextBlock x:Name="StatusText" Text="Select a workspace, then Connect."
+          <TextBlock Text="Managed locations" FontWeight="SemiBold" />
+          <TextBlock x:Name="ManagedPathsText" Text="" Foreground="#AAB2BF" FontSize="12"
+                     TextWrapping="Wrap" />
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Content="Open sessions folder" Click="OpenSessions_OnClick" />
+            <Button Content="Open registry folder" Click="OpenRegistry_OnClick" />
+          </StackPanel>
+          <TextBlock Text="Workspace registration" FontWeight="SemiBold" />
+          <Button x:Name="AddWorkspaceButton" Content="Add project…" Click="AddWorkspace_OnClick"
+                  HorizontalAlignment="Left" />
+          <StackPanel x:Name="PendingConfirmPanel" Spacing="6" IsVisible="False">
+            <TextBlock x:Name="PendingConfirmText" Text="" Foreground="#E5C07B" FontSize="12"
+                       TextWrapping="Wrap" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="Confirm registration" Click="ConfirmWorkspace_OnClick" />
+              <Button Content="Cancel" Click="CancelWorkspace_OnClick" />
+            </StackPanel>
+          </StackPanel>
+          <TextBlock Text="Engine" FontWeight="SemiBold" />
+          <TextBlock x:Name="PiInfoText" Text="Pi engine not connected."
                      Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />
+          <TextBlock x:Name="AppVersionText" Text="" Foreground="#AAB2BF" FontSize="12"
+                     TextWrapping="Wrap" />
         </StackPanel>
-      </Border>
+      </ScrollViewer>
     </Grid>
+
+    <!-- Shared quiet status: connection, model, action feedback. All pages. -->
+    <Border Grid.Row="3" BorderBrush="#343B47" BorderThickness="1" CornerRadius="8" Padding="8">
+      <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8">
+        <Ellipse x:Name="ConnectionDot" Width="10" Height="10" Fill="#6B7280"
+                 VerticalAlignment="Center" ToolTip.Tip="Connection state" />
+        <TextBlock x:Name="PiConnectionState" Grid.Column="1" Text="Disconnected"
+                   Foreground="#AAB2BF" FontSize="12" VerticalAlignment="Center" />
+        <TextBlock x:Name="StatusText" Grid.Column="2" Text="Select a workspace, then Connect."
+                   Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" />
+        <TextBlock x:Name="PiModelText" Grid.Column="3" Text="Pi engine not connected."
+                   Foreground="#AAB2BF" FontSize="12" VerticalAlignment="Center" />
+      </Grid>
+    </Border>
   </Grid>
 </Window>
