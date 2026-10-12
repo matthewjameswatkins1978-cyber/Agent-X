@@ -17,6 +17,21 @@ The core owns the exact imported string, UTF-8 byte count, and compact line star
 3. **Protect Pi behind an Agent X boundary.** Do not patch Pi or make plugins depend on its private internals. Kernel integration remains a later decision after Pi behavior and license/provenance are reviewed.
 4. **Treat rendered rows as a view.** The immutable original text is authoritative; line entries are lazy slices and the UI must not become the data store.
 
+## Page navigation (feature/agent-x-rc1-b1-navigation)
+
+Top workspace tabs (scrollable overflow, keyboard arrows, connection dots)
+plus Overview / Live / Settings pages replace the sidebar. Live is default
+with the full-height feed and anchored composer; page switches are
+presentation-only (scroll, selection, composer and feed survive). Tabs never
+retarget a live Pi process (disconnect-first rule with revert); each tab
+keeps an in-memory feed snapshot while disconnected. Overview shows only
+observed facts (identity, connection, session file, counts, milestone
+buttons that jump to Live+select). Settings holds only working controls
+(auto-scroll, verbose map, theme, managed folders, engine/app info) backed
+by persisted `AgentXPreferences`. Live keeps an inviting empty state with
+composer-filling suggestions instead of a wizard. Verified live; details in
+docs/rc1-b1-navigation.md.
+
 ## Native desktop shell (feature/agent-x-desktop-shell)
 
 Left project navigation (collapsible icon rail, resizable via splitter,

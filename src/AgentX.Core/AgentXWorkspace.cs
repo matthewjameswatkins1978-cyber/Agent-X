@@ -60,6 +60,13 @@ public sealed class AgentXWorkspace
     /// <summary>True for the preserved global session, never for a project workspace.</summary>
     public bool IsLegacy => SessionId == LegacySessionId;
 
+    /// <summary>
+    /// Key this workspace occupies in the GUI tab strip: the reserved legacy
+    /// key for the global session, otherwise the slug. Tab identity and
+    /// session identity agree by construction (see ResolveTabs).
+    /// </summary>
+    public string TabKey => IsLegacy ? WorkspaceCatalog.LegacyKey : Slug;
+
     /// <summary>Pi session storage override (passed as --session-dir). Shared with legacy.</summary>
     public string SessionDirectory => Path.Combine(ManagedRoot, "sessions");
 
@@ -178,6 +185,50 @@ public sealed class AgentXWorkspace
     {
         EnsureDirectories();
         return PiRpcOptions.ForSession(SessionDirectory, SessionId, WorkingDirectory, executablePath);
+    }
+
+    /// <summary>
+    /// Newest persisted Pi session file for this workspace, if any: Pi names
+    /// files <c>&lt;timestamp&gt;_&lt;session-id&gt;.jsonl</c> inside the shared
+    /// session directory. Returns null when nothing persisted yet (a bare
+    /// connect writes nothing). Used by Overview as inspectable evidence;
+    /// never guesses — only exact session-id suffix matches count.
+    /// </summary>
+    public (string Path, long Bytes)? FindSessionFile()
+    {
+        string[] candidates;
+        try
+        {
+            if (!Directory.Exists(SessionDirectory))
+            {
+                return null;
+            }
+
+            candidates = Directory.GetFiles(SessionDirectory, $"*{SessionId}.jsonl");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        FileInfo? newest = null;
+        foreach (var candidate in candidates)
+        {
+            try
+            {
+                var info = new FileInfo(candidate);
+                if (newest is null || info.LastWriteTimeUtc > newest.LastWriteTimeUtc)
+                {
+                    newest = info;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A vanishing file is not evidence; keep looking.
+            }
+        }
+
+        return newest is null ? null : (newest.FullName, newest.Length);
     }
 
     public static string CanonicalizeProjectRoot(string projectRoot)

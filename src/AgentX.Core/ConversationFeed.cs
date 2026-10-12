@@ -120,6 +120,28 @@ public sealed class ConversationFeed
         Changed?.Invoke();
     }
 
+    /// <summary>
+    /// Replace the whole feed with previously snapshotted entries (same
+    /// workspace, later visit). Entries are immutable records, so a
+    /// <see cref="Snapshot"/> array round-trips exactly; the sequence
+    /// counter resumes past the highest restored Seq.
+    /// </summary>
+    public void LoadSnapshot(IReadOnlyList<FeedEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        lock (_gate)
+        {
+            _entries.Clear();
+            _entries.AddRange(entries);
+            if (entries.Count > 0)
+            {
+                _nextSeq = Math.Max(_nextSeq, entries.Max(e => e.Seq) + 1);
+            }
+        }
+
+        Changed?.Invoke();
+    }
+
     public long AddUser(string text)
         => Add(new FeedEntry(NextSeq(), "user", text));
 

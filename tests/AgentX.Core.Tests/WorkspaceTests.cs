@@ -461,6 +461,149 @@ public sealed class WorkspaceTests
     }
 
     [Fact]
+    public void Preferences_RoundTrip_AndRecoverCorrupt()
+    {
+        var root = TempRoot("prefs");
+        try
+        {
+            var (missing, note0) = AgentXPreferences.Load(root);
+            Assert.Equal(new AgentXPreferences(), missing);
+            Assert.Null(note0);
+
+            new AgentXPreferences(AutoScroll: false, VerboseMap: true, Theme: "Dark").Save(root);
+            var (loaded, note1) = AgentXPreferences.Load(root);
+            Assert.Null(note1);
+            Assert.False(loaded.AutoScroll);
+            Assert.True(loaded.VerboseMap);
+            Assert.Equal("Dark", loaded.Theme);
+
+            var unknown = new AgentXPreferences(Theme: "Neon");
+            unknown.Save(root);
+            Assert.Equal("System", AgentXPreferences.Load(root).Preferences.Theme);
+
+            File.WriteAllText(AgentXPreferences.PreferencesPath(root), "{ broken");
+            var (fallback, note2) = AgentXPreferences.Load(root);
+            Assert.Equal(new AgentXPreferences(), fallback);
+            Assert.NotNull(note2);
+            Assert.True(File.Exists(AgentXPreferences.PreferencesPath(root) + ".bak"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FeedSnapshot_RoundTripsExactly_ResumingSequence()
+    {
+        var feed = new ConversationFeed();
+        feed.AddUser("first");
+        var turn = feed.BeginAssistantTurn();
+        feed.AppendDelta(turn, "partial");
+        var snapshot = feed.Snapshot();
+
+        var restored = new ConversationFeed();
+        restored.LoadSnapshot(snapshot);
+        Assert.Equal(snapshot, restored.Snapshot());
+        var next = restored.AddUser("second");
+        Assert.Equal(snapshot.Max(e => e.Seq) + 1, next); // No Seq reuse across visits.
+        Assert.Equal("partial", restored.GetEntryText(turn));
+    }
+
+    [Fact]
+    public void FindSessionFile_ReturnsNewestMatch_Only()
+    {
+        var root = TempRoot("sessfile");
+        try
+        {
+            var project = ProjectDir(root, "Proj");
+            var workspace = AgentXWorkspace.ForProject(root, project);
+            Assert.Null(workspace.FindSessionFile()); // Nothing persisted yet.
+            Directory.CreateDirectory(workspace.SessionDirectory);
+            File.WriteAllText(Path.Combine(workspace.SessionDirectory, "2026-01-01T00-00-00-000Z_other.jsonl"), "x");
+            var older = Path.Combine(workspace.SessionDirectory, $"2026-01-01T00-00-00-000Z_{workspace.SessionId}.jsonl");
+            var newer = Path.Combine(workspace.SessionDirectory, $"2026-06-01T00-00-00-000Z_{workspace.SessionId}.jsonl");
+            File.WriteAllText(older, "old");
+            File.WriteAllText(newer, "new-persisted-bytes");
+            File.SetLastWriteTimeUtc(older, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+            File.SetLastWriteTimeUtc(newer, new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc));
+            var found = workspace.FindSessionFile();
+            Assert.NotNull(found);
+            Assert.Equal(newer, found.Value.Path);
+            Assert.Equal("new-persisted-bytes".Length, found.Value.Bytes);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResolveTabs_RetainsConnectedWorkspaceMissingFromCatalog()
+    {
+        // The P1 recovery edge: registry lost B mid-session. B's tab is
+        // retained (built from the live connection's own identity) and the
+        // target stays B — its feed is never shown under Legacy's name.
+        var root = TempRoot("resolve-retain");
+        try
+        {
+            var project = ProjectDir(root, "ProjB");
+            var connected = AgentXWorkspace.ForProject(root, project);
+            var catalog = new WorkspaceCatalog(
+                [new CatalogEntry(WorkspaceCatalog.LegacyKey, "Legacy", "d", true, null)],
+                recoveryError: "corrupt");
+            var resolved = WorkspaceCatalog.ResolveTabs(catalog, connected, preferredKey: null);
+            Assert.Equal(2, resolved.Entries.Count);
+            var retained = Assert.Single(resolved.Entries, e => e.Key == connected.Slug);
+            Assert.Contains("(session active)", retained.Label, StringComparison.Ordinal);
+            Assert.Equal(connected.ProjectRoot, retained.ToWorkspace(root).ProjectRoot, ignoreCase: true);
+            Assert.Equal(connected.SessionId, retained.ToWorkspace(root).SessionId);
+            Assert.Equal(connected.Slug, resolved.TargetKey);
+            Assert.NotNull(resolved.RetentionNote);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResolveTabs_NoDuplication_PreferredAndLegacy()
+    {
+        var root = TempRoot("resolve-clean");
+        try
+        {
+            var project = ProjectDir(root, "Proj");
+            var workspace = AgentXWorkspace.ForProject(root, project);
+            var registration = new WorkspaceRegistration(
+                workspace.Slug, workspace.ProjectRoot, workspace.SessionId, DateTime.UtcNow);
+            var catalog = new WorkspaceCatalog(
+                [
+                    new CatalogEntry(WorkspaceCatalog.LegacyKey, "Legacy", "d", true, null),
+                    new CatalogEntry(workspace.Slug, "Proj", "d", false, registration),
+                ],
+                recoveryError: null);
+            // Connected and present: no second tab, target stays.
+            var live = WorkspaceCatalog.ResolveTabs(catalog, workspace, preferredKey: null);
+            Assert.Equal(2, live.Entries.Count);
+            Assert.Equal(workspace.Slug, live.TargetKey);
+            Assert.Null(live.RetentionNote);
+            // Disconnected with preference: honored; unknown preference falls back.
+            Assert.Equal(workspace.Slug, WorkspaceCatalog.ResolveTabs(catalog, null, workspace.Slug).TargetKey);
+            Assert.Equal(WorkspaceCatalog.LegacyKey, WorkspaceCatalog.ResolveTabs(catalog, null, "ghost").TargetKey);
+            Assert.Equal(WorkspaceCatalog.LegacyKey, WorkspaceCatalog.ResolveTabs(catalog, null, null).TargetKey);
+            // Legacy connected: its catalog entry matches by tab key, never retained twice.
+            var legacyResolved = WorkspaceCatalog.ResolveTabs(catalog, AgentXWorkspace.Legacy(root), null);
+            Assert.Equal(2, legacyResolved.Entries.Count);
+            Assert.Equal(WorkspaceCatalog.LegacyKey, legacyResolved.TargetKey);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void SingleClientConversation_Throws_OnExplicitClient()
     {
         // Documents the reconnect requirement: a fixed client cannot be

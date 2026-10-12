@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Text;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
@@ -18,21 +19,30 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _promptLifetime;
     private bool _piBusy;
 
-    // Workspace identity: one project root, one Pi session, one execution
-    // root. Switching requires disconnect first, so histories, working
-    // directories and tool paths can never mix across projects. The bound
-    // list comes from WorkspaceCatalog (Core): exactly the legacy entry plus
-    // validated registrations, or legacy-only with a recovery reason.
+    // Workspace tabs + pages: one active workspace at a time, presentation-only
+    // page switches. Tab selection never retargets a live Pi process (only
+    // Disconnect/Reconnect change connection state); page switches never
+    // touch the feed, so scroll, selection and composer input survive.
     private WorkspaceCatalog _catalog = null!;
+    private AgentXPreferences _prefs = new();
     private string? _connectedKey;
     private string? _connectedLabel;
     // Immutable owner of the live conversation: reconnect restores THIS
     // workspace even if the picker selection moved meanwhile. Set on
     // connect, cleared only on disconnect — never by selection changes.
     private AgentXWorkspace? _connectedWorkspace;
+    // Per-workspace ownership: every identity transition — user tab click
+    // or programmatic reselect after a registry rebuild — flows through one
+    // coordinator, so the guarded switch and the feed-memory sync cannot be
+    // bypassed by a suppressed UI event.
+    private WorkspaceSessionCoordinator _coordinator = null!;
+    // Guards against re-entrant UI updates (programmatic reselect, pref sync).
+    private bool _suppressTabEvents;
+    private bool _syncingPrefs;
     // True while a connect or reconnect is underway: blocks re-entrant
     // Connect/Reconnect/switch transitions. Set alongside _piBusy on UI thread.
     private bool _connecting;
+
     // True while a folder picker is open: Add is not re-entrant (stacked
     // modal pickers). Set on UI thread around OpenFolderPickerAsync.
     private bool _pickingWorkspace;
@@ -53,49 +63,198 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         ConversationList.ItemsSource = _conversationItems;
+        // Empty state follows the collection itself: any add/clear on the UI
+        // thread updates it, on every page, with no scattered call sites.
+        _conversationItems.CollectionChanged += (_, _) => UpdateEmptyState();
         _flushTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _flushTimer.Tick += (_, _) => FlushLive();
-        LoadWorkspaceChoices(selectKey: "legacy");
+        var (prefs, note) = AgentXPreferences.Load(ManagedRoot);
+        _prefs = prefs;
+        _coordinator = new WorkspaceSessionCoordinator(_feed, WorkspaceCatalog.LegacyKey);
+        ApplyTheme();
+        ThemeCombo.ItemsSource = AgentXPreferences.KnownThemes;
+        _syncingPrefs = true;
+        try
+        {
+            AutoScrollCheck.IsChecked = _prefs.AutoScroll;
+        }
+        finally
+        {
+            _syncingPrefs = false;
+        }
+
+        LoadWorkspaceTabs(selectKey: WorkspaceCatalog.LegacyKey);
+        ShowPage("Live");
+        RefreshSettings();
+        if (note is not null)
+        {
+            StatusText.Text = note;
+        }
     }
 
-    // --- Workspace selector: project-aware session identity. ---
+    // --- Workspace tabs: one active identity, guarded switching. ---
 
-    private void LoadWorkspaceChoices(string? selectKey = null)
+    private void LoadWorkspaceTabs(string? selectKey = null)
     {
         // Never throws for registry problems: the catalog degrades to
         // legacy-only with a recovery reason instead of crashing init.
         _catalog = WorkspaceCatalog.Load(ManagedRoot);
         AddWorkspaceButton.IsEnabled = !_catalog.IsRecovery;
-        WorkspaceCombo.ItemsSource = _catalog.Entries.ToArray();
-        var index = _catalog.Entries.ToList().FindIndex(c => c.Key == selectKey);
-        WorkspaceCombo.SelectedIndex = index >= 0 ? index : 0;
+
+        // Tab list + transition target come from one tested Core decision:
+        // a connected workspace missing from the catalog keeps an explicitly
+        // labeled retained tab, so its feed is never shown under another
+        // tab's name. Never fabricated — retention rebuilds from the live
+        // connection's own workspace object.
+        var resolved = WorkspaceCatalog.ResolveTabs(
+            _catalog,
+            _conversation is not null ? _connectedWorkspace : null,
+            selectKey);
+        var connectedLive = _conversation is not null && _connectedKey is not null;
+        WorkspaceTabs.Items.Clear();
+        foreach (var entry in resolved.Entries)
+        {
+            WorkspaceTabs.Items.Add(MakeTab(entry,
+                isConnected: connectedLive && entry.Key == _connectedKey));
+        }
+
+        // One authoritative transition for programmatic reselects too: a
+        // connected workspace keeps its tab (new registrations never steal
+        // the view), and a disconnected reselect snapshots/restores feeds
+        // exactly like a user click. Suppressed selection alone would skip
+        // all of that and can show the wrong project's history.
+        var result = _coordinator.RequestTransition(resolved.TargetKey);
+        SelectTab(_coordinator.ActiveKey);
+        RebuildConversationList();
+        RebuildSessionMap();
+        if (OverviewPanel.IsVisible)
+        {
+            RebuildOverview();
+        }
+
+        UpdateEmptyState();
+        if (!result.Accepted)
+        {
+            StatusText.Text = $"Staying on '{_connectedLabel}' — {result.RefusalReason} Histories never mix.";
+        }
+        else if (_conversation is null && SelectedEntry is { } current)
+        {
+            StatusText.Text = current.IsLegacy
+                ? "Legacy session selected — press Connect."
+                : $"Workspace '{current.Label}' selected — press Connect.";
+        }
+
         if (_catalog.RecoveryError is { } recovery)
         {
-            StatusText.Text = recovery;
+            StatusText.Text = resolved.RetentionNote is not null
+                ? $"{recovery} {resolved.RetentionNote}"
+                : recovery;
         }
     }
 
-    private void NavCollapse_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private static TabStripItem MakeTab(CatalogEntry entry, bool isConnected)
     {
-        // True collapse: hiding the panel lets the Auto column shrink to zero
-        // and returns the full width to the conversation. The splitter hides
-        // with it (nothing to resize) and both return on expand. No forced
-        // widths anywhere, so user splitter sizing is never fought.
-        var show = !NavPanel.IsVisible;
-        NavPanel.IsVisible = show;
-        NavSplitter.IsVisible = show;
-        NavCollapseButton.Content = show ? "«" : "»";
-    }
-
-    private CatalogEntry? SelectedChoice => WorkspaceCombo.SelectedItem as CatalogEntry;
-
-    private void WorkspaceCombo_OnChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        if (SelectedChoice is { } choice)
+        var dot = new Avalonia.Controls.Shapes.Ellipse
         {
-            WorkspaceDetailText.Text = choice.Detail;
+            Width = 8,
+            Height = 8,
+            Fill = isConnected
+                ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#7DD3A8"))
+                : new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#6B7280")),
+        };
+        var label = new TextBlock { Text = entry.Label, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
+        var header = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 6 };
+        header.Children.Add(dot);
+        header.Children.Add(label);
+        var tab = new TabStripItem { Content = header };
+        Avalonia.Controls.ToolTip.SetTip(tab, entry.Detail);
+        tab.SetValue(Avalonia.Automation.AutomationProperties.NameProperty, entry.Label);
+        tab.Tag = entry;
+        return tab;
+    }
+
+    private CatalogEntry? SelectedEntry => (WorkspaceTabs.SelectedItem as TabStripItem)?.Tag as CatalogEntry;
+
+    private void SelectTab(string key)
+    {
+        _suppressTabEvents = true;
+        try
+        {
+            foreach (var item in WorkspaceTabs.Items)
+            {
+                if (item is TabStripItem tab && (tab.Tag as CatalogEntry)?.Key == key)
+                {
+                    WorkspaceTabs.SelectedItem = tab;
+                    return;
+                }
+            }
+
+            WorkspaceTabs.SelectedIndex = 0;
+        }
+        finally
+        {
+            _suppressTabEvents = false;
         }
     }
+
+    private void UpdateTabDots()
+    {
+        foreach (var item in WorkspaceTabs.Items)
+        {
+            if (item is TabStripItem tab
+                && tab.Content is StackPanel header
+                && header.Children.Count > 0
+                && header.Children[0] is Avalonia.Controls.Shapes.Ellipse dot
+                && tab.Tag is CatalogEntry entry)
+            {
+                var on = entry.Key == _connectedKey && _conversation?.IsConnected == true;
+                dot.Fill = on
+                    ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#7DD3A8"))
+                    : new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#6B7280"));
+            }
+        }
+    }
+
+    private void WorkspaceTabs_OnChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressTabEvents)
+        {
+            return;
+        }
+
+        var entry = SelectedEntry;
+        if (entry is null)
+        {
+            return;
+        }
+
+        // Same authoritative path as programmatic reselects: the coordinator
+        // refuses pinned workspaces and syncs feed memory atomically.
+        var result = _coordinator.RequestTransition(entry.Key);
+        if (!result.Accepted)
+        {
+            StatusText.Text = $"Disconnect from '{_connectedLabel}' before opening '{entry.Label}' — histories never mix.";
+            SelectTab(_coordinator.ActiveKey);
+            return;
+        }
+
+        RebuildConversationList();
+        RebuildSessionMap();
+        if (OverviewPanel.IsVisible)
+        {
+            RebuildOverview();
+        }
+
+        UpdateEmptyState();
+        if (_conversation is null)
+        {
+            StatusText.Text = entry.IsLegacy
+                ? "Legacy session selected — press Connect."
+                : $"Workspace '{entry.Label}' selected — press Connect.";
+        }
+    }
+
+    // --- Pages: presentation-only switches. ---
 
     private async void AddWorkspace_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
@@ -197,7 +356,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         {
-            LoadWorkspaceChoices(selectKey: SelectedChoice?.Key);
+            LoadWorkspaceTabs(selectKey: SelectedEntry?.Key);
             StatusText.Text = $"Registry became unreadable — registration disabled, file preserved. {ex.Message}";
             return;
         }
@@ -206,8 +365,10 @@ public partial class MainWindow : Window
         {
             var workspace = registry.GetOrRegister(path);
             registry.Save();
-            LoadWorkspaceChoices(selectKey: workspace.Slug);
-            StatusText.Text = $"Workspace '{workspace.Slug}' ready — session {workspace.SessionId}. Press Connect.";
+            LoadWorkspaceTabs(selectKey: workspace.Slug);
+            StatusText.Text = _conversation is not null && workspace.Slug != _connectedKey
+                ? $"Workspace '{workspace.Slug}' registered — disconnect from '{_connectedLabel}' to open it."
+                : $"Workspace '{workspace.Slug}' ready — session {workspace.SessionId}. Press Connect.";
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
@@ -351,7 +512,7 @@ public partial class MainWindow : Window
         // conversation — undisposed, still subscribed — beside a new one.
         if (_conversation is not null)
         {
-            if (_conversation.IsConnected && SelectedChoice?.Key == _connectedKey)
+            if (_conversation.IsConnected && SelectedEntry?.Key == _connectedKey)
             {
                 return;
             }
@@ -366,7 +527,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (SelectedChoice is not { } choice)
+        if (SelectedEntry is not { } choice)
         {
             StatusText.Text = "Select a workspace first.";
             return;
@@ -396,13 +557,17 @@ public partial class MainWindow : Window
             _connectedKey = choice.Key;
             _connectedLabel = choice.Label;
             _connectedWorkspace = workspace;
+            _coordinator.NoteConnected(choice.Key);
             PiConnectionState.Text = "Connected";
             PiModelText.Text = DescribeState(state);
             var history = conversation.History;
             _feed.LoadHistory(history);
+            _coordinator.RefreshMemory();
             _feed.SetActivity(null);
             RebuildConversationList();
             RebuildSessionMap();
+            UpdateTabDots();
+            RefreshOverviewAndSettings();
             PiRunStatus.Text = history.Count == 0
                 ? $"New session for '{choice.Label}' — no previous conversation."
                 : $"Restored '{choice.Label}' with {history.Count} message(s). Send a prompt to continue.";
@@ -482,6 +647,7 @@ public partial class MainWindow : Window
             _conversationItems.Add(ToViewItem(LookupEntry(noticeSeq)));
             _feed.SetActivity(null);
             RebuildSessionMap();
+            RefreshOverviewAndSettings();
             MaybeAutoScroll();
             PiRunStatus.Text = $"Reconnected to '{_connectedLabel ?? "Pi"}' — session intact.";
         }
@@ -552,6 +718,7 @@ public partial class MainWindow : Window
             PiActivityText.Text = string.Empty;
             _feed.SetActivity(null);
             RebuildSessionMap();
+            RefreshOverviewAndSettings();
             var updates = _liveAccumulator?.FlushCount ?? 0;
             PiRunStatus.Text = $"Last run: {receipt.Display} ({receipt.AssistantChars:N0} chars in {updates:N0} UI updates, {_feed.Count} feed entries.)";
             StatusText.Text = receipt.RunHealthy
@@ -568,6 +735,7 @@ public partial class MainWindow : Window
             UpdateStreamingItem();
             _feed.SetActivity(null);
             RebuildSessionMap();
+            RefreshOverviewAndSettings();
             PiConnectionState.Text = "Cancelled";
             PiActivityText.Text = string.Empty;
             PiRunStatus.Text = "Last run: cancelled — run did not complete and earned no health signal. History refreshes on next connect.";
@@ -593,6 +761,7 @@ public partial class MainWindow : Window
             _feed.SetActivity(null);
             PiActivityText.Text = string.Empty;
             RebuildSessionMap();
+            RefreshOverviewAndSettings();
             PiConnectionState.Text = "Idle";
         }
         catch (PiRpcTransportException ex)
@@ -604,6 +773,7 @@ public partial class MainWindow : Window
             _conversationItems.Add(ToViewItem(LookupEntry(errorSeq)));
             _feed.SetActivity(null);
             RebuildSessionMap();
+            RefreshOverviewAndSettings();
             // The conversation is kept (dead process inside) for ReconnectAsync;
             // explicit Disconnect tears it down. The loss event below dedupes
             // against this entry, so one failure stays one entry.
@@ -689,6 +859,21 @@ public partial class MainWindow : Window
             entry.Text);
     }
 
+    /// <summary>Refresh visible derived views after connection/feed changes.</summary>
+    private void RefreshOverviewAndSettings()
+    {
+        UpdateTabDots();
+        if (OverviewPanel.IsVisible)
+        {
+            RebuildOverview();
+        }
+
+        if (SettingsPanel.IsVisible)
+        {
+            RefreshSettings();
+        }
+    }
+
     private void RebuildConversationList()
     {
         _conversationItems.Clear();
@@ -701,6 +886,8 @@ public partial class MainWindow : Window
         {
             ConversationList.ScrollIntoView(_conversationItems[^1]);
         }
+
+        UpdateEmptyState();
     }
 
     private void UpdateStreamingItem()
@@ -765,12 +952,312 @@ public partial class MainWindow : Window
 
     private void RebuildSessionMap()
     {
-        var verbose = VerboseMapCheck.IsChecked == true;
-        SessionMapText.Text = _feed.BuildMap().ToDisplayText(verbose);
+        SessionMapText.Text = _feed.BuildMap().ToDisplayText(_prefs.VerboseMap);
     }
 
-    private void VerboseMapCheck_OnChanged(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-        => RebuildSessionMap();
+    // --- Pages, Overview, Settings, empty state. ---
+
+    private void ShowPage(string name)
+    {
+        var index = name switch
+        {
+            "Overview" => 0,
+            "Settings" => 2,
+            _ => 1,
+        };
+        if (PageTabs.SelectedIndex != index)
+        {
+            PageTabs.SelectedIndex = index;
+            return; // The change handler below does the work.
+        }
+
+        ApplyPageVisibility(index);
+    }
+
+    private void PageTabs_OnChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        // Fires during XAML init (IsSelected in markup) before named fields
+        // exist — ignore until construction completes.
+        if (OverviewPanel is null || LivePanel is null || SettingsPanel is null)
+        {
+            return;
+        }
+
+        ApplyPageVisibility(PageTabs.SelectedIndex);
+    }
+
+    private void ApplyPageVisibility(int index)
+    {
+        OverviewPanel.IsVisible = index == 0;
+        LivePanel.IsVisible = index == 1;
+        SettingsPanel.IsVisible = index == 2;
+        if (index == 0)
+        {
+            RebuildOverview();
+        }
+        else if (index == 2)
+        {
+            RefreshSettings();
+        }
+    }
+
+    /// <summary>
+    /// Overview shows only observed facts: workspace identity, connection,
+    /// session file, map-derived counts and milestones. Nothing invented.
+    /// </summary>
+    private void RebuildOverview()
+    {
+        var entry = SelectedEntry;
+        if (entry is null)
+        {
+            return;
+        }
+
+        WorkspaceDetailText.Text = entry.Detail;
+        var viewingOwn = _conversation is null || entry.Key == _connectedKey;
+        OverviewConnectionText.Text = _conversation?.IsConnected == true
+            ? viewingOwn
+                ? $"Connected to '{_connectedLabel}'. {PiModelText.Text}"
+                : $"Connected to '{_connectedLabel}' — viewing '{entry.Label}' (connect it to work here)."
+            : $"Not connected. {(viewingOwn ? "Press Connect on the Live page." : "This is not the connected workspace.")}";
+        try
+        {
+            var workspace = entry.ToWorkspace(ManagedRoot);
+            var sessionFile = workspace.FindSessionFile();
+            OverviewSessionFileText.Text = sessionFile is { } found
+                ? $"{found.Path} ({found.Bytes:N0} bytes)"
+                : "No session file yet — Pi persists on the first completed run.";
+        }
+        catch (Exception ex)
+        {
+            OverviewSessionFileText.Text = $"Session file lookup failed: {ex.Message}";
+        }
+
+        var map = _feed.BuildMap();
+        var changed = map.ChangedFiles.Count == 0 ? "none observed" : string.Join(", ", map.ChangedFiles);
+        var tests = map.TestCommands.Count == 0 ? "none observed" : string.Join(" | ", map.TestCommands);
+        OverviewFactsText.Text =
+            $"Entries: {_feed.Count} · error events: {map.ErrorCount} · " +
+            $"changed files: {changed} · test commands (heuristic): {tests} · " +
+            $"last run: {map.LastReceipt ?? "none"}.";
+        OverviewMilestones.Children.Clear();
+        if (map.Milestones.Count == 0)
+        {
+            OverviewMilestones.Children.Add(new TextBlock
+            {
+                Text = "No milestones yet — they appear as you work.",
+                Foreground = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#AAB2BF")),
+                FontSize = 12,
+            });
+        }
+
+        foreach (var milestone in map.Milestones.TakeLast(8))
+        {
+            var button = new Button
+            {
+                Content = $"[#{milestone.Seq} {milestone.Kind}] {milestone.Title}",
+                Tag = milestone.Seq,
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+            };
+            button.Click += Milestone_OnClick;
+            OverviewMilestones.Children.Add(button);
+        }
+
+        RebuildSessionMap();
+    }
+
+    private void Milestone_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (sender is not Button button || button.Tag is not long seq)
+        {
+            return;
+        }
+
+        ShowPage("Live");
+        var item = _conversationItems.FirstOrDefault(i => i.Seq == seq);
+        if (item is not null)
+        {
+            ConversationList.SelectedItem = item;
+            ConversationList.ScrollIntoView(item);
+            ConversationList.Focus();
+        }
+    }
+
+    private void UpdateEmptyState()
+    {
+        var empty = _conversationItems.Count == 0;
+        EmptyStatePanel.IsVisible = empty;
+        if (empty && SelectedEntry is { } entry)
+        {
+            EmptyStateText.Text = _conversation is null
+                ? $"No conversation in '{entry.Label}' yet. Connect, then ask your first question — or try a suggestion below."
+                : $"'{entry.Label}' is quiet. Ask anything below to begin.";
+        }
+    }
+
+    private void Suggestion_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (sender is Button button && button.Tag is string prompt)
+        {
+            PiPromptBox.Text = prompt;
+            PiPromptBox.Focus();
+            PiPromptBox.CaretIndex = prompt.Length;
+        }
+    }
+
+    private void ApplyTheme()
+    {
+        if (Avalonia.Application.Current is { } app)
+        {
+            app.RequestedThemeVariant = _prefs.Theme switch
+            {
+                "Light" => Avalonia.Styling.ThemeVariant.Light,
+                "Dark" => Avalonia.Styling.ThemeVariant.Dark,
+                _ => Avalonia.Styling.ThemeVariant.Default,
+            };
+        }
+    }
+
+    private void SavePrefs()
+    {
+        try
+        {
+            _prefs.Save(ManagedRoot);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            StatusText.Text = $"Could not save preferences: {ex.Message}";
+        }
+    }
+
+    private void RefreshSettings()
+    {
+        if (_syncingPrefs)
+        {
+            return;
+        }
+
+        _syncingPrefs = true;
+        try
+        {
+            SettingsAutoScrollCheck.IsChecked = _prefs.AutoScroll;
+            SettingsVerboseCheck.IsChecked = _prefs.VerboseMap;
+            ThemeCombo.SelectedItem = _prefs.Theme;
+            ManagedPathsText.Text =
+                $"Sessions: {Path.Combine(ManagedRoot, "sessions")}\n" +
+                $"Registry: {WorkspaceRegistry.RegistryPath(ManagedRoot)}\n" +
+                $"Preferences: {AgentXPreferences.PreferencesPath(ManagedRoot)}\n" +
+                (_catalog.IsRecovery ? "Registry state: RECOVERY (registration disabled)." : "Registry state: healthy.");
+            PiInfoText.Text = _conversation?.IsConnected == true
+                ? $"{PiModelText.Text} Session: {_connectedWorkspace?.SessionId ?? _connectedKey}."
+                : "Pi engine not connected. Provider authentication lives in Pi itself; Agent X never copies credentials.";
+            var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+            AppVersionText.Text = $"Agent X desktop (Avalonia UI) — app version {version?.ToString() ?? "dev"}. Pi engine 1.1.0 external, unmodified.";
+        }
+        finally
+        {
+            _syncingPrefs = false;
+        }
+    }
+
+    private void SettingsAutoScrollCheck_OnChanged(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_syncingPrefs)
+        {
+            return;
+        }
+
+        _prefs = _prefs with { AutoScroll = SettingsAutoScrollCheck.IsChecked == true };
+        SavePrefs();
+        _syncingPrefs = true;
+        try
+        {
+            AutoScrollCheck.IsChecked = _prefs.AutoScroll;
+        }
+        finally
+        {
+            _syncingPrefs = false;
+        }
+    }
+
+    private void AutoScrollCheck_OnChanged(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_syncingPrefs)
+        {
+            return;
+        }
+
+        _prefs = _prefs with { AutoScroll = AutoScrollCheck.IsChecked == true };
+        SavePrefs();
+        _syncingPrefs = true;
+        try
+        {
+            SettingsAutoScrollCheck.IsChecked = _prefs.AutoScroll;
+        }
+        finally
+        {
+            _syncingPrefs = false;
+        }
+    }
+
+    private void SettingsVerboseCheck_OnChanged(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_syncingPrefs)
+        {
+            return;
+        }
+
+        _prefs = _prefs with { VerboseMap = SettingsVerboseCheck.IsChecked == true };
+        SavePrefs();
+        if (OverviewPanel.IsVisible)
+        {
+            RebuildOverview();
+        }
+        else
+        {
+            RebuildSessionMap();
+        }
+        if (OverviewPanel.IsVisible)
+        {
+            RebuildOverview();
+        }
+    }
+
+    private void ThemeCombo_OnChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingPrefs || ThemeCombo.SelectedItem is not string theme)
+        {
+            return;
+        }
+
+        _prefs = _prefs with { Theme = theme };
+        _prefs = _prefs.Normalized();
+        SavePrefs();
+        ApplyTheme();
+    }
+
+    private void OpenSessions_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        OpenFolder(Path.Combine(ManagedRoot, "sessions"));
+    }
+
+    private void OpenRegistry_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        OpenFolder(ManagedRoot);
+    }
+
+    private void OpenFolder(string path)
+    {
+        try
+        {
+            Directory.CreateDirectory(path);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Could not open folder: {ex.Message}";
+        }
+    }
 
     private async void CopySelectedMessage_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
@@ -854,6 +1341,7 @@ public partial class MainWindow : Window
             // The session map shows real observed activity, never stale idle.
             _feed.SetActivity(string.IsNullOrWhiteSpace(activity) ? null : activity);
             RebuildSessionMap();
+            RefreshOverviewAndSettings();
         });
     }
 
@@ -873,6 +1361,7 @@ public partial class MainWindow : Window
             _conversationItems.Add(ToViewItem(LookupEntry(seq)));
             MaybeAutoScroll();
             RebuildSessionMap();
+            RefreshOverviewAndSettings();
         });
     }
 
@@ -899,6 +1388,7 @@ public partial class MainWindow : Window
             PiConnectionState.Text = "Connection lost";
             PiRunStatus.Text = "Connection to Pi lost — session is persisted. Press Reconnect to restore.";
             RebuildSessionMap();
+            RefreshOverviewAndSettings();
         });
     }
 
@@ -925,6 +1415,7 @@ public partial class MainWindow : Window
         _connectedKey = null;
         _connectedLabel = null;
         _connectedWorkspace = null;
+        _coordinator.NoteDisconnected();
 
         Dispatcher.UIThread.Post(() =>
         {
@@ -933,6 +1424,7 @@ public partial class MainWindow : Window
             PiActivityText.Text = string.Empty;
             _feed.SetActivity(null);
             RebuildSessionMap();
+            RefreshOverviewAndSettings();
             PiRunStatus.Text = "Session is persisted — reconnect to restore the conversation.";
         });
     }
