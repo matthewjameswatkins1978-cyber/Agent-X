@@ -3,55 +3,114 @@
         xmlns:app="using:AgentX.App"
         xmlns:core="using:AgentX.Core"
         x:Class="AgentX.App.MainWindow"
-        Title="Agent X — Transcript"
-        Width="1100" Height="760" MinWidth="720" MinHeight="480"
+        Title="Agent X"
+        Width="1200" Height="800" MinWidth="720" MinHeight="480"
         Background="#101318">
-  <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" Margin="24" RowSpacing="16">
-    <StackPanel Grid.Row="0" Spacing="4">
-      <TextBlock Text="Agent X" FontSize="26" FontWeight="SemiBold" />
-      <TextBlock Text="A fast, faithful view of the whole conversation." Foreground="#AAB2BF" />
-    </StackPanel>
-
-    <WrapPanel Grid.Row="1" Orientation="Horizontal" ItemSpacing="8">
-      <Button Content="Paste packet" Click="PastePacket_OnClick" />
-      <Button Content="Load 100k-line sample" Click="LoadSample_OnClick" />
-      <Button Content="Load 25 MiB sample" Click="Load25MiB_OnClick" />
-      <Button Content="Load 1M-line sample" Click="LoadMillionSample_OnClick" />
-      <Button Content="Copy full text" Click="CopyFullText_OnClick" />
-      <Button Content="Export full text" Click="ExportFullText_OnClick" />
-    </WrapPanel>
-
-    <Border Grid.Row="2" BorderBrush="#343B47" BorderThickness="1" CornerRadius="8" Padding="12">
-      <StackPanel Spacing="8">
-        <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
-          <TextBlock Text="Pi agent" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
-          <TextBlock x:Name="PiConnectionState" Grid.Column="1" Text="Disconnected" Foreground="#AAB2BF" VerticalAlignment="Center" />
-          <Button Grid.Column="2" Content="Connect" Click="ConnectPi_OnClick" />
-          <Button Grid.Column="3" Content="Disconnect" Click="DisconnectPi_OnClick" />
-        </Grid>
-        <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
-          <TextBlock Text="Workspace" FontWeight="SemiBold" VerticalAlignment="Center" />
-          <ComboBox Grid.Column="1" x:Name="WorkspaceCombo" MinWidth="280"
+  <Grid Margin="16" ColumnSpacing="8">
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="Auto" MinWidth="0" />
+      <ColumnDefinition Width="Auto" />
+      <ColumnDefinition Width="*" MinWidth="0" />
+    </Grid.ColumnDefinitions>
+    <!-- Left: project navigation (collapsible, resizable). No file explorer yet. -->
+    <Border x:Name="NavPanel" Grid.Column="0" MinWidth="200" MaxWidth="300" BorderBrush="#343B47" BorderThickness="1"
+            CornerRadius="8" Padding="12" VerticalAlignment="Stretch">
+      <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Spacing="8">
+          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <TextBlock x:Name="NavTitle" Text="Agent X" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" />
+          </Grid>
+          <StackPanel x:Name="NavContent" Spacing="8">
+          <TextBlock Text="Workspace" FontWeight="SemiBold" />
+          <ComboBox x:Name="WorkspaceCombo" HorizontalAlignment="Stretch"
                     SelectionChanged="WorkspaceCombo_OnChanged" />
-          <Button Grid.Column="2" x:Name="AddWorkspaceButton" Content="Add project…" Click="AddWorkspace_OnClick" />
-          <Button Grid.Column="3" Content="Reconnect" Click="ReconnectPi_OnClick" />
-        </Grid>
-        <TextBlock x:Name="WorkspaceDetailText" Text="Select a workspace, then Connect." Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />
-        <TextBlock x:Name="PiModelText" Text="Pi engine not connected." Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />
-        <TextBlock x:Name="PiActivityText" Text="" Foreground="#7DD3A8" FontSize="12" TextWrapping="Wrap" />
-        <TextBlock x:Name="PiRunStatus" Text="" Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />
-        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
-          <TextBox x:Name="PiPromptBox" PlaceholderText="Ask Pi anything…" />
-          <Button Grid.Column="1" x:Name="PiSendButton" Content="Send" Click="SendPrompt_OnClick" />
-          <Button Grid.Column="2" x:Name="PiCancelButton" Content="Cancel" Click="CancelPrompt_OnClick" IsEnabled="False" />
-        </Grid>
-        <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8">
-          <TextBlock Text="Conversation" FontWeight="SemiBold" VerticalAlignment="Center" />
-          <CheckBox Grid.Column="1" x:Name="AutoScrollCheck" Content="Auto-scroll" IsChecked="True" />
-          <Button Grid.Column="2" Content="Copy selected message" Click="CopySelectedMessage_OnClick" />
-          <Button Grid.Column="3" Content="Copy full conversation" Click="CopyFullConversation_OnClick" />
-        </Grid>
-        <ListBox x:Name="ConversationList" MinHeight="160" MaxHeight="300"
+          <WrapPanel Orientation="Horizontal" ItemSpacing="8">
+            <Button x:Name="AddWorkspaceButton" Content="Add project…" Click="AddWorkspace_OnClick" />
+          </WrapPanel>
+          <StackPanel x:Name="PendingConfirmPanel" Spacing="6" IsVisible="False">
+            <TextBlock x:Name="PendingConfirmText" Text="" Foreground="#E5C07B" FontSize="12"
+                       TextWrapping="Wrap" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="Confirm registration" Click="ConfirmWorkspace_OnClick" />
+              <Button Content="Cancel" Click="CancelWorkspace_OnClick" />
+            </StackPanel>
+          </StackPanel>
+          <TextBlock x:Name="WorkspaceDetailText" Text="Select a workspace, then Connect."
+                     Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />
+          <TextBlock Text="Session" FontWeight="SemiBold" />
+          <WrapPanel Orientation="Horizontal" ItemSpacing="8">
+            <Button Content="Connect" Click="ConnectPi_OnClick" />
+            <Button Content="Disconnect" Click="DisconnectPi_OnClick" />
+            <Button Content="Reconnect" Click="ReconnectPi_OnClick" />
+          </WrapPanel>
+          <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+            <TextBlock Text="State" Foreground="#AAB2BF" FontSize="12" VerticalAlignment="Center" />
+            <TextBlock x:Name="PiConnectionState" Grid.Column="1" Text="Disconnected"
+                       Foreground="#AAB2BF" FontSize="12" VerticalAlignment="Center" />
+          </Grid>
+          <TextBlock x:Name="PiModelText" Text="Pi engine not connected."
+                     Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />
+          <Expander Header="Session map" IsExpanded="False" HorizontalAlignment="Stretch">
+            <StackPanel Spacing="8">
+              <SelectableTextBlock x:Name="SessionMapText" Text="Connect to Pi to build the session map."
+                                     TextWrapping="Wrap" FontSize="12" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button Content="Copy session map" Click="CopySessionMap_OnClick" />
+                <CheckBox x:Name="VerboseMapCheck" Content="Verbose" IsChecked="False"
+                          IsCheckedChanged="VerboseMapCheck_OnChanged" />
+              </StackPanel>
+            </StackPanel>
+          </Expander>
+          <Expander Header="Packet tools" IsExpanded="False" HorizontalAlignment="Stretch">
+            <StackPanel Spacing="8">
+              <TextBlock Text="Large-packet transcript import, preserved byte-for-byte."
+                         Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />
+              <WrapPanel Orientation="Horizontal" ItemSpacing="8">
+                <Button Content="Paste packet" Click="PastePacket_OnClick" />
+                <Button Content="Load 100k" Click="LoadSample_OnClick" />
+                <Button Content="Load 25 MiB" Click="Load25MiB_OnClick" />
+                <Button Content="Load 1M" Click="LoadMillionSample_OnClick" />
+                <Button Content="Copy full text" Click="CopyFullText_OnClick" />
+                <Button Content="Export full text" Click="ExportFullText_OnClick" />
+              </WrapPanel>
+              <ListBox x:Name="TranscriptList" Background="Transparent" BorderThickness="0"
+                       MinHeight="120" MaxHeight="260">
+                <ListBox.ItemsPanel>
+                  <ItemsPanelTemplate>
+                    <VirtualizingStackPanel />
+                  </ItemsPanelTemplate>
+                </ListBox.ItemsPanel>
+                <ListBox.ItemTemplate>
+                  <DataTemplate x:DataType="core:TranscriptLine">
+                    <TextBlock Text="{Binding Text}" FontFamily="Cascadia Code, Consolas, monospace"
+                               FontSize="12" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                               Margin="6,2" />
+                  </DataTemplate>
+                </ListBox.ItemTemplate>
+              </ListBox>
+            </StackPanel>
+          </Expander>
+          </StackPanel>
+        </StackPanel>
+      </ScrollViewer>
+    </Border>
+    <GridSplitter x:Name="NavSplitter" Grid.Column="1" Width="4" ResizeDirection="Columns"
+                  Background="Transparent" />
+
+    <!-- Centre: conversation (dominant) + anchored composer. -->
+    <Grid Grid.Column="2" RowDefinitions="Auto,*,Auto" RowSpacing="8">
+      <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,*,Auto" ColumnSpacing="8">
+        <Button x:Name="NavCollapseButton" Content="«" Click="NavCollapse_OnClick"
+                ToolTip.Tip="Hide navigation panel" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="1" Text="Conversation" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+        <CheckBox Grid.Column="2" x:Name="AutoScrollCheck" Content="Auto-scroll" IsChecked="True" />
+        <Button Grid.Column="3" Content="Copy selected message" Click="CopySelectedMessage_OnClick"
+                HorizontalAlignment="Left" />
+        <Button Grid.Column="4" Content="Copy full conversation" Click="CopyFullConversation_OnClick" />
+      </Grid>
+
+      <Border Grid.Row="1" BorderBrush="#343B47" BorderThickness="1" CornerRadius="8" Padding="4">
+        <ListBox x:Name="ConversationList" Background="Transparent" BorderThickness="0"
                  SelectionMode="Single">
           <ListBox.ItemsPanel>
             <ItemsPanelTemplate>
@@ -60,47 +119,36 @@
           </ListBox.ItemsPanel>
           <ListBox.ItemTemplate>
             <DataTemplate x:DataType="app:ConversationViewItem">
-              <StackPanel Spacing="2" Margin="6,6">
+              <StackPanel Spacing="2" Margin="8,6"
+                          AutomationProperties.Name="{Binding Header}">
                 <TextBlock Text="{Binding Header}" Foreground="{Binding RoleBrush}"
                            FontSize="11" FontWeight="SemiBold" />
                 <SelectableTextBlock Text="{Binding DisplayText}" TextWrapping="Wrap"
-                                         FontSize="13" />
+                                     FontFamily="Cascadia Code, Consolas, monospace" FontSize="13" />
               </StackPanel>
             </DataTemplate>
           </ListBox.ItemTemplate>
         </ListBox>
-        <Expander Header="Session map (current activity, milestones, files, tests)" IsExpanded="False">
-          <StackPanel Spacing="8">
-            <SelectableTextBlock x:Name="SessionMapText" Text="Connect to Pi to build the session map."
-                                   TextWrapping="Wrap" FontSize="12" />
-            <StackPanel Orientation="Horizontal" Spacing="8">
-              <Button Content="Copy session map" Click="CopySessionMap_OnClick" />
-              <CheckBox x:Name="VerboseMapCheck" Content="Verbose milestones" IsChecked="False"
-                        IsCheckedChanged="VerboseMapCheck_OnChanged" />
-            </StackPanel>
-          </StackPanel>
-        </Expander>
-      </StackPanel>
-    </Border>
+      </Border>
 
-    <Border Grid.Row="3" BorderBrush="#343B47" BorderThickness="1" CornerRadius="8" Padding="8">
-      <ListBox x:Name="TranscriptList" Background="Transparent" BorderThickness="0">
-        <ListBox.ItemsPanel>
-          <ItemsPanelTemplate>
-            <VirtualizingStackPanel />
-          </ItemsPanelTemplate>
-        </ListBox.ItemsPanel>
-        <ListBox.ItemTemplate>
-          <DataTemplate x:DataType="core:TranscriptLine">
-            <TextBlock Text="{Binding Text}" FontFamily="Cascadia Code, Consolas, monospace"
-                       FontSize="13" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
-                       Margin="6,3" />
-          </DataTemplate>
-        </ListBox.ItemTemplate>
-      </ListBox>
-    </Border>
-
-    <TextBlock x:Name="StatusText" Grid.Row="4" Text="Copy a packet, then select Paste packet."
-               Foreground="#AAB2BF" TextWrapping="Wrap" />
+      <Border Grid.Row="2" BorderBrush="#343B47" BorderThickness="1" CornerRadius="8" Padding="8">
+        <StackPanel Spacing="6">
+          <TextBlock x:Name="PiActivityText" Text="" Foreground="#7DD3A8" FontSize="12"
+                     TextWrapping="Wrap" />
+          <TextBlock x:Name="PiRunStatus" Text="" Foreground="#AAB2BF" FontSize="12"
+                     TextWrapping="Wrap" />
+          <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+            <TextBox x:Name="PiPromptBox" PlaceholderText="Ask Pi anything… (Ctrl+Enter to send)"
+                     AcceptsReturn="True" TextWrapping="Wrap" MinHeight="64" MaxHeight="220"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                     KeyDown="PiPromptBox_OnKeyDown" />
+            <Button Grid.Column="1" x:Name="PiSendButton" Content="Send" Click="SendPrompt_OnClick" />
+            <Button Grid.Column="2" x:Name="PiCancelButton" Content="Cancel" Click="CancelPrompt_OnClick" IsEnabled="False" />
+          </Grid>
+          <TextBlock x:Name="StatusText" Text="Select a workspace, then Connect."
+                     Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />
+        </StackPanel>
+      </Border>
+    </Grid>
   </Grid>
 </Window>

@@ -33,6 +33,9 @@ public partial class MainWindow : Window
     // True while a connect or reconnect is underway: blocks re-entrant
     // Connect/Reconnect/switch transitions. Set alongside _piBusy on UI thread.
     private bool _connecting;
+    // True while a folder picker is open: Add is not re-entrant (stacked
+    // modal pickers). Set on UI thread around OpenFolderPickerAsync.
+    private bool _pickingWorkspace;
 
     private static string ManagedRoot => PiSessionOptions.Default().ManagedRoot;
 
@@ -72,6 +75,18 @@ public partial class MainWindow : Window
         }
     }
 
+    private void NavCollapse_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        // True collapse: hiding the panel lets the Auto column shrink to zero
+        // and returns the full width to the conversation. The splitter hides
+        // with it (nothing to resize) and both return on expand. No forced
+        // widths anywhere, so user splitter sizing is never fought.
+        var show = !NavPanel.IsVisible;
+        NavPanel.IsVisible = show;
+        NavSplitter.IsVisible = show;
+        NavCollapseButton.Content = show ? "«" : "»";
+    }
+
     private CatalogEntry? SelectedChoice => WorkspaceCombo.SelectedItem as CatalogEntry;
 
     private void WorkspaceCombo_OnChanged(object? sender, SelectionChangedEventArgs e)
@@ -90,27 +105,93 @@ public partial class MainWindow : Window
             return;
         }
 
-        var folders = await StorageProvider.OpenFolderPickerAsync(new Avalonia.Platform.Storage.FolderPickerOpenOptions
+        if (_pickingWorkspace)
         {
-            Title = "Select project folder",
-            AllowMultiple = false,
-        });
+            return;
+        }
+
+        _pickingWorkspace = true;
+        try
+        {
+            await AddWorkspaceCoreAsync();
+        }
+        finally
+        {
+            _pickingWorkspace = false;
+        }
+    }
+
+    // Pending explicit confirmation: the picker result is staged here and
+    // registered ONLY by ConfirmWorkspace_OnClick. A phantom or dismissed
+    // picker can never create a workspace by itself.
+    private string? _pendingWorkspacePath;
+
+    private async Task AddWorkspaceCoreAsync()
+    {
+        IReadOnlyList<Avalonia.Platform.Storage.IStorageFolder> folders;
+        try
+        {
+            folders = await StorageProvider.OpenFolderPickerAsync(new Avalonia.Platform.Storage.FolderPickerOpenOptions
+            {
+                Title = "Select project folder",
+                AllowMultiple = false,
+            });
+        }
+        catch (Exception ex)
+        {
+            // Async-void event boundary: a picker failure must surface as
+            // status, never crash the window or touch the registry.
+            StatusText.Text = $"Folder picker failed: {ex.Message} — nothing registered.";
+            return;
+        }
+
         if (folders.Count == 0)
         {
+            StatusText.Text = "Folder picker cancelled — nothing registered.";
             return;
         }
 
         var path = folders[0].TryGetLocalPath();
         if (string.IsNullOrWhiteSpace(path))
         {
-            StatusText.Text = "Could not resolve a local path for the selected folder.";
+            StatusText.Text = "Could not resolve a local path for the selected folder — nothing registered.";
+            return;
+        }
+
+        if (!Directory.Exists(path))
+        {
+            StatusText.Text = $"Selected folder no longer exists: {path} — nothing registered.";
+            return;
+        }
+
+        // Explicit confirmation step: stage, do not register. Only the
+        // Confirm button below turns a staged path into a workspace.
+        _pendingWorkspacePath = path;
+        PendingConfirmText.Text = $"Register project at {path} ?";
+        PendingConfirmPanel.IsVisible = true;
+        StatusText.Text = "Confirm registration below — nothing has been registered yet.";
+    }
+
+    private void ConfirmWorkspace_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        var path = _pendingWorkspacePath;
+        _pendingWorkspacePath = null;
+        PendingConfirmPanel.IsVisible = false;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        if (!Directory.Exists(path))
+        {
+            StatusText.Text = $"Selected folder no longer exists: {path} — nothing registered.";
             return;
         }
 
         WorkspaceRegistry registry;
         try
         {
-            // Reload at click time: the file may have changed since startup.
+            // Reload at confirm time: the file may have changed since startup.
             // Any new corruption drops to recovery instead of overwriting.
             registry = WorkspaceRegistry.Load(ManagedRoot);
         }
@@ -132,6 +213,13 @@ public partial class MainWindow : Window
         {
             StatusText.Text = $"Cannot add workspace: {ex.Message}";
         }
+    }
+
+    private void CancelWorkspace_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        _pendingWorkspacePath = null;
+        PendingConfirmPanel.IsVisible = false;
+        StatusText.Text = "Registration cancelled — nothing changed.";
     }
 
     private async void PastePacket_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -421,9 +509,10 @@ public partial class MainWindow : Window
             return;
         }
 
-        var message = PiPromptBox.Text?.Trim();
-        if (string.IsNullOrEmpty(message))
+        var message = PromptInput.Prepare(PiPromptBox.Text);
+        if (message is null)
         {
+            PiRunStatus.Text = "Type or paste a prompt first — empty prompts are not sent.";
             return;
         }
 
@@ -535,6 +624,18 @@ public partial class MainWindow : Window
             PiCancelButton.IsEnabled = false;
             _promptLifetime?.Dispose();
             _promptLifetime = null;
+        }
+    }
+
+    private void PiPromptBox_OnKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
+    {
+        // Predictable composer keys: Enter inserts a newline (multiline),
+        // Ctrl+Enter sends exactly what is in the box. No other chords act.
+        if (e.Key == Avalonia.Input.Key.Enter
+            && e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control))
+        {
+            e.Handled = true;
+            SendPrompt_OnClick(sender, new Avalonia.Interactivity.RoutedEventArgs());
         }
     }
 

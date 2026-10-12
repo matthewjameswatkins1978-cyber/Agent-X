@@ -320,7 +320,8 @@ public sealed class WorkspaceTests
             Assert.Equal(WorkspaceCatalog.LegacyKey, catalog.Entries[0].Key);
             var entry = catalog.Entries[1];
             Assert.Equal(workspace.Slug, entry.Key);
-            Assert.Contains(workspace.Slug, entry.Label, StringComparison.Ordinal);
+            Assert.Equal("Proj", entry.Label);
+            Assert.Contains(workspace.SessionId, entry.Detail, StringComparison.Ordinal);
             var rebuilt = entry.ToWorkspace(root);
             Assert.Equal(workspace.SessionId, rebuilt.SessionId);
             Assert.Equal(workspace.ProjectRoot, rebuilt.ProjectRoot, ignoreCase: true);
@@ -444,6 +445,19 @@ public sealed class WorkspaceTests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public void PromptInput_PreservesExactText_RejectsBlank()
+    {
+        Assert.Null(PromptInput.Prepare(null));
+        Assert.Null(PromptInput.Prepare(string.Empty));
+        Assert.Null(PromptInput.Prepare("   \t  \n  "));
+        const string fixture = "  indented line\n\tTabbed line  \n\nblank above, trailing newline\n";
+        Assert.Equal(fixture, PromptInput.Prepare(fixture));
+        const string crlf = "line1\r\nline2\r\n";
+        Assert.Equal(crlf, PromptInput.Prepare(crlf));
+        Assert.Equal("x", PromptInput.Prepare("x"));
     }
 
     [Fact]

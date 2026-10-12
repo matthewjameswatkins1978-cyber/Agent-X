@@ -70,8 +70,8 @@ public sealed class WorkspaceCatalog
 
                 entries.Add(new CatalogEntry(
                     registration.Slug,
-                    $"{name} ({registration.Slug})",
-                    $"{registration.ProjectRoot} — session {registration.SessionId}. " +
+                    name,
+                    $"{name} ({registration.Slug}) — {registration.ProjectRoot} — session {registration.SessionId}. " +
                     "Pi runs HERE with your user authority (isolated from other projects, not sandboxed).",
                     IsLegacy: false,
                     Registration: registration));
