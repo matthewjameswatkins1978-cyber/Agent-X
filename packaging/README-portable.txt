@@ -2,13 +2,17 @@ Agent X — portable Windows distribution
 =========================================
 
 This folder is a portable (no-install) copy of the Agent X desktop app.
-Unzip anywhere and run app\AgentX.App.exe. Nothing is installed; nothing
-runs at startup; no administrator rights needed.
+Unzip anywhere and run app\AgentX.App.exe -- README.txt, NOTICE.txt and
+version.txt sit at the unzip root next to the app\ folder. Nothing is
+installed; nothing runs at startup; no administrator rights needed.
 
 WHAT THIS IS
   A packaging-groundwork build for verification only. It is not a release,
   not signed, and SmartScreen will warn on first launch (unsigned binary).
-  See version.txt for the exact commit and build provenance.
+  See version.txt for the exact commit and build provenance. Launch was
+  verified only on an isolated developer profile on the build machine --
+  a true clean-machine check on a fresh Windows 11 install has NOT been
+  performed.
 
 AGENT X LICENSE
   Agent X source has no declared license yet: treat this build as
@@ -26,8 +30,8 @@ PREREQUISITES (all external, never installed or changed by Agent X)
         D:\AgentTools\bin\pi.cmd
 
      Agent X launches Pi at that fixed path; there is no in-app setting for
-     it yet (known limitation). A shim one-liner that forwards to your real
-     it yet (known limitation). Create D:\AgentTools\bin\pi.cmd with:
+     it yet (known limitation). Create D:\AgentTools\bin\pi.cmd that forwards
+     to your real pi.cmd, for example:
 
         @echo off
         call "<your-real-pi.cmd>" %*
@@ -55,7 +59,9 @@ DATA LOCATIONS (outside this folder — rollback deletes below only if you choos
 
 ROLLBACK
   1. Close Agent X.
-  2. Delete this unzipped folder.
+  2. Delete what you extracted: the app\ folder and README.txt, NOTICE.txt,
+     THIRD-PARTY-NOTICES.txt and version.txt (or the containing folder if
+     you unzipped into its own new folder).
   3. Optional: delete %LocalAppData%\AgentX to remove sessions/workspaces.
   Nothing else on the machine was touched by running it.
 

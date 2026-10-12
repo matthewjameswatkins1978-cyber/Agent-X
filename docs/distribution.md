@@ -4,7 +4,7 @@ Packaging groundwork, not a release. No installer, no signing, no
 auto-update, no uploads. Everything below was verified on Windows 11
 25H2 (build 26220) x64 unless marked NOT VERIFIED.
 
-## Reproduce the package
+## Rebuild the package
 
 Requires the .NET 10 SDK and nuget.org access for the first restore.
 From a clean tree on `bootstrap/agent-x-foundation` (or a feature branch):
@@ -18,9 +18,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/New-PortableDist.ps1
 The script refuses a dirty tree (provenance must match a commit), publishes
 `src/AgentX.App` self-contained for `win-x64` (single-file off, trimmed
 off), stamps `version.txt`, copies `packaging/` notices, zips the folder,
-writes `SHA256SUMS.txt`, then re-extracts and re-hashes to verify.
+writes `SHA256SUMS.txt`, then re-extracts and re-hashes to verify, including
+EXACT-path assertions (`app\AgentX.App.exe`, `README.txt`, `NOTICE.txt`,
+`THIRD-PARTY-NOTICES.txt`, `version.txt` at extraction root) plus a guard
+against a wrapper-folder layout, so the README instructions always match a
+real extraction. The archive holds the portable folder's CONTENTS at root.
 Outputs land in `artifacts/dist/` (git-ignored). The script is plain
 PowerShell 5.1-compatible — no packaging frameworks.
+
+Each run embeds a build timestamp and machine name, so output is traceable
+to a commit but NOT proven bit-for-bit reproducible across builds; a new
+hash for identical source is expected until determinism is demonstrated.
 
 Reference build: `AgentX-rc1-d1-20261012-c657b7b-win-x64.zip`
 (74,258,484 bytes zipped, 215,795,423 bytes / 230 files extracted).

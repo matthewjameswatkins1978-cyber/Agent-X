@@ -1,11 +1,15 @@
 <#
 .SYNOPSIS
-  Reproducible Windows x64 portable distribution for Agent X (RC1 D1 groundwork).
+  Windows x64 portable distribution packaging for Agent X (RC1 D1 groundwork).
 
 .DESCRIPTION
   Publishes src/AgentX.App self-contained for win-x64, stamps provenance,
-  assembles a portable directory, zips it, and writes a SHA-256 manifest.
-  Verifies the archive by re-extracting and re-hashing. No installers,
+  assembles a portable directory, zips its CONTENTS (documented root layout:
+  README.txt, NOTICE.txt, app\... at archive root), writes a SHA-256 manifest,
+  then verifies the archive by re-extracting and asserting EXACT paths (not a
+  recursive search) so the README instructions match the real extraction.
+  Output is traceable to the build commit and machine; it is timestamped and
+  NOT claimed bit-for-bit reproducible across builds. No installers,
   no signing, no uploads, no changes to Pi/Node/credentials/sessions.
 
   Outputs (default artifacts/dist):
@@ -47,7 +51,7 @@ $manifestPath = Join-Path $OutDir "SHA256SUMS.txt"
 
 Write-Host "Packaging Agent X $stamp from $commit (base $base)"
 
-# 1. Clean, reproducible publish: self-contained, framework bundled,
+# 1. Clean publish: self-contained, framework bundled,
 #    NOT single-file (transparent contents, faster cold start), NOT trimmed
 #    (Avalonia reflection safety), deterministic file versions from source.
 $publishDir = Join-Path $portableDir "app"
@@ -85,26 +89,40 @@ Target:           net10.0 $Rid self-contained (PublishSingleFile=false, PublishT
 Avalonia:         12.1.4 (see THIRD-PARTY-NOTICES.txt)
 Build-time node:  $nodeVer   (NOT bundled -- external prerequisite, see README.txt)
 Build-time pi:    $piVer   (NOT bundled -- external prerequisite, see README.txt)
-Reproduce:        scripts/New-PortableDist.ps1 from commit $commit
+Rebuild with:     scripts/New-PortableDist.ps1 at commit $commit (timestamped build; not claimed bit-for-bit reproducible)
 "@
 Write-Utf8NoBom (Join-Path $portableDir "version.txt") ($versionText + "`r`n")
 
-# 3. Archive + manifest.
+# 3. Archive + manifest. Compress the CONTENTS (wildcard) so extraction yields
+#    the documented root directly: README.txt / NOTICE.txt / app\AgentX.App.exe
+#    -- matching README.txt instructions. (Compressing the directory itself
+#    would nest everything under an extra stamped folder.)
 if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
-Compress-Archive -Path $portableDir -DestinationPath $zipPath -CompressionLevel Optimal
+Compress-Archive -Path (Join-Path $portableDir "*") -DestinationPath $zipPath -CompressionLevel Optimal
 $zipHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $zipName = Split-Path $zipPath -Leaf
 Write-Utf8NoBom $manifestPath "$zipHash  $zipName"
 
-# 4. Verify: re-extract to temp, confirm the exe + notices exist, re-hash the zip.
+# 4. Verify: re-extract, then assert EXACT documented paths at the extraction
+#    root (a recursive search would accept a wrongly nested archive), reject a
+#    wrapper folder, tie the README launch instruction to a real file, and
+#    re-hash the zip.
 $verifyDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ax-dist-verify-" + [Guid]::NewGuid().ToString("N"))
 Expand-Archive -Path $zipPath -DestinationPath $verifyDir
-$extracted = Get-ChildItem $verifyDir -Recurse -File
-$exe = $extracted | Where-Object { $_.Name -eq "AgentX.App.exe" }
-if (-not $exe) { throw "Verification failed: AgentX.App.exe missing from archive." }
-foreach ($required in @("NOTICE.txt", "THIRD-PARTY-NOTICES.txt", "README.txt", "version.txt")) {
-    if (-not ($extracted | Where-Object { $_.Name -eq $required })) { throw "Verification failed: $required missing from archive." }
+foreach ($rel in @("app\AgentX.App.exe", "app\AgentX.Core.dll", "README.txt", "NOTICE.txt", "THIRD-PARTY-NOTICES.txt", "version.txt")) {
+    if (-not (Test-Path -LiteralPath (Join-Path $verifyDir $rel) -PathType Leaf)) {
+        throw "Verification failed: exact path '$rel' missing after extraction -- README instructions would not match the layout."
+    }
 }
+$wrapperName = "AgentX-$stamp-win-x64"
+if (Test-Path -LiteralPath (Join-Path $verifyDir $wrapperName)) {
+    throw "Verification failed: archive nests its contents under '$wrapperName' instead of the documented root layout."
+}
+$readmeText = [System.IO.File]::ReadAllText((Join-Path $verifyDir "README.txt"))
+if ($readmeText -notmatch 'app\\AgentX\.App\.exe') {
+    throw "Verification failed: README.txt no longer names app\\AgentX.App.exe."
+}
+$extracted = Get-ChildItem $verifyDir -Recurse -File
 $reHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($reHash -ne $zipHash) { throw "Verification failed: zip hash changed after extraction." }
 $fileCount = $extracted.Count
