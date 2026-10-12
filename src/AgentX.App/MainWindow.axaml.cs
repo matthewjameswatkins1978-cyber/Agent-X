@@ -33,6 +33,9 @@ public partial class MainWindow : Window
     // True while a connect or reconnect is underway: blocks re-entrant
     // Connect/Reconnect/switch transitions. Set alongside _piBusy on UI thread.
     private bool _connecting;
+    // True while a folder picker is open: Add is not re-entrant (stacked
+    // modal pickers). Set on UI thread around OpenFolderPickerAsync.
+    private bool _pickingWorkspace;
 
     private static string ManagedRoot => PiSessionOptions.Default().ManagedRoot;
 
@@ -72,6 +75,18 @@ public partial class MainWindow : Window
         }
     }
 
+    private void NavCollapse_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        // Icon rail: the panel shrinks to the collapse button; the splitter
+        // keeps working and conversation keeps its full width.
+        var collapsed = NavContent.IsVisible;
+        NavContent.IsVisible = !collapsed;
+        NavTitle.IsVisible = !collapsed;
+        NavPanel.Width = collapsed ? 52 : 264;
+        NavPanel.Padding = collapsed ? new Avalonia.Thickness(8) : new Avalonia.Thickness(12);
+        NavCollapseButton.Content = collapsed ? "»" : "«";
+    }
+
     private CatalogEntry? SelectedChoice => WorkspaceCombo.SelectedItem as CatalogEntry;
 
     private void WorkspaceCombo_OnChanged(object? sender, SelectionChangedEventArgs e)
@@ -90,6 +105,24 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (_pickingWorkspace)
+        {
+            return;
+        }
+
+        _pickingWorkspace = true;
+        try
+        {
+            await AddWorkspaceCoreAsync();
+        }
+        finally
+        {
+            _pickingWorkspace = false;
+        }
+    }
+
+    private async Task AddWorkspaceCoreAsync()
+    {
         var folders = await StorageProvider.OpenFolderPickerAsync(new Avalonia.Platform.Storage.FolderPickerOpenOptions
         {
             Title = "Select project folder",

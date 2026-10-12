@@ -17,6 +17,16 @@ The core owns the exact imported string, UTF-8 byte count, and compact line star
 3. **Protect Pi behind an Agent X boundary.** Do not patch Pi or make plugins depend on its private internals. Kernel integration remains a later decision after Pi behavior and license/provenance are reviewed.
 4. **Treat rendered rows as a view.** The immutable original text is authoritative; line entries are lazy slices and the UI must not become the data store.
 
+## Native desktop shell (feature/agent-x-desktop-shell)
+
+Left project navigation (collapsible icon rail, resizable via splitter,
+workspace picker, session controls, session map and packet tools as
+collapsed expanders) beside a dominant conversation centre with an anchored
+composer. The 300px conversation cap is gone: the virtualized feed fills
+all centre space. Conversation rows carry accessible names (role headers)
+for screen readers and UI automation. Verified live with UIA-driven smoke
+(see PR evidence). Details in docs/desktop-shell-verification.md.
+
 ## Workspace sessions and recovery (feature/agent-x-workspace-recovery)
 
 Project-aware session identity replaces the single global session: one

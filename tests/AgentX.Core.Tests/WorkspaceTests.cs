@@ -320,7 +320,8 @@ public sealed class WorkspaceTests
             Assert.Equal(WorkspaceCatalog.LegacyKey, catalog.Entries[0].Key);
             var entry = catalog.Entries[1];
             Assert.Equal(workspace.Slug, entry.Key);
-            Assert.Contains(workspace.Slug, entry.Label, StringComparison.Ordinal);
+            Assert.Equal("Proj", entry.Label);
+            Assert.Contains(workspace.SessionId, entry.Detail, StringComparison.Ordinal);
             var rebuilt = entry.ToWorkspace(root);
             Assert.Equal(workspace.SessionId, rebuilt.SessionId);
             Assert.Equal(workspace.ProjectRoot, rebuilt.ProjectRoot, ignoreCase: true);
