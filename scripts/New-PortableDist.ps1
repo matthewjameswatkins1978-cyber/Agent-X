@@ -24,6 +24,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+function Write-Utf8NoBom([string]$Path, [string]$Text) {
+    [System.IO.File]::WriteAllText($Path, $Text, [System.Text.UTF8Encoding]::new($false))
+}
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $repo
 if ([string]::IsNullOrWhiteSpace($OutDir)) {
@@ -70,7 +73,7 @@ $nodeVer = ""
 try { $nodeVer = (node --version 2>$null).Trim() } catch { $nodeVer = "(node not on PATH)" }
 $piVer = ""
 try { $piVer = (pi --version 2>$null | Select-Object -First 1).Trim() } catch { $piVer = "(pi not on PATH)" }
-@"
+$versionText = @"
 Agent X portable distribution
 Stamp:            $stamp
 Commit:           $commit
@@ -83,14 +86,15 @@ Avalonia:         12.1.4 (see THIRD-PARTY-NOTICES.txt)
 Build-time node:  $nodeVer   (NOT bundled -- external prerequisite, see README.txt)
 Build-time pi:    $piVer   (NOT bundled -- external prerequisite, see README.txt)
 Reproduce:        scripts/New-PortableDist.ps1 from commit $commit
-"@ | Out-File -Encoding utf8NoBOM (Join-Path $portableDir "version.txt")
+"@
+Write-Utf8NoBom (Join-Path $portableDir "version.txt") ($versionText + "`r`n")
 
 # 3. Archive + manifest.
 if (Test-Path $zipPath) { Remove-Item -Force $zipPath }
 Compress-Archive -Path $portableDir -DestinationPath $zipPath -CompressionLevel Optimal
 $zipHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $zipName = Split-Path $zipPath -Leaf
-"$zipHash  $zipName" | Out-File -Encoding utf8NoBOM $manifestPath
+Write-Utf8NoBom $manifestPath "$zipHash  $zipName"
 
 # 4. Verify: re-extract to temp, confirm the exe + notices exist, re-hash the zip.
 $verifyDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ax-dist-verify-" + [Guid]::NewGuid().ToString("N"))
