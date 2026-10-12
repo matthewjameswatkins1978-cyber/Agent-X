@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 
 namespace AgentX.Core;
@@ -5,23 +6,41 @@ namespace AgentX.Core;
 /// <summary>
 /// Typed capture over Pi RPC session events. Subscribes to a client's raw
 /// event stream, decodes each record synchronously (all strings are resolved
-/// before the underlying document is released), and raises one
-/// <see cref="AgentXEvent"/> per record. Never throws out of the tap:
-/// malformed records become <see cref="TapError"/> and subscriber faults are
-/// isolated per handler. The store is bounded; overflow is counted, not lost
-/// silently.
+/// before the underlying document is released), redacts before storing or
+/// broadcasting, and raises one <see cref="AgentXEvent"/> per record.
+///
+/// Capture contract (honest boundary): the tap sees STREAMED session events
+/// automatically. Correlated poll responses (get_session_stats, direct bash,
+/// prompt acceptance, get_state) bypass the subscriber inside
+/// PiRpcConnection and are captured ONLY when the host passes them to
+/// <see cref="RecordResponse(JsonDocument)"/>. The tap never claims
+/// pollables it was not handed.
+///
+/// Never throws out of the tap: malformed records become
+/// <see cref="TapError"/> and subscriber faults are isolated per handler.
+/// Retention is bounded two ways: at most <see cref="MaxStoredEvents"/>
+/// events and at most <see cref="MaxRetainedTextChars"/> of retained text;
+/// overflow evicts oldest-first and is counted, never lost silently.
 /// </summary>
 public sealed class PiEventTap : IDisposable
 {
-    private const int MaxStoredEvents = 5000;
-    private const int MaxCollectedChars = 4000;
-    private const int PreviewChars = 300;
+    private const int MaxStoredEvents = 2000;
+    private const int MaxRetainedTextChars = 512 * 1024;
+    private const int MaxArgsChars = 4096;
+    private const int MaxOutputChars = 16 * 1024;
+    private const int MaxOutputPreview = 2000;
+    private const int MaxDeltaChars = 4096;
+    private const int MaxPartialChars = 2048;
+    private const int MaxPartialPreview = 1000;
+    private const int MaxBashHead = 500;
+    private const int MaxMessagePreview = 400;
 
     private readonly PiRpcClient? _client;
     private readonly PiRpcConnection? _connection;
-    private readonly List<AgentXEvent> _events = new();
+    private readonly Queue<AgentXEvent> _events = new();
     private readonly object _gate = new();
     private long _droppedEvents;
+    private long _retainedTextChars;
     private bool _disposed;
 
     public PiEventTap(PiRpcClient client)
@@ -61,50 +80,95 @@ public sealed class PiEventTap : IDisposable
         }
     }
 
-    public static AgentXEvent Parse(string rawLine, DateTime observedAtUtc)
+    public long RetainedTextChars
     {
-        try
+        get
         {
-            using var record = JsonDocument.Parse(rawLine);
-            return Decode(record.RootElement, rawLine, observedAtUtc);
-        }
-        catch (Exception ex) when (ex is JsonException or ArgumentException)
-        {
-            return new TapError(observedAtUtc, AgentXEvent.PreviewForTap(rawLine));
+            lock (_gate)
+            {
+                return _retainedTextChars;
+            }
         }
     }
 
-    internal static AgentXEvent Decode(JsonElement root, string rawLine, DateTime observedAtUtc)
+    public static AgentXEvent Parse(string rawLine, DateTime observedAtUtc)
     {
-        var type = Str(root, "type") ?? string.Empty;
+        JsonDocument record;
         try
         {
-            return type switch
+            record = JsonDocument.Parse(rawLine);
+        }
+        catch (Exception ex) when (ex is JsonException or ArgumentException)
+        {
+            return new TapError(observedAtUtc, "unparseable", rawLine.Length);
+        }
+
+        using (record)
+        {
+            return DecodeDocument(record, observedAtUtc);
+        }
+    }
+
+    /// <summary>
+    /// Explicit pollable route: the host hands a correlated command response
+    /// to the tap (the subscriber never sees these). Decodes StatsSnapshot,
+    /// BashResult, PromptAccepted, and engine state through the same
+    /// redacting path as streamed events.
+    /// </summary>
+    public void RecordResponse(JsonDocument response)
+    {
+        AgentXEvent decoded;
+        try
+        {
+            decoded = DecodeDocument(response, DateTime.UtcNow);
+        }
+        catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException or JsonException)
+        {
+            decoded = new TapError(DateTime.UtcNow, "disposed-response", 0);
+        }
+
+        Publish(decoded);
+    }
+
+    internal static AgentXEvent DecodeDocument(JsonDocument document, DateTime observedAtUtc)
+    {
+        try
+        {
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
             {
-                "agent_start" => new RunStarted(observedAtUtc),
-                "agent_settled" => new RunSettled(observedAtUtc, Bool(root, "aborted")),
-                "agent_end" => new AgentRunEnded(observedAtUtc, Bool(root, "willRetry"), MsgCount(root)),
-                "turn_start" => new TurnStarted(observedAtUtc),
-                "turn_end" => new TurnEnded(observedAtUtc, ToolResults(root)),
-                "message_update" => DecodeUpdate(root, observedAtUtc),
-                "message_end" => DecodeMessageEnd(root, observedAtUtc, rawLine),
-                "tool_execution_start" => new ToolStarted(
-                    observedAtUtc, Str(root, "toolCallId") ?? string.Empty, Str(root, "toolName") ?? string.Empty,
-                    RawOf(root, "args"), ArgSummary(root)),
-                "tool_execution_update" => new ToolProgress(
-                    observedAtUtc, Str(root, "toolCallId") ?? string.Empty, Str(root, "toolName") ?? string.Empty,
-                    RawOf(root, "partialResult").Length),
-                "tool_execution_end" => DecodeToolEnd(root, observedAtUtc),
-                "bash_execution_update" => new BashChunk(
-                    observedAtUtc, Str(root, "id") ?? string.Empty, Str(root, "delta")?.Length ?? 0),
-                "response" => DecodeResponse(root, observedAtUtc, rawLine),
-                _ => new OtherEvent(observedAtUtc, type.Length > 0 ? type : "unknown", Capped(rawLine)),
-            };
+                return new TapError(observedAtUtc, "non-object-root", 0);
+            }
+
+            return Decode(root, document, observedAtUtc);
         }
         catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or JsonException)
         {
-            return new TapError(observedAtUtc, Capped(rawLine));
+            return new TapError(observedAtUtc, "unexpected-shape", 0);
         }
+    }
+
+    internal static AgentXEvent Decode(JsonElement root, JsonDocument document, DateTime observedAtUtc)
+    {
+        var type = Str(root, "type") ?? string.Empty;
+        return type switch
+        {
+            "agent_start" => new RunStarted(observedAtUtc),
+            "agent_settled" => new RunSettled(observedAtUtc, Bool(root, "aborted")),
+            "agent_end" => new AgentRunEnded(observedAtUtc, Bool(root, "willRetry"), MsgCount(root)),
+            "turn_start" => new TurnStarted(observedAtUtc),
+            "turn_end" => new TurnEnded(observedAtUtc, ToolResults(root)),
+            "message_update" => DecodeUpdate(root, observedAtUtc),
+            "message_end" => DecodeMessageEnd(root, observedAtUtc),
+            "tool_execution_start" => DecodeToolStart(root, observedAtUtc),
+            "tool_execution_update" => DecodeToolProgress(root, observedAtUtc),
+            "tool_execution_end" => DecodeToolEnd(root, observedAtUtc),
+            "bash_execution_update" => new BashChunk(
+                observedAtUtc, Str(root, "id") ?? string.Empty,
+                Head(Str(root, "delta"), MaxBashHead), Str(root, "delta")?.Length ?? 0),
+            "response" => DecodeResponse(root, document, observedAtUtc),
+            _ => DescribeUnknown(root, type.Length > 0 ? type : "unknown", observedAtUtc),
+        };
     }
 
     private static AgentXEvent DecodeUpdate(JsonElement root, DateTime observedAtUtc)
@@ -116,15 +180,22 @@ public sealed class PiEventTap : IDisposable
             && nested.ValueKind == JsonValueKind.Object
             && Str(nested, "type") is string nestedType)
         {
-            return nestedType switch
+            if (nestedType is "text_delta")
             {
-                "text_delta" => new TextDelta(observedAtUtc, Str(nested, "delta") ?? string.Empty),
-                "toolcall_start" => new ToolCallAnnounced(
-                    observedAtUtc, Str(nested, "id") ?? string.Empty, Str(nested, "toolName") ?? string.Empty),
-                // Thinking blocks arrive empty (encrypted signature only); text/tool blocks end
-                // with authoritative content already covered by message_end. Drop the rest.
-                _ => new OtherEvent(observedAtUtc, "message_update." + nestedType, Capped(RawOf(nested))),
-            };
+                var delta = PiRedaction.Redact(Str(nested, "delta"));
+                var cut = delta.Length > MaxDeltaChars;
+                return new TextDelta(observedAtUtc, cut ? delta[..MaxDeltaChars] : delta, cut);
+            }
+
+            if (nestedType is "toolcall_start")
+            {
+                return new ToolCallAnnounced(
+                    observedAtUtc, Str(nested, "id") ?? string.Empty, Str(nested, "toolName") ?? string.Empty);
+            }
+
+            // Thinking blocks arrive empty (encrypted signature only); text/tool blocks end
+            // with authoritative content already covered by message_end.
+            return DescribeUnknown(nested, "message_update." + nestedType, observedAtUtc);
         }
 
         if (root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
@@ -134,20 +205,44 @@ public sealed class PiEventTap : IDisposable
 
         // A nested toolcall_delta carries serialized argument bytes but no new
         // identity beyond the announced call; ToolStarted already reports args.
-        return new OtherEvent(observedAtUtc, "message_update", Capped(RawOf(root)));
+        return DescribeUnknown(root, "message_update", observedAtUtc);
     }
 
-    private static AgentXEvent DecodeMessageEnd(JsonElement root, DateTime observedAtUtc, string rawLine)
+    private static AgentXEvent DecodeMessageEnd(JsonElement root, DateTime observedAtUtc)
     {
         if (root.TryGetProperty("message", out var message)
             && message.ValueKind == JsonValueKind.Object
             && Str(message, "role") == "assistant")
         {
-            var text = CollectText(message);
-            return new AssistantMessage(observedAtUtc, text.Length, AgentXEvent.PreviewForTap(text, PreviewChars));
+            var (text, total, _) = CollectText(message, int.MaxValue);
+            var preview = PiRedaction.Redact(AgentXEvent.PreviewForTap(text, MaxMessagePreview));
+            return new AssistantMessage(observedAtUtc, total, preview);
         }
 
-        return new OtherEvent(observedAtUtc, "message_end", Capped(rawLine));
+        return DescribeUnknown(root, "message_end", observedAtUtc);
+    }
+
+    private static AgentXEvent DecodeToolStart(JsonElement root, DateTime observedAtUtc)
+    {
+        var raw = RawOf(root, "args");
+        var redacted = PiRedaction.Redact(raw);
+        var cut = redacted.Length > MaxArgsChars;
+        var kept = cut ? redacted[..MaxArgsChars] : redacted;
+        return new ToolStarted(
+            observedAtUtc, Str(root, "toolCallId") ?? string.Empty, Str(root, "toolName") ?? string.Empty,
+            kept, cut, PiRedaction.Redact(ArgSummary(root)));
+    }
+
+    private static AgentXEvent DecodeToolProgress(JsonElement root, DateTime observedAtUtc)
+    {
+        // Latest snapshot wins: the wire does not say whether a partial
+        // replaces or extends the previous one, so the tap never concatenates.
+        var (text, total, capped) = CollectText(root, MaxPartialChars, "partialResult");
+        var redacted = PiRedaction.Redact(text);
+        var preview = AgentXEvent.PreviewForTap(redacted, MaxPartialPreview);
+        return new ToolProgress(
+            observedAtUtc, Str(root, "toolCallId") ?? string.Empty, Str(root, "toolName") ?? string.Empty,
+            preview, total, capped);
     }
 
     private static AgentXEvent DecodeToolEnd(JsonElement root, DateTime observedAtUtc)
@@ -158,10 +253,15 @@ public sealed class PiEventTap : IDisposable
         long? duration = NumOpt(root, "durationMs");
         string text = string.Empty;
         int? exit = null;
-        var truncated = false;
+        var wireTruncated = false;
+        var collectCapped = false;
+        var outputTotal = 0;
         if (root.TryGetProperty("result", out var result) && result.ValueKind == JsonValueKind.Object)
         {
-            text = CollectText(result);
+            var collected = CollectText(result, MaxOutputChars);
+            text = collected.Kept;
+            collectCapped = collected.Capped;
+            outputTotal = collected.Total;
             if (result.TryGetProperty("structuredContent", out var structured)
                 && structured.ValueKind == JsonValueKind.Object)
             {
@@ -170,20 +270,30 @@ public sealed class PiEventTap : IDisposable
                 exit = NumOpt(structured, "exit_code") is long a ? (int)Math.Clamp(a, int.MinValue, int.MaxValue)
                     : NumOpt(structured, "exitCode") is long b ? (int)Math.Clamp(b, int.MinValue, int.MaxValue)
                     : null;
-                truncated = Bool(structured, "truncated");
+                wireTruncated = Bool(structured, "truncated");
             }
         }
 
-        return new ToolEnded(observedAtUtc, callId, name, isError, duration, exit, truncated,
-            text.Length, AgentXEvent.PreviewForTap(text, PreviewChars));
+        var redacted = PiRedaction.Redact(text);
+        var tapCut = collectCapped || redacted.Length > MaxOutputChars;
+        var kept = tapCut && redacted.Length > MaxOutputChars ? redacted[..MaxOutputChars] : redacted;
+        var preview = AgentXEvent.PreviewForTap(kept, MaxOutputPreview);
+        return new ToolEnded(observedAtUtc, callId, name, isError, duration, exit, wireTruncated, tapCut,
+            outputTotal, Encoding.UTF8.GetByteCount(kept), preview);
     }
 
-    private static AgentXEvent DecodeResponse(JsonElement root, DateTime observedAtUtc, string rawLine)
+    private static AgentXEvent DecodeResponse(JsonElement root, JsonDocument document, DateTime observedAtUtc)
     {
         var command = Str(root, "command") ?? string.Empty;
+        if (command == "get_state")
+        {
+            // Engine state reuses the established typed model on the live document.
+            return new EngineStateObserved(observedAtUtc, PiEngineState.FromResponse(document));
+        }
+
         if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
         {
-            return new OtherEvent(observedAtUtc, "response." + command, Capped(rawLine));
+            return DescribeUnknown(root, "response." + command, observedAtUtc);
         }
 
         return command switch
@@ -194,9 +304,32 @@ public sealed class PiEventTap : IDisposable
             "bash" => new BashResult(observedAtUtc,
                 NumOpt(data, "exitCode") is long e ? (int)e : null,
                 Bool(data, "truncated"), Str(data, "fullOutputPath"),
-                AgentXEvent.PreviewForTap(Str(data, "output") ?? string.Empty, PreviewChars)),
-            _ => new OtherEvent(observedAtUtc, "response." + command, Capped(rawLine)),
+                PiRedaction.Redact(AgentXEvent.PreviewForTap(Str(data, "output") ?? string.Empty, MaxOutputPreview))),
+            _ => DescribeUnknown(root, "response." + command, observedAtUtc),
         };
+    }
+
+    /// <summary>
+    /// Fail-closed description of an unmodeled shape: field names and total
+    /// size only. Raw values are never retained, so an unknown payload cannot
+    /// smuggle a secret into the store, a subscriber, or Full trace.
+    /// </summary>
+    internal static OtherEvent DescribeUnknown(JsonElement element, string type, DateTime observedAtUtc)
+    {
+        var names = new List<string>();
+        var total = element.GetRawText().Length;
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (names.Count < 24)
+                {
+                    names.Add(property.Name);
+                }
+            }
+        }
+
+        return new OtherEvent(observedAtUtc, type, string.Join(",", names), total);
     }
 
     /// <summary>One-line argument summary. Known scalar fields first; otherwise a field count. Never invents values.</summary>
@@ -226,16 +359,45 @@ public sealed class PiEventTap : IDisposable
         return count == 0 ? "no args" : $"{count} args";
     }
 
-    private static string CollectText(JsonElement container)
+    private static string Head(string? text, int max)
     {
-        // content: [{type:text,text:...}] on messages and tool results.
-        if (!container.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
+        if (string.IsNullOrEmpty(text))
         {
             return string.Empty;
         }
 
+        var redacted = PiRedaction.Redact(text);
+        return redacted.Length <= max ? redacted : redacted[..max];
+    }
+
+    private static (string Kept, int Total, bool Capped) CollectText(JsonElement container, int cap, string field = "content")
+    {
+        if (!container.TryGetProperty(field, out var content))
+        {
+            return (string.Empty, 0, false);
+        }
+
+        // content: [{type:text,text:...}]. partialResult wraps the same array
+        // in an object ({content:[...], details:{...}}); details stays
+        // unmodeled and withheld.
+        if (content.ValueKind == JsonValueKind.Object
+            && content.TryGetProperty("content", out var inner)
+            && inner.ValueKind == JsonValueKind.Array)
+        {
+            content = inner;
+        }
+
+        if (content.ValueKind != JsonValueKind.Array)
+        {
+            return (string.Empty, 0, false);
+        }
+
+        // Count the true total while storing only up to cap: O(n) time,
+        // O(cap) memory. Callers report both so truncation is explicit.
         var parts = new List<string>();
         var total = 0;
+        var kept = 0;
+        var capped = false;
         foreach (var block in content.EnumerateArray())
         {
             if (block.ValueKind != JsonValueKind.Object)
@@ -247,18 +409,25 @@ public sealed class PiEventTap : IDisposable
                 && text.ValueKind == JsonValueKind.String)
             {
                 var s = text.GetString() ?? string.Empty;
-                var room = MaxCollectedChars - total;
+                total += s.Length;
+                var room = cap - kept;
                 if (room <= 0)
                 {
-                    break;
+                    capped = true;
+                    continue;
                 }
 
                 parts.Add(s.Length <= room ? s : s[..room]);
-                total += Math.Min(s.Length, room);
+                if (s.Length > room)
+                {
+                    capped = true;
+                }
+
+                kept += Math.Min(s.Length, room);
             }
         }
 
-        return string.Concat(parts);
+        return (string.Concat(parts), total, capped);
     }
 
     private static int MsgCount(JsonElement root)
@@ -318,23 +487,23 @@ public sealed class PiEventTap : IDisposable
     private static string RawOf(JsonElement element, string name)
         => element.TryGetProperty(name, out var p) ? p.GetRawText() : string.Empty;
 
-    private static string RawOf(JsonElement element) => element.GetRawText();
-
-    private static string Capped(string raw, int max = PreviewChars)
-        => raw.Length <= max ? raw : raw[..max] + "…";
-
     private void OnEvent(object? sender, PiRpcEventArgs args)
     {
         AgentXEvent decoded;
         try
         {
-            decoded = Decode(args.Record.RootElement, args.RawLine, DateTime.UtcNow);
+            decoded = DecodeDocument(args.Record, DateTime.UtcNow);
         }
         catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException or JsonException)
         {
-            decoded = new TapError(DateTime.UtcNow, Capped(args.RawLine));
+            decoded = new TapError(DateTime.UtcNow, "disposed-record", 0);
         }
 
+        Publish(decoded);
+    }
+
+    private void Publish(AgentXEvent decoded)
+    {
         lock (_gate)
         {
             if (_disposed)
@@ -342,13 +511,20 @@ public sealed class PiEventTap : IDisposable
                 return;
             }
 
-            if (_events.Count >= MaxStoredEvents)
+            // Bounded two ways: event count and retained text. Evict oldest
+            // first (O(1) dequeue); every eviction is counted.
+            _events.Enqueue(decoded);
+            _retainedTextChars += decoded.RetainedChars();
+            while ((_events.Count > MaxStoredEvents || _retainedTextChars > MaxRetainedTextChars) && _events.Count > 0)
             {
-                _events.RemoveAt(0);
+                _retainedTextChars -= _events.Dequeue().RetainedChars();
                 _droppedEvents++;
             }
 
-            _events.Add(decoded);
+            if (_retainedTextChars < 0)
+            {
+                _retainedTextChars = 0;
+            }
         }
 
         foreach (var handler in Captured?.GetInvocationList() ?? [])

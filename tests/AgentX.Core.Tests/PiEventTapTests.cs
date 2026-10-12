@@ -44,10 +44,11 @@ public sealed class PiEventTapTests
         Assert.False(ended.IsError);
         Assert.Equal(976, ended.DurationMs);
         Assert.Equal(0, ended.ExitCode);
-        Assert.False(ended.Truncated);
-        Assert.True(ended.OutputBytes > 0);
+        Assert.False(ended.WireTruncated);
+        Assert.True(ended.OutputChars > 0);
         Assert.Contains("probe-out", ended.OutputPreview);
-        Assert.True(ended.OutputBytes > ended.OutputPreview.Length);
+        Assert.True(ended.OutputPreview.Length <= 2000);
+        Assert.True(ended.RetainedBytes >= ended.OutputChars);
     }
 
     [Fact]
@@ -95,7 +96,7 @@ public sealed class PiEventTapTests
     [Fact]
     public void Compact_ToolEndReportsExitCodeDistinctFromIsError()
     {
-        var ended = new ToolEnded(DateTime.UtcNow, "call_1", "powershell", false, 100, 42, false, 10, "out");
+        var ended = new ToolEnded(DateTime.UtcNow, "call_1", "powershell", false, 100, 42, false, false, 10, 30, "out");
         Assert.Contains("exit 42", ended.Render(VisibilityLevel.Compact));
         var failed = ended with { IsError = true };
         Assert.Contains("failed", failed.Render(VisibilityLevel.Compact));
@@ -162,13 +163,13 @@ public sealed class PiEventTapTests
         }
 
         deadline = DateTime.UtcNow.AddSeconds(10);
-        while (DateTime.UtcNow < deadline && tap.DroppedEvents < 100)
+        while (DateTime.UtcNow < deadline && tap.DroppedEvents < 3100)
         {
             await Task.Delay(10);
         }
 
-        Assert.Equal(5000, tap.Events.Count);
-        Assert.True(tap.DroppedEvents >= 100);
+        Assert.Equal(2000, tap.Events.Count);
+        Assert.True(tap.DroppedEvents >= 3100);
     }
 
     private sealed class TapLoopback : IAsyncDisposable

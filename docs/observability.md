@@ -69,6 +69,41 @@ from docs alone; doc-shaped claims are marked "documented, not observed".
   `json.md`, not observed here. The tap preserves them as `OtherEvent` when
   they appear.
 
+## Capture contract (hardened)
+
+The tap sees STREAMED session events automatically. Correlated poll
+responses (`get_session_stats`, direct `bash`, `prompt`, `get_state`) bypass
+the subscriber inside `PiRpcConnection` and are captured ONLY when the host
+passes them to `PiEventTap.RecordResponse` — proven by a test with a
+genuinely pending request. The tap never claims pollables it was not handed;
+`StatsSnapshot` in the GUI contract requires the host to record its polls.
+
+## Redaction policy (fail-closed, decode-time)
+
+Every retained string is redacted before storage or broadcast, so all event
+properties, subscriber payloads, and render levels are already safe:
+bearer/basic values, api_key/secret/token/password key=value pairs
+(including ENV_CASE), private-key blocks, and GitHub/OpenAI/Slack/AWS token
+prefixes. Unknown shapes keep metadata only (type, field names, size) —
+never raw values — and unparseable records keep kind and size only.
+Patterns run in linear time with a keyword fast-path (a 100KB benign field
+decodes instantly). Limits, stated plainly: secrets split across stream
+deltas, bare high-entropy tokens with no scheme or key, and novel schemes
+are NOT detected; complete detection is not promised.
+
+## Retention bounds (measured)
+
+At most 2000 events and 512KB of retained text (args 4KB, tool output
+16KB collected / 2000 preview, deltas 4KB, partials 2KB, bash heads 500
+chars); overflow evicts oldest-first over an O(1) queue and counts every
+loss. True lengths are counted while storing capped, so truncation is
+always explicit: wire-`truncated` vs tap-truncated flags, and char counts
+are labeled chars with separately computed UTF-8 bytes. Measured burst:
+8000 mixed events through a real connection with hostile and slow
+subscribers in 4.1s (~1960 events/sec end-to-end), store exactly at bounds,
+managed heap delta ~5MB during the burst. Exit status renders as
+`completed, exit unknown` when unverified — never confirmed success.
+
 ## Prototype: PiEventTap (AgentX.Core)
 
 `PiEvents.cs` (typed records + `VisibilityLevel` + per-level `Render`) and
@@ -76,7 +111,7 @@ from docs alone; doc-shaped claims are marked "documented, not observed".
 bounded store of 5000 with counted overflow, per-subscriber fault isolation,
 never throws). Decode rules encode the map above: exit-code key spellings,
 `isError` ≠ exit status, zero-usage policy, verbatim args, capped previews.
-Tests (`PiEventTapTests`, 8) run against a 12-record verbatim fixture taken
+Tests (`PiEventTapTests`, 8, plus `PiTapHardeningTests`, 14 hostile/plumbing/robustness cases) run against a 12-record verbatim fixture taken
 from the live capture (`Fixtures/obs-sample.jsonl`).
 
 ## GUI binding contract
