@@ -39,8 +39,7 @@ Reproduced ordinary-packet activation live in a disposable repo + local bare
 remote with real Pi. Found and fixed: unprotected push path (now refuses
 main/master/foundation/release*), bare `git add -A` (removed; explicit
 pathspec commits + staged-list ledger record + `paths` param), acceptance
-items never bound to evidence (now `accepts:[n]` tags plus human confirmation
-only on the NEEDS_HUMAN resume edge), stale `pushed_sha` + `verify_push=false`
+items never bound to evidence (now `accepts:[n]` tags plus human-gated items forced to PARTIAL (in-process confirmations are never recorded — no verified human-turn boundary exists)), stale `pushed_sha` + `verify_push=false`
 passing COMPLETE (now bound to final revision), dirty worktree completing (now
 blocked), silent below-threshold inaction (now explicit idle section), jobless
 ship looking tracked (now labeled). Follow-up round: pathspec-restricted
@@ -49,10 +48,9 @@ including `bootstrap/*` plus configured targets with pre-write refusal and no
 HEAD-to-other-ref retargeting, caller revisions bound to the live checkout,
 and agent dogfood citations stripped of covering power. Live fire repeated
 through the hardened gates: COMPLETE with ledger, receipt and remote agreeing
-(76f8c2f) and the unrelated config preserved. Deterministic suite 111/111.
+(76f8c2f) and the unrelated config preserved. Deterministic suite 114/114. Final-acceptance round (986ad57): exact-file scope gate with :(literal) pathspecs plus a committed-containment check; human_confirmed removed as evidence (fail-closed PARTIAL); hostile scopes refused pre-write with HEAD and worktree preserved; live Pi probe refused a wildcard and committed the exact file alone.
 **Verdict: KEEP default-load** — earned by measured daily use plus the
 hardened, tested gates. Preserved the in-flight Threadmoth boundary rule.
-
 ## Phase 3 — PiToRuleThemAll: HARDENED (PR #1 comment)
 
 Verified the core claims hold: frozen-id uniqueness enforced on parse,
@@ -63,7 +61,7 @@ output fail safe, builder claims reconcile against observed evidence only,
 receipts validate on save and load. Fixed: `/qa receipt` now reports
 FRESH/STALE/UNKNOWN vs live git (stale PASS can't masquerade as current);
 LIVE sg smoke follows the repo live-test convention instead of hard-failing.
-Deterministic suite 208 tests / 207 pass / 1 honestly skipped. Two live
+Follow-up round (c8dbf6c): `/qa receipt --json` emits a `{receipt, freshness}` envelope (exact-output JSON.parse test), and unreachable previously-verified remotes report UNKNOWN instead of implying FRESH. Deterministic suite 209 tests / 208 pass / 1 honestly skipped. Two live
 `/qa verify` cycles with real isolated verifier spawns completed fail-safe
 (INCONCLUSIVE on toy specs, integrity OK; lantern READY, tethers READY,
 reusery/telltail correctly NOT_NEEDED). Production history shows real
@@ -72,7 +70,6 @@ inspector-PASS outcomes from deeper reviews.
 mid-session by the model (on-demand loading would hide it exactly when
 autonomous verification needs it). Natural invocation stays `/qa`, `/keeper`;
 packet-style QA invocation assessed as future work, not built.
-
 ## Phase 4 — MCP adapter: KEEP, do not migrate
 
 Head-to-head on the same Lantern server (bridge verified healthy standalone:
