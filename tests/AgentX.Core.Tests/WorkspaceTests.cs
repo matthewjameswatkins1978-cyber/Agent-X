@@ -204,8 +204,9 @@ public sealed class WorkspaceTests
     [Fact]
     public void Registry_RejectsSlugSquatter_BetweenDifferentRoots()
     {
-        // Guard backstop: a registry entry already holding the slug a new
-        // root would derive is a loud refusal, never a shared session.
+        // Guard backstop, now enforced at load via exact derived identity: a
+        // registry entry holding a slug the stored root cannot derive is a
+        // loud refusal at Load, never a shared session. File preserved.
         var root = TempRoot("squatter");
         try
         {
@@ -214,12 +215,11 @@ public sealed class WorkspaceTests
             var squatter = new WorkspaceRegistration(
                 derived.Slug, Path.Combine(root, "Elsewhere"), derived.SessionId, DateTime.UtcNow);
             Directory.CreateDirectory(root);
-            File.WriteAllText(
-                WorkspaceRegistry.RegistryPath(root),
-                System.Text.Json.JsonSerializer.Serialize(new[] { squatter }));
-            var registry = WorkspaceRegistry.Load(root);
-            var clash = Assert.Throws<InvalidOperationException>(() => registry.GetOrRegister(project));
-            Assert.Contains("refusing to share", clash.Message, StringComparison.OrdinalIgnoreCase);
+            var path = WorkspaceRegistry.RegistryPath(root);
+            var payload = System.Text.Json.JsonSerializer.Serialize(new[] { squatter });
+            File.WriteAllText(path, payload);
+            Assert.Throws<InvalidDataException>(() => WorkspaceRegistry.Load(root));
+            Assert.Equal(payload, File.ReadAllText(path)); // Byte-identical.
         }
         finally
         {
@@ -300,6 +300,150 @@ public sealed class WorkspaceTests
         Assert.Null(map.LastReceipt);
         Assert.DoesNotContain(map.Milestones, m => m.Kind == "receipt");
         Assert.Equal("partial streamed text", feed.GetEntryText(seq));
+    }
+
+    [Fact]
+    public void Catalog_HealthyFile_YieldsLegacyPlusEntries()
+    {
+        var root = TempRoot("catalog-ok");
+        try
+        {
+            var registry = new WorkspaceRegistry(root);
+            var workspace = registry.GetOrRegister(ProjectDir(root, "Proj"));
+            registry.Save();
+
+            var catalog = WorkspaceCatalog.Load(root);
+            Assert.False(catalog.IsRecovery);
+            Assert.Null(catalog.RecoveryError);
+            Assert.Equal(2, catalog.Entries.Count);
+            Assert.True(catalog.Entries[0].IsLegacy);
+            Assert.Equal(WorkspaceCatalog.LegacyKey, catalog.Entries[0].Key);
+            var entry = catalog.Entries[1];
+            Assert.Equal(workspace.Slug, entry.Key);
+            Assert.Contains(workspace.Slug, entry.Label, StringComparison.Ordinal);
+            var rebuilt = entry.ToWorkspace(root);
+            Assert.Equal(workspace.SessionId, rebuilt.SessionId);
+            Assert.Equal(workspace.ProjectRoot, rebuilt.ProjectRoot, ignoreCase: true);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("{ not valid json {{{")]
+    [InlineData("[null]")]
+    [InlineData("[42]")]
+    [InlineData("null")]
+    public void Catalog_RecoveryMode_YieldsLegacyOnly_PreservesFile(string payload)
+    {
+        // B1: corrupt JSON, null entries and non-array payloads degrade to
+        // legacy-only recovery — window init must never crash, the original
+        // bytes must survive byte-identical for inspection/repair.
+        var root = TempRoot("catalog-recovery");
+        try
+        {
+            Directory.CreateDirectory(root);
+            var path = WorkspaceRegistry.RegistryPath(root);
+            File.WriteAllText(path, payload);
+            var catalog = WorkspaceCatalog.Load(root);
+            Assert.True(catalog.IsRecovery);
+            Assert.NotNull(catalog.RecoveryError);
+            var single = Assert.Single(catalog.Entries);
+            Assert.True(single.IsLegacy);
+            Assert.Equal(payload, File.ReadAllText(path)); // Byte-identical.
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Catalog_HostileEntry_DegradesToRecovery_PreservesFile()
+    {
+        // A syntactically valid but fabricated slug/session pair (or a
+        // legacy squat) is untrusted: recovery, not a workspace.
+        var root = TempRoot("catalog-hostile");
+        try
+        {
+            Directory.CreateDirectory(root);
+            var path = WorkspaceRegistry.RegistryPath(root);
+            var payload = System.Text.Json.JsonSerializer.Serialize(new[]
+            {
+                new WorkspaceRegistration("evil-slug-12345678", @"C:\evil", "ax-evil-slug-12345678", DateTime.UtcNow),
+            });
+            File.WriteAllText(path, payload);
+            var catalog = WorkspaceCatalog.Load(root);
+            Assert.True(catalog.IsRecovery);
+            Assert.Single(catalog.Entries);
+            Assert.Equal(payload, File.ReadAllText(path));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void MissingProject_NeverRecreated_SessionUntouched()
+    {
+        // B3: a disappeared project fails LOUD before any Pi launch. The
+        // project dir stays absent and no session files are created.
+        var root = TempRoot("missing-proj");
+        try
+        {
+            var project = ProjectDir(root, "Proj");
+            var registry = new WorkspaceRegistry(root);
+            var workspace = registry.GetOrRegister(project);
+            Directory.Delete(project, recursive: true); // Project disappears.
+            var error = Assert.Throws<DirectoryNotFoundException>(() => workspace.ToPiRpcOptions());
+            Assert.Contains(project, error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.False(Directory.Exists(project)); // NOT recreated.
+            Assert.False(Directory.Exists(Path.Combine(root, "sessions"))); // Nothing started.
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Legacy_EnsureDirectories_StillCreatesManagedCwd()
+    {
+        var root = TempRoot("legacy-dirs");
+        try
+        {
+            var legacy = AgentXWorkspace.Legacy(root);
+            legacy.EnsureDirectories();
+            Assert.True(Directory.Exists(legacy.WorkingDirectory));
+            Assert.True(Directory.Exists(legacy.SessionDirectory));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ReconnectOwnership_OwnerValidates_ForeignSelectionRefuses()
+    {
+        // B2 Core equivalent: a reconnected session validates against the
+        // workspace that owns the conversation. A moved picker selection
+        // (another workspace's id) must refuse, never display.
+        var root = TempRoot("ownership");
+        try
+        {
+            var owner = AgentXWorkspace.ForProject(root, ProjectDir(root, "Owner"));
+            var other = AgentXWorkspace.ForProject(root, ProjectDir(root, "Other"));
+            owner.ValidateSessionMatch(owner.SessionId); // Owner: passes.
+            Assert.Throws<PiRpcTransportException>(() => other.ValidateSessionMatch(owner.SessionId));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]

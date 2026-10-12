@@ -236,23 +236,34 @@ public sealed class WorkspaceSessionTests
     }
 
     [Fact]
-    public async Task LegacySession_StillOpens_ReadOnly()
+    public async Task LegacySessionId_OpensInTempRoot_RealSessionUntouched()
     {
-        // The real pre-workspace global session must keep opening: connect
-        // only, get_state only, no prompts, no tools, no writes.
+        // Legacy COMPATIBILITY without touching the user's real session:
+        // identical session id (agent-x-main) under a temporary managed
+        // root. The real %LocalAppData%/AgentX history is never opened.
         if (!PiAvailable())
         {
             return;
         }
 
-        using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        await using var client = new PiRpcClient(
-            PiRpcOptions.Persistent(PiSessionOptions.Default()));
-        await client.ConnectAsync(budget.Token);
-        var state = await client.GetStateAsync(budget.Token);
-        Assert.Equal("agent-x-main", state.SessionId);
-        AgentXWorkspace.Legacy(PiSessionOptions.Default().ManagedRoot).ValidateSessionMatch(state.SessionId);
-        _output.WriteLine($"Legacy session opens: model={state.ModelName ?? state.ModelId}.");
+        var root = IsolatedRoot();
+        try
+        {
+            using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            var legacy = AgentXWorkspace.Legacy(root);
+            await using var client = new PiRpcClient(
+                PiRpcOptions.Persistent(new PiSessionOptions(root, AgentXWorkspace.LegacySessionId)));
+            await client.ConnectAsync(budget.Token);
+            var state = await client.GetStateAsync(budget.Token);
+            Assert.Equal(AgentXWorkspace.LegacySessionId, state.SessionId);
+            legacy.ValidateSessionMatch(state.SessionId);
+            Assert.True(Directory.Exists(legacy.WorkingDirectory)); // Managed cwd still auto-created.
+            _output.WriteLine($"Legacy-shape session opens in temp root: model={state.ModelName ?? state.ModelId}.");
+        }
+        finally
+        {
+            Cleanup(root, _output);
+        }
     }
 
     [Fact]

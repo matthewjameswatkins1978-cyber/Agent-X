@@ -18,33 +18,23 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _promptLifetime;
     private bool _piBusy;
 
-    // Workspace identity: one project root, one Pi session, one managed
-    // working directory. Switching requires disconnect first, so histories,
-    // working directories and tool paths can never mix across projects.
-    private WorkspaceRegistry _registry = null!;
-    private readonly List<WorkspaceChoice> _workspaceChoices = new();
+    // Workspace identity: one project root, one Pi session, one execution
+    // root. Switching requires disconnect first, so histories, working
+    // directories and tool paths can never mix across projects. The bound
+    // list comes from WorkspaceCatalog (Core): exactly the legacy entry plus
+    // validated registrations, or legacy-only with a recovery reason.
+    private WorkspaceCatalog _catalog = null!;
     private string? _connectedKey;
     private string? _connectedLabel;
-    // Recovery mode: the registry file was unreadable at startup. Registration
-    // stays disabled (the corrupt original must never be overwritten) while the
-    // legacy session keeps working. Set alongside _registry; read on UI thread.
-    private bool _registryReadOnly;
+    // Immutable owner of the live conversation: reconnect restores THIS
+    // workspace even if the picker selection moved meanwhile. Set on
+    // connect, cleared only on disconnect — never by selection changes.
+    private AgentXWorkspace? _connectedWorkspace;
     // True while a connect or reconnect is underway: blocks re-entrant
     // Connect/Reconnect/switch transitions. Set alongside _piBusy on UI thread.
     private bool _connecting;
 
     private static string ManagedRoot => PiSessionOptions.Default().ManagedRoot;
-
-    private sealed record WorkspaceChoice(
-        string Key, string Label, string Detail, string ExecutionRoot, bool IsLegacy, WorkspaceRegistration? Registration)
-    {
-        public override string ToString() => Label;
-
-        public AgentXWorkspace ToWorkspace(string managedRoot)
-            => IsLegacy || Registration is null
-                ? AgentXWorkspace.Legacy(managedRoot)
-                : new AgentXWorkspace(managedRoot, Registration.Slug, Registration.ProjectRoot, Registration.SessionId);
-    }
 
     // Conversation feed: the Core feed owns the exact text; the observable
     // collection is only the bounded display view. Streamed deltas buffer in
@@ -69,58 +59,20 @@ public partial class MainWindow : Window
 
     private void LoadWorkspaceChoices(string? selectKey = null)
     {
-        _workspaceChoices.Clear();
-        var legacy = AgentXWorkspace.Legacy(ManagedRoot);
-        _workspaceChoices.Add(new WorkspaceChoice(
-            "legacy",
-            "Legacy session (agent-x-main)",
-            $"Pre-workspace global session — preserved as-is. Session {legacy.SessionId}. Pi runs in {legacy.WorkingDirectory} with your user authority.",
-            legacy.WorkingDirectory,
-            IsLegacy: true,
-            Registration: null));
-        try
-        {
-            _registry = WorkspaceRegistry.Load(ManagedRoot);
-            _registryReadOnly = false;
-            AddWorkspaceButton.IsEnabled = true;
-        }
-        catch (InvalidDataException ex)
-        {
-            // Recovery mode: keep the corrupt file byte-identical. Registration
-            // is disabled until the user repairs or backs up the file and
-            // restarts; the legacy session below still connects.
-            _registry = new WorkspaceRegistry(ManagedRoot);
-            _registryReadOnly = true;
-            AddWorkspaceButton.IsEnabled = false;
-            StatusText.Text = $"Workspace registry unreadable — registration disabled (file preserved, legacy session works). Repair or back up {WorkspaceRegistry.RegistryPath(ManagedRoot)}, then restart. {ex.Message}";
-            WorkspaceCombo.ItemsSource = _workspaceChoices.ToArray();
-            WorkspaceCombo.SelectedIndex = 0;
-            return;
-        }
-
-        foreach (var registration in _registry.List())
-        {
-            var name = Path.GetFileName(registration.ProjectRoot.TrimEnd(Path.DirectorySeparatorChar));
-            if (string.IsNullOrEmpty(name))
-            {
-                name = registration.Slug;
-            }
-
-            _workspaceChoices.Add(new WorkspaceChoice(
-                registration.Slug,
-                $"{name} ({registration.Slug})",
-                $"{registration.ProjectRoot} — session {registration.SessionId}. Pi runs HERE with your user authority (isolated from other projects, not sandboxed).",
-                registration.ProjectRoot,
-                IsLegacy: false,
-                Registration: registration));
-        }
-
-        WorkspaceCombo.ItemsSource = _workspaceChoices.ToArray();
-        var index = _workspaceChoices.FindIndex(c => c.Key == selectKey);
+        // Never throws for registry problems: the catalog degrades to
+        // legacy-only with a recovery reason instead of crashing init.
+        _catalog = WorkspaceCatalog.Load(ManagedRoot);
+        AddWorkspaceButton.IsEnabled = !_catalog.IsRecovery;
+        WorkspaceCombo.ItemsSource = _catalog.Entries.ToArray();
+        var index = _catalog.Entries.ToList().FindIndex(c => c.Key == selectKey);
         WorkspaceCombo.SelectedIndex = index >= 0 ? index : 0;
+        if (_catalog.RecoveryError is { } recovery)
+        {
+            StatusText.Text = recovery;
+        }
     }
 
-    private WorkspaceChoice? SelectedChoice => WorkspaceCombo.SelectedItem as WorkspaceChoice;
+    private CatalogEntry? SelectedChoice => WorkspaceCombo.SelectedItem as CatalogEntry;
 
     private void WorkspaceCombo_OnChanged(object? sender, SelectionChangedEventArgs e)
     {
@@ -132,7 +84,7 @@ public partial class MainWindow : Window
 
     private async void AddWorkspace_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (_registryReadOnly)
+        if (_catalog.IsRecovery)
         {
             StatusText.Text = $"Registration disabled while the registry is unreadable — repair or back up {WorkspaceRegistry.RegistryPath(ManagedRoot)}, then restart.";
             return;
@@ -155,10 +107,24 @@ public partial class MainWindow : Window
             return;
         }
 
+        WorkspaceRegistry registry;
         try
         {
-            var workspace = _registry.GetOrRegister(path);
-            _registry.Save();
+            // Reload at click time: the file may have changed since startup.
+            // Any new corruption drops to recovery instead of overwriting.
+            registry = WorkspaceRegistry.Load(ManagedRoot);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            LoadWorkspaceChoices(selectKey: SelectedChoice?.Key);
+            StatusText.Text = $"Registry became unreadable — registration disabled, file preserved. {ex.Message}";
+            return;
+        }
+
+        try
+        {
+            var workspace = registry.GetOrRegister(path);
+            registry.Save();
             LoadWorkspaceChoices(selectKey: workspace.Slug);
             StatusText.Text = $"Workspace '{workspace.Slug}' ready — session {workspace.SessionId}. Press Connect.";
         }
@@ -341,6 +307,7 @@ public partial class MainWindow : Window
             _conversation = conversation;
             _connectedKey = choice.Key;
             _connectedLabel = choice.Label;
+            _connectedWorkspace = workspace;
             PiConnectionState.Text = "Connected";
             PiModelText.Text = DescribeState(state);
             var history = conversation.History;
@@ -351,7 +318,7 @@ public partial class MainWindow : Window
             PiRunStatus.Text = history.Count == 0
                 ? $"New session for '{choice.Label}' — no previous conversation."
                 : $"Restored '{choice.Label}' with {history.Count} message(s). Send a prompt to continue.";
-            StatusText.Text = $"Pi runs in {choice.ExecutionRoot} with your user authority.";
+            StatusText.Text = $"Pi runs in {workspace.WorkingDirectory} with your user authority.";
         }
         catch (Exception ex)
         {
@@ -402,13 +369,21 @@ public partial class MainWindow : Window
 
         _connecting = true;
         PiConnectionState.Text = "Reconnecting…";
+        // Owner lock: reconnect restores the workspace this conversation was
+        // opened for, even if the picker selection moved meanwhile. A selection
+        // change mid-reconnect can neither redirect nor falsely fail it.
+        var owner = _connectedWorkspace;
+        if (owner is null)
+        {
+            _connecting = false;
+            StatusText.Text = "No workspace owns this connection — disconnect and reconnect.";
+            return;
+        }
+
         try
         {
             var state = await conversation.ReconnectAsync();
-            if (SelectedChoice is { } current)
-            {
-                current.ToWorkspace(ManagedRoot).ValidateSessionMatch(state.SessionId);
-            }
+            owner.ValidateSessionMatch(state.SessionId);
 
             PiConnectionState.Text = "Connected";
             PiModelText.Text = DescribeState(state);
@@ -848,6 +823,7 @@ public partial class MainWindow : Window
 
         _connectedKey = null;
         _connectedLabel = null;
+        _connectedWorkspace = null;
 
         Dispatcher.UIThread.Post(() =>
         {

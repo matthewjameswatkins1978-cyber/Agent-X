@@ -132,11 +132,19 @@ public sealed class WorkspaceRegistry
     /// the legacy session. Returns the entry with a canonical project root.
     /// Throws InvalidDataException; the file is never modified here.
     /// </summary>
-    public static WorkspaceRegistration ValidateStoredEntry(string registryPath, WorkspaceRegistration entry)
+    public static WorkspaceRegistration ValidateStoredEntry(string registryPath, WorkspaceRegistration? entry)
     {
-        ArgumentNullException.ThrowIfNull(entry);
         void Fail(string reason) => throw new InvalidDataException(
             $"Workspace registry '{registryPath}' {reason}; left in place for inspection.");
+
+        // Null entries ([null] is valid JSON) fail closed like every other
+        // malformed case — never an unhandled ArgumentNullException.
+
+        if (entry is null)
+        {
+            throw new InvalidDataException(
+                $"Workspace registry '{registryPath}' contains a null entry; left in place for inspection.");
+        }
 
         if (string.IsNullOrWhiteSpace(entry.Slug)
             || entry.Slug.Length > 64
@@ -181,6 +189,16 @@ public sealed class WorkspaceRegistry
         if (!Path.IsPathRooted(canonical))
         {
             Fail($"rejects non-rooted project path '{entry.ProjectRoot}'");
+        }
+
+        // Exact identity agreement: the slug/session must be precisely what
+        // this canonical root derives — a syntactically valid pair minted
+        // for an unrelated root is rejected, not trusted.
+        var (expectedSlug, expectedSession) = AgentXWorkspace.DeriveIdentity(canonical);
+        if (!string.Equals(entry.Slug, expectedSlug, StringComparison.Ordinal)
+            || !string.Equals(entry.SessionId, expectedSession, StringComparison.Ordinal))
+        {
+            Fail($"rejects identity mismatch for '{entry.ProjectRoot}' (expected slug '{expectedSlug}')");
         }
 
         return entry with { ProjectRoot = canonical };

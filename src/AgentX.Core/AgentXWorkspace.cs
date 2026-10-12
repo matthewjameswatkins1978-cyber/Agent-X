@@ -97,15 +97,28 @@ public sealed class AgentXWorkspace
             throw new ArgumentException($"Project directory does not exist: {projectRoot}", nameof(projectRoot));
         }
 
-        var tail = DeriveSlug(canonical);
+        var (slug, sessionId) = DeriveIdentity(canonical);
+        return new AgentXWorkspace(managedRoot, slug, canonical, sessionId);
+    }
+
+    /// <summary>
+    /// Deterministic (slug, sessionId) for a canonical project root: readable
+    /// sanitized tail plus stable hash over the lowercased root. Pure and
+    /// existence-free, so stored registry entries can be checked for EXACT
+    /// identity agreement (see WorkspaceRegistry) — a syntactically valid
+    /// slug/session pair for an unrelated root is rejected, not trusted.
+    /// </summary>
+    public static (string Slug, string SessionId) DeriveIdentity(string canonicalProjectRoot)
+    {
+        var tail = DeriveSlug(canonicalProjectRoot);
         if (tail.Length > MaxSlugTailLength)
         {
             tail = tail[^MaxSlugTailLength..].Trim('-');
         }
 
-        var hash = StableHash8(canonical.ToLowerInvariant());
+        var hash = StableHash8(canonicalProjectRoot.ToLowerInvariant());
         var slug = string.IsNullOrEmpty(tail) ? hash : $"{tail}-{hash}";
-        return new AgentXWorkspace(managedRoot, slug, canonical, SessionIdPrefix + slug);
+        return (slug, SessionIdPrefix + slug);
     }
 
     /// <summary>
@@ -125,11 +138,28 @@ public sealed class AgentXWorkspace
         }
     }
 
-    /// <summary>Create the managed directories. Safe on every connect. Never touches the project root.</summary>
+    /// <summary>
+    /// Create Agent X-managed directories (the shared session directory, and
+    /// the legacy managed working directory). A project workspace root is
+    /// NEVER created here: a disappeared or moved project throws
+    /// DirectoryNotFoundException with a clear message instead of silently
+    /// starting Pi in a recreated empty folder. Safe on every connect.
+    /// </summary>
     public void EnsureDirectories()
     {
+        // Reject first, create second: a missing project must fail before ANY
+        // managed directory appears, so no session files can ever be touched.
+        if (!IsLegacy && !Directory.Exists(ProjectRoot))
+        {
+            throw new DirectoryNotFoundException(
+                $"Project directory is missing (moved or deleted?): {ProjectRoot} — refusing to recreate it or run Pi elsewhere.");
+        }
+
         Directory.CreateDirectory(SessionDirectory);
-        Directory.CreateDirectory(WorkingDirectory);
+        if (IsLegacy)
+        {
+            Directory.CreateDirectory(WorkingDirectory);
+        }
     }
 
     /// <summary>

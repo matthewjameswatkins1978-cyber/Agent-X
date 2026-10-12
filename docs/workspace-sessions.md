@@ -64,15 +64,15 @@ workspaces; a dead Pi process becomes a Reconnect button, not lost work.
 
 ## Evidence (this slice)
 
-- `dotnet test`: 78/78 (44 carried + 28 workspace unit incl. an 8-case
-  hostile-registry matrix + 6 real-Pi session tests).
+- `dotnet test`: 87/87 (44 carried + 37 workspace/session incl. an 8-case
+  hostile matrix, link identity, catalog recovery, no-recreate + 6 real-Pi session tests).
 - Real-Pi disposable sessions (temp roots, unique ids, shell-agnostic
   relative file roundtrips + 3 tiny exact-echo prompts total, ~6 s each):
   isolation across 4 sequential connects (relative reads/writes land in the
   right temp projects, histories disjoint, `get_state.sessionId` verified
   against `ValidateSessionMatch`), 5 sequential reconnects under a healthy
   process with marker count stable (single-writer evidence), legacy
-  `agent-x-main` still opens read-only, failed connect/reconnect loud with
+  `agent-x-main` still opens read-only from a temp managed root, failed connect/reconnect loud with
   clean state. Full timings in test output.
 - Terrorbats packs reviewed read-only (reopen-idempotency, crash-replay,
   false-success patterns informed the tests); installation untouched,
