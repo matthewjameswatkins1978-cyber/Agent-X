@@ -23,6 +23,30 @@ feed-memory sync), instead of suppressed bare selection:
 - Add-while-connected keeps the connected tab (code path reviewed; native
   picker submit remains NOT VERIFIED — manual script stands).
 
+## Recovery retention edge (PR #10 re-review)
+
+Tab-list decision extracted to tested Core (ResolveTabs + TabKey): a
+connected workspace missing from the catalog keeps an explicitly labeled
+retained tab built from the live connection's own identity, target stays
+on the owner; disconnected or missing preferred keys fall back to legacy.
+Unit-covered: retention, no-duplication, preferred honored, fallback,
+legacy unaffected. The GUI applies the decision verbatim.
+
+The retained-tab VISUAL while connected still needs one manual run
+(native picker submit is not automatable here): connect temp B with
+content (one prompt), corrupt workspaces.json externally (backup first),
+Add project, submit any folder, Confirm: B's tab must remain selected
+showing B's feed with a retention note (never Legacy showing B's
+history); Disconnect, then Legacy shows its own view; restore backup.
+PASS iff no mislabeling at any point.
+
+Automation note: native-dialog UIA exposure proved unreliable in this
+environment (identical traversals disagree across processes; rows come
+and go with shell load state; no input queue; no useful child HWNDs).
+Two-step in-app confirmation makes even a phantom submit harmless (it
+can only stage a pending path, never register). Earlier phantom
+Documents/minimize anomalies never recurred across dozens of runs.
+
 ## Verified live
 
 - **Tabs + pages render.** Workspace tabs (Legacy, ax-nav-a, ax-nav-b —

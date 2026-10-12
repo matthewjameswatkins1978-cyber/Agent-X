@@ -100,10 +100,22 @@ public partial class MainWindow : Window
         // legacy-only with a recovery reason instead of crashing init.
         _catalog = WorkspaceCatalog.Load(ManagedRoot);
         AddWorkspaceButton.IsEnabled = !_catalog.IsRecovery;
+
+        // Tab list + transition target come from one tested Core decision:
+        // a connected workspace missing from the catalog keeps an explicitly
+        // labeled retained tab, so its feed is never shown under another
+        // tab's name. Never fabricated — retention rebuilds from the live
+        // connection's own workspace object.
+        var resolved = WorkspaceCatalog.ResolveTabs(
+            _catalog,
+            _conversation is not null ? _connectedWorkspace : null,
+            selectKey);
+        var connectedLive = _conversation is not null && _connectedKey is not null;
         WorkspaceTabs.Items.Clear();
-        foreach (var entry in _catalog.Entries)
+        foreach (var entry in resolved.Entries)
         {
-            WorkspaceTabs.Items.Add(MakeTab(entry, isConnected: false));
+            WorkspaceTabs.Items.Add(MakeTab(entry,
+                isConnected: connectedLive && entry.Key == _connectedKey));
         }
 
         // One authoritative transition for programmatic reselects too: a
@@ -111,21 +123,7 @@ public partial class MainWindow : Window
         // the view), and a disconnected reselect snapshots/restores feeds
         // exactly like a user click. Suppressed selection alone would skip
         // all of that and can show the wrong project's history.
-        string target;
-        if (_conversation is not null)
-        {
-            target = _connectedKey ?? WorkspaceCatalog.LegacyKey;
-        }
-        else if (selectKey is not null && TabsContain(selectKey))
-        {
-            target = selectKey;
-        }
-        else
-        {
-            target = WorkspaceCatalog.LegacyKey;
-        }
-
-        var result = _coordinator.RequestTransition(target);
+        var result = _coordinator.RequestTransition(resolved.TargetKey);
         SelectTab(_coordinator.ActiveKey);
         RebuildConversationList();
         RebuildSessionMap();
@@ -148,21 +146,10 @@ public partial class MainWindow : Window
 
         if (_catalog.RecoveryError is { } recovery)
         {
-            StatusText.Text = recovery;
+            StatusText.Text = resolved.RetentionNote is not null
+                ? $"{recovery} {resolved.RetentionNote}"
+                : recovery;
         }
-    }
-
-    private bool TabsContain(string key)
-    {
-        foreach (var item in WorkspaceTabs.Items)
-        {
-            if (item is TabStripItem tab && (tab.Tag as CatalogEntry)?.Key == key)
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static TabStripItem MakeTab(CatalogEntry entry, bool isConnected)

@@ -60,6 +60,13 @@ public sealed class AgentXWorkspace
     /// <summary>True for the preserved global session, never for a project workspace.</summary>
     public bool IsLegacy => SessionId == LegacySessionId;
 
+    /// <summary>
+    /// Key this workspace occupies in the GUI tab strip: the reserved legacy
+    /// key for the global session, otherwise the slug. Tab identity and
+    /// session identity agree by construction (see ResolveTabs).
+    /// </summary>
+    public string TabKey => IsLegacy ? WorkspaceCatalog.LegacyKey : Slug;
+
     /// <summary>Pi session storage override (passed as --session-dir). Shared with legacy.</summary>
     public string SessionDirectory => Path.Combine(ManagedRoot, "sessions");
 

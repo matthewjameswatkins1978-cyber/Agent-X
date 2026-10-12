@@ -539,6 +539,71 @@ public sealed class WorkspaceTests
     }
 
     [Fact]
+    public void ResolveTabs_RetainsConnectedWorkspaceMissingFromCatalog()
+    {
+        // The P1 recovery edge: registry lost B mid-session. B's tab is
+        // retained (built from the live connection's own identity) and the
+        // target stays B — its feed is never shown under Legacy's name.
+        var root = TempRoot("resolve-retain");
+        try
+        {
+            var project = ProjectDir(root, "ProjB");
+            var connected = AgentXWorkspace.ForProject(root, project);
+            var catalog = new WorkspaceCatalog(
+                [new CatalogEntry(WorkspaceCatalog.LegacyKey, "Legacy", "d", true, null)],
+                recoveryError: "corrupt");
+            var resolved = WorkspaceCatalog.ResolveTabs(catalog, connected, preferredKey: null);
+            Assert.Equal(2, resolved.Entries.Count);
+            var retained = Assert.Single(resolved.Entries, e => e.Key == connected.Slug);
+            Assert.Contains("(session active)", retained.Label, StringComparison.Ordinal);
+            Assert.Equal(connected.ProjectRoot, retained.ToWorkspace(root).ProjectRoot, ignoreCase: true);
+            Assert.Equal(connected.SessionId, retained.ToWorkspace(root).SessionId);
+            Assert.Equal(connected.Slug, resolved.TargetKey);
+            Assert.NotNull(resolved.RetentionNote);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResolveTabs_NoDuplication_PreferredAndLegacy()
+    {
+        var root = TempRoot("resolve-clean");
+        try
+        {
+            var project = ProjectDir(root, "Proj");
+            var workspace = AgentXWorkspace.ForProject(root, project);
+            var registration = new WorkspaceRegistration(
+                workspace.Slug, workspace.ProjectRoot, workspace.SessionId, DateTime.UtcNow);
+            var catalog = new WorkspaceCatalog(
+                [
+                    new CatalogEntry(WorkspaceCatalog.LegacyKey, "Legacy", "d", true, null),
+                    new CatalogEntry(workspace.Slug, "Proj", "d", false, registration),
+                ],
+                recoveryError: null);
+            // Connected and present: no second tab, target stays.
+            var live = WorkspaceCatalog.ResolveTabs(catalog, workspace, preferredKey: null);
+            Assert.Equal(2, live.Entries.Count);
+            Assert.Equal(workspace.Slug, live.TargetKey);
+            Assert.Null(live.RetentionNote);
+            // Disconnected with preference: honored; unknown preference falls back.
+            Assert.Equal(workspace.Slug, WorkspaceCatalog.ResolveTabs(catalog, null, workspace.Slug).TargetKey);
+            Assert.Equal(WorkspaceCatalog.LegacyKey, WorkspaceCatalog.ResolveTabs(catalog, null, "ghost").TargetKey);
+            Assert.Equal(WorkspaceCatalog.LegacyKey, WorkspaceCatalog.ResolveTabs(catalog, null, null).TargetKey);
+            // Legacy connected: its catalog entry matches by tab key, never retained twice.
+            var legacyResolved = WorkspaceCatalog.ResolveTabs(catalog, AgentXWorkspace.Legacy(root), null);
+            Assert.Equal(2, legacyResolved.Entries.Count);
+            Assert.Equal(WorkspaceCatalog.LegacyKey, legacyResolved.TargetKey);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void SingleClientConversation_Throws_OnExplicitClient()
     {
         // Documents the reconnect requirement: a fixed client cannot be

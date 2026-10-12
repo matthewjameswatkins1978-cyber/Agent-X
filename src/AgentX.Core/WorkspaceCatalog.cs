@@ -21,6 +21,15 @@ public sealed record CatalogEntry(
 }
 
 /// <summary>
+/// Effective tab list for one registry load: catalog entries plus, when the
+/// connected workspace is missing from them, its retained tab.
+/// </summary>
+public sealed record ResolvedTabs(
+    IReadOnlyList<CatalogEntry> Entries,
+    string TargetKey,
+    string? RetentionNote);
+
+/// <summary>
 /// Startup view over the workspace registry: the bindable entry list plus an
 /// optional recovery state. When the registry file is unreadable the catalog
 /// still yields exactly the legacy entry with <see cref="RecoveryError"/> set
@@ -44,6 +53,75 @@ public sealed class WorkspaceCatalog
     public string? RecoveryError { get; }
 
     public bool IsRecovery => RecoveryError is not null;
+
+    /// <summary>
+    /// Decide the visible tabs and the transition target for one registry
+    /// load. When <paramref name="connected"/> is set but absent from the
+    /// catalog (recovery wiped its entry mid-session), its tab is RETAINED —
+    /// explicitly labeled from the live connection's own workspace object —
+    /// so the loaded feed is never displayed under another tab's name. The
+    /// target is the connected key whenever connected, else the preferred
+    /// key when present, else legacy. Pure and fully unit-tested; the host
+    /// only renders Entries, transitions to TargetKey and shows
+    /// RetentionNote.
+    /// </summary>
+    public static ResolvedTabs ResolveTabs(
+        WorkspaceCatalog catalog,
+        AgentXWorkspace? connected,
+        string? preferredKey)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        var entries = catalog.Entries.ToList();
+        string? note = null;
+        if (connected is not null && entries.All(e => e.Key != connected.TabKey))
+        {
+            entries.Add(RetainedEntry(connected));
+            note = $"Registry lost workspace '{connected.Slug}' — tab retained with its live session until disconnect.";
+        }
+
+        string target;
+        if (connected is not null)
+        {
+            target = connected.TabKey;
+        }
+        else if (preferredKey is not null && entries.Any(e => e.Key == preferredKey))
+        {
+            target = preferredKey;
+        }
+        else
+        {
+            target = LegacyKey;
+        }
+
+        return new ResolvedTabs(entries, target, note);
+    }
+
+    /// <summary>
+    /// A tab row rebuilt from the live connection's own workspace identity.
+    /// Never fabricated from registry data: slug, session and root all come
+    /// from the object Pi is actually running under.
+    /// </summary>
+    public static CatalogEntry RetainedEntry(AgentXWorkspace workspace)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+        var name = Path.GetFileName(workspace.ProjectRoot.TrimEnd(Path.DirectorySeparatorChar));
+        if (string.IsNullOrEmpty(name))
+        {
+            name = workspace.Slug;
+        }
+
+        return new CatalogEntry(
+            workspace.TabKey,
+            workspace.IsLegacy ? "Legacy session (agent-x-main)" : $"{name} (session active)",
+            workspace.IsLegacy
+                ? $"Pre-workspace global session — preserved as-is. Session {workspace.SessionId}."
+                : $"{workspace.ProjectRoot} — session {workspace.SessionId}. " +
+                  "Registry lost this workspace entry — tab retained until disconnect; reconnect stays on this live session.",
+            workspace.IsLegacy,
+            workspace.IsLegacy
+                ? null
+                : new WorkspaceRegistration(workspace.Slug, workspace.ProjectRoot, workspace.SessionId, DateTime.UtcNow));
+    }
 
     public static WorkspaceCatalog Load(string managedRoot)
     {
