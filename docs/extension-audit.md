@@ -97,8 +97,9 @@ the 3.2.0 → 5.2.0 upgrade separately — breaking changes require migration ca
 
 - Interactive GUI click-through of a Studio mission still needs a manual pass.
 - Per-extension memory attribution inconclusive (method limitation).
-- Agent-supplied dogfood citations never cover acceptance; human confirmation
-  lands only on the NEEDS_HUMAN resume edge (or missions close as PARTIAL).
+- Agent-supplied dogfood citations never cover acceptance; in-process human
+  confirmations are refused because no verified human-turn boundary exists.
+  Human-only acceptance remains PARTIAL or NEEDS_HUMAN.
 - Real-model PASS on a substantive QA spec not yet demonstrated live.
 - sg/ast-grep binary absent, so the live structural-search smoke stays skipped.
 - `mcp connect` hang and native headless trust are Pi-core issues, out of scope.
