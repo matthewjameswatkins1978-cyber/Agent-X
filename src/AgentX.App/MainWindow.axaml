@@ -29,6 +29,14 @@
           <Button Grid.Column="2" Content="Connect" Click="ConnectPi_OnClick" />
           <Button Grid.Column="3" Content="Disconnect" Click="DisconnectPi_OnClick" />
         </Grid>
+        <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+          <TextBlock Text="Workspace" FontWeight="SemiBold" VerticalAlignment="Center" />
+          <ComboBox Grid.Column="1" x:Name="WorkspaceCombo" MinWidth="280"
+                    SelectionChanged="WorkspaceCombo_OnChanged" />
+          <Button Grid.Column="2" x:Name="AddWorkspaceButton" Content="Add project…" Click="AddWorkspace_OnClick" />
+          <Button Grid.Column="3" Content="Reconnect" Click="ReconnectPi_OnClick" />
+        </Grid>
+        <TextBlock x:Name="WorkspaceDetailText" Text="Select a workspace, then Connect." Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />
         <TextBlock x:Name="PiModelText" Text="Pi engine not connected." Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />
         <TextBlock x:Name="PiActivityText" Text="" Foreground="#7DD3A8" FontSize="12" TextWrapping="Wrap" />
         <TextBlock x:Name="PiRunStatus" Text="" Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />

@@ -17,6 +17,21 @@ The core owns the exact imported string, UTF-8 byte count, and compact line star
 3. **Protect Pi behind an Agent X boundary.** Do not patch Pi or make plugins depend on its private internals. Kernel integration remains a later decision after Pi behavior and license/provenance are reviewed.
 4. **Treat rendered rows as a view.** The immutable original text is authoritative; line entries are lazy slices and the UI must not become the data store.
 
+## Workspace sessions and recovery (feature/agent-x-workspace-recovery)
+
+Project-aware session identity replaces the single global session: one
+project root maps to one `ax-<tail>-<hash>` Pi session id, and Pi runs IN
+that project root (user's OS authority — isolation between projects, not a
+sandbox), with the legacy `agent-x-main` / `agent-cwd` session preserved
+untouched and selectable. A JSON registry tracks roots idempotently,
+validates every entry fail-closed, refuses slug sharing loudly, and never
+modifies a corrupt file (GUI enters recovery mode instead). `PiConversation` builds clients from a factory so
+`ReconnectAsync` retires the previous writer before connecting its
+replacement (single-writer rule) on the same
+persisted session; `ConnectionLost` plus a GUI Reconnect button (with
+run-in-flight and wrong-workspace guards) complete the loop. Details and
+live evidence in `docs/workspace-sessions.md`.
+
 ## Conversation feed and session map (feature/agent-x-conversation-ux)
 
 The Pi panel renders a structured `ConversationFeed` (Core, UI-free) instead of

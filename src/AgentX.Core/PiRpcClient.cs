@@ -35,6 +35,30 @@ public sealed record PiRpcOptions(
             $"{BaseArguments} {session.ToArguments()}",
             session.WorkingDirectory);
     }
+
+    /// <summary>
+    /// Persistent launch for an explicit session location: Pi-native session
+    /// in <paramref name=\"sessionDirectory\"/> resumed by stable
+    /// <paramref name=\"sessionId\"/>, Pi process rooted in
+    /// <paramref name=\"workingDirectory\"/>. Used by AgentXWorkspace;
+    /// the legacy PiSessionOptions path above is unchanged.
+    /// </summary>
+    public static PiRpcOptions ForSession(
+        string sessionDirectory,
+        string sessionId,
+        string workingDirectory,
+        string? executablePath = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionDirectory);
+        PiSessionOptions.ValidateSessionId(sessionId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
+        Directory.CreateDirectory(sessionDirectory);
+        Directory.CreateDirectory(workingDirectory);
+        return new PiRpcOptions(
+            executablePath ?? @"D:\AgentTools\bin\pi.cmd",
+            $"{BaseArguments} --session-dir \"{sessionDirectory}\" --session-id {sessionId}",
+            workingDirectory);
+    }
 }
 
 /// <summary>
@@ -247,6 +271,30 @@ public sealed class PiRpcClient : IAsyncDisposable
             && text.ValueKind == JsonValueKind.String
             ? text.GetString()
             : null;
+    }
+
+    /// <summary>
+    /// Execute a shell command immediately (no LLM run) and persist a
+    /// BashExecutionMessage in the session. Used by hosts to verify tool
+    /// execution paths and to seed disposable verification sessions without
+    /// inference cost. Output beyond the truncation limit stays in the
+    /// session; check <see cref=\"PiBashResult.Truncated\"/>.
+    /// </summary>
+    public async Task<PiBashResult> RunBashAsync(string command, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(command);
+        var connection = RequireConnection();
+        using var response = await connection.SendCommandAsync(
+            "bash", new Dictionary<string, object?> { ["command"] = command }, cancellationToken).ConfigureAwait(false);
+        ThrowOnCommandError(response);
+        var data = response.RootElement.TryGetProperty("data", out var d) ? d : (JsonElement?)null;
+        string? Str(string name)
+            => data is { } obj && obj.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+        return new PiBashResult(
+            Str("output") ?? string.Empty,
+            data is { } obj2 && obj2.TryGetProperty("exitCode", out var e) && e.ValueKind == JsonValueKind.Number ? e.GetInt32() : null,
+            data is { } obj3 && obj3.TryGetProperty("cancelled", out var c) && c.ValueKind == JsonValueKind.True,
+            data is { } obj4 && obj4.TryGetProperty("truncated", out var t) && t.ValueKind == JsonValueKind.True);
     }
 
     public Task<bool> WaitForSettledAsync(CancellationToken cancellationToken = default)
