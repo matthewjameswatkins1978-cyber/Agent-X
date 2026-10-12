@@ -32,15 +32,24 @@ by persisted `AgentXPreferences`. Live keeps an inviting empty state with
 composer-filling suggestions instead of a wizard. Verified live; details in
 docs/rc1-b1-navigation.md.
 
-## Native desktop shell (feature/agent-x-desktop-shell)
+## Native desktop shell (feature/agent-x-desktop-shell, superseded by tabs below)
 
-Left project navigation (collapsible icon rail, resizable via splitter,
-workspace picker, session controls, session map and packet tools as
-collapsed expanders) beside a dominant conversation centre with an anchored
-composer. The 300px conversation cap is gone: the virtualized feed fills
-all centre space. Conversation rows carry accessible names (role headers)
-for screen readers and UI automation. Verified live with UIA-driven smoke
+The original sidebar prototype (collapsible navigation rail beside the
+conversation) was replaced by workspace tabs with Overview/Live/Settings
+pages. The virtualized feed, anchored composer, accessible row names and
+packet tools survive in the new layout. Verified live with UIA-driven smoke
 (see PR evidence). Details in docs/desktop-shell-verification.md.
+
+## Pi-quality Live feed (feature/agent-x-rc1-b2-live)
+
+Assistant narrative renders as unboxed Pi-grammar Markdown (headings,
+bold, code, lists, links) in Pi dark hues; user packets sit in blue
+blocks; each tool operation is one coherent grey/green/red block with
+diff-tinted monospace output and an explicit full-output expander; bridge
+detail rows flow at Compact/Detailed/Full (Detailed default) via a
+re-attaching FeedBridge; tool bodies reconcile to persisted history
+post-run. Copy stays byte-exact from source text. No usage/cost figures
+(no host poll site exists). Details in docs/live-visual-grammar.md.
 
 ## Workspace sessions and recovery (feature/agent-x-workspace-recovery)
 

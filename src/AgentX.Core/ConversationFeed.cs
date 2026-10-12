@@ -81,6 +81,7 @@ public sealed class ConversationFeed
 {
     private readonly Lock _gate = new();
     private readonly List<FeedEntry> _entries = new();
+    private readonly Dictionary<string, Stack<long>> _openTools = new(StringComparer.OrdinalIgnoreCase);
     private long _nextSeq = 1;
     private string? _activity;
 
@@ -222,12 +223,140 @@ public sealed class ConversationFeed
     }
 
     public long AddToolStart(string toolName, string? summary, string? path, bool isMutating)
-        => Add(new FeedEntry(NextSeq(), "tool", summary ?? string.Empty,
-            Note: $"started: {toolName}", Path: path, IsMutating: isMutating));
+    {
+        long seq;
+        lock (_gate)
+        {
+            seq = _nextSeq++;
+            _entries.Add(new FeedEntry(seq, "tool", summary ?? string.Empty,
+                Note: $"started: {toolName}", Path: path, IsMutating: isMutating));
+            if (!_openTools.TryGetValue(toolName, out var stack))
+            {
+                stack = new Stack<long>();
+                _openTools[toolName] = stack;
+            }
 
+            stack.Push(seq);
+        }
+
+        Changed?.Invoke();
+        return seq;
+    }
+
+    /// <summary>
+    /// Close one tool operation IN its start row (LIFO per tool name, so
+    /// nested same-name calls still match). The row keeps its summary and
+    /// gains the outcome — one coherent block per operation instead of
+    /// scattered start/finish rows. When no open start exists (missed start,
+    /// late duplicate, restored-then-live mix), falls back to a separate
+    /// end row so the outcome is never lost. Never fabricates: matching is
+    /// by exact tool name only.
+    /// </summary>
     public long AddToolEnd(string toolName, bool isError)
-        => Add(new FeedEntry(NextSeq(), "tool", isError ? $"Tool {toolName} failed." : $"Tool {toolName} finished.",
+    {
+        long? openSeq = null;
+        lock (_gate)
+        {
+            if (_openTools.TryGetValue(toolName, out var stack) && stack.Count > 0)
+            {
+                openSeq = stack.Pop();
+            }
+        }
+
+        if (openSeq is { } seq)
+        {
+            CloseToolCall(seq, toolName, isError);
+            return seq;
+        }
+
+        return Add(new FeedEntry(NextSeq(), "tool", isError ? $"Tool {toolName} failed." : $"Tool {toolName} finished.",
             Note: isError ? $"failed: {toolName}" : $"finished: {toolName}", IsError: isError));
+    }
+
+    private void CloseToolCall(long seq, string toolName, bool isError)
+    {
+        lock (_gate)
+        {
+            var index = _entries.FindIndex(e => e.Seq == seq);
+            if (index < 0)
+            {
+                return;
+            }
+
+            var entry = _entries[index];
+            var outcome = isError ? $"Tool {toolName} failed." : $"Tool {toolName} finished.";
+            var text = string.IsNullOrEmpty(entry.Text) ? outcome : entry.Text + "\n" + outcome;
+            _entries[index] = entry with
+            {
+                Text = text,
+                Note = isError ? $"failed: {toolName}" : $"finished: {toolName}",
+                IsError = isError,
+            };
+        }
+
+        Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// Replace live tool placeholder texts with the full persisted bodies
+    /// from post-run history (same session, same order). Applies ONLY when
+    /// every feed tool entry has exactly one history counterpart — a
+    /// cancelled mid-call run leaves an orphan start, and then nothing is
+    /// touched rather than risk misaligned replacement. History-loaded rows
+    /// already carry full text, so the common case is a silent no-op.
+    /// </summary>
+    public void ReconcileToolResults(IReadOnlyList<ConversationMessage> history)
+    {
+        ArgumentNullException.ThrowIfNull(history);
+        List<(int Index, string Text)>? replacements = null;
+        lock (_gate)
+        {
+            var indices = new List<int>();
+            for (var i = 0; i < _entries.Count; i++)
+            {
+                if (_entries[i].Role == "tool")
+                {
+                    indices.Add(i);
+                }
+            }
+
+            var bodies = new List<string>();
+            foreach (var message in history)
+            {
+                if (message.Role == "tool")
+                {
+                    bodies.Add(message.Text);
+                }
+            }
+
+            if (indices.Count == 0 || indices.Count != bodies.Count)
+            {
+                return;
+            }
+
+            for (var k = 0; k < indices.Count; k++)
+            {
+                if (_entries[indices[k]].Text != bodies[k])
+                {
+                    replacements ??= new List<(int, string)>();
+                    replacements.Add((indices[k], bodies[k]));
+                }
+            }
+
+            if (replacements is not null)
+            {
+                foreach (var (index, text) in replacements)
+                {
+                    _entries[index] = _entries[index] with { Text = text };
+                }
+            }
+        }
+
+        if (replacements is not null)
+        {
+            Changed?.Invoke();
+        }
+    }
 
     public long AddError(string text)
         => Add(new FeedEntry(NextSeq(), "system", text, Note: "error", IsError: true));
@@ -323,9 +452,12 @@ public sealed class ConversationFeed
                 case "user":
                     milestones.Add(new FeedMilestone("prompt", FirstLine(entry.Text, 120), null, entry.Seq));
                     break;
-                case "tool" when entry.Note is not null && entry.Note.StartsWith("started:", StringComparison.Ordinal):
-                    var toolName = entry.Note["started:".Length..].Trim();
-                    milestones.Add(new FeedMilestone("tool", $"Ran {toolName}", entry.Text.Length == 0 ? null : FirstLine(entry.Text, 200), entry.Seq));
+                case "tool" when entry.Note is not null && ToolNoteName(entry.Note) is { } toolName:
+                    milestones.Add(new FeedMilestone(
+                        entry.IsError ? "error" : "tool",
+                        $"Ran {toolName}",
+                        entry.Text.Length == 0 ? null : FirstLine(entry.Text, 200),
+                        entry.Seq));
                     if (entry.IsMutating && !string.IsNullOrEmpty(entry.Path) && !changedFiles.Contains(entry.Path))
                     {
                         changedFiles.Add(entry.Path);
@@ -375,6 +507,30 @@ public sealed class ConversationFeed
         {
             return _nextSeq++;
         }
+    }
+
+    /// <summary>
+    /// Tool name from a lifecycle note ("started: X", "finished: X",
+    /// "failed: X"); null for anything else. Single parser for the note
+    /// shapes AddToolStart/AddToolEnd produce.
+    /// </summary>
+    internal static string? ToolNoteName(string? note)
+    {
+        if (string.IsNullOrEmpty(note))
+        {
+            return null;
+        }
+
+        foreach (var prefix in new[] { "started:", "finished:", "failed:" })
+        {
+            if (note.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                var name = note[prefix.Length..].Trim();
+                return name.Length == 0 ? null : name;
+            }
+        }
+
+        return null;
     }
 
     internal static bool IsTestCommand(string toolName, string command)

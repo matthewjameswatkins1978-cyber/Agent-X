@@ -470,16 +470,26 @@ public sealed class WorkspaceTests
             Assert.Equal(new AgentXPreferences(), missing);
             Assert.Null(note0);
 
-            new AgentXPreferences(AutoScroll: false, VerboseMap: true, Theme: "Dark").Save(root);
+            new AgentXPreferences(AutoScroll: false, Visibility: "Full", Theme: "Dark").Save(root);
             var (loaded, note1) = AgentXPreferences.Load(root);
             Assert.Null(note1);
             Assert.False(loaded.AutoScroll);
-            Assert.True(loaded.VerboseMap);
+            Assert.Equal("Full", loaded.Visibility);
             Assert.Equal("Dark", loaded.Theme);
 
-            var unknown = new AgentXPreferences(Theme: "Neon");
+            var unknown = new AgentXPreferences(Theme: "Neon", Visibility: "Everything");
             unknown.Save(root);
-            Assert.Equal("System", AgentXPreferences.Load(root).Preferences.Theme);
+            var normalized = AgentXPreferences.Load(root).Preferences;
+            Assert.Equal("System", normalized.Theme);
+            Assert.Equal("Detailed", normalized.Visibility);
+
+            // Legacy files carrying the retired VerboseMap flag migrate silently.
+            File.WriteAllText(AgentXPreferences.PreferencesPath(root),
+                "{\"AutoScroll\":true,\"VerboseMap\":true,\"Theme\":\"Light\"}");
+            var (migrated, noteM) = AgentXPreferences.Load(root);
+            Assert.Null(noteM);
+            Assert.Equal("Detailed", migrated.Visibility);
+            Assert.Equal("Light", migrated.Theme);
 
             File.WriteAllText(AgentXPreferences.PreferencesPath(root), "{ broken");
             var (fallback, note2) = AgentXPreferences.Load(root);

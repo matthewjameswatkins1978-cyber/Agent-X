@@ -287,6 +287,88 @@ public sealed class ConversationFeedTests
     }
 
     [Fact]
+    public void ToolGrouping_CoherentBlock_SequentialAndNested()
+    {
+        var feed = new ConversationFeed();
+        var read = feed.AddToolStart("read", "src/Foo.cs", path: null, isMutating: false);
+        Assert.Equal(read, feed.AddToolEnd("read", isError: false)); // Same seq: one block.
+        var entries = feed.Snapshot();
+        var single = Assert.Single(entries);
+        Assert.Equal(read, single.Seq);
+        Assert.Contains("src/Foo.cs", single.Text, StringComparison.Ordinal);
+        Assert.Contains("finished", single.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.False(single.IsError);
+
+        // Nested same-name calls match LIFO.
+        var outer = feed.AddToolStart("bash", "outer", path: null, isMutating: false);
+        var inner = feed.AddToolStart("bash", "inner", path: null, isMutating: false);
+        Assert.Equal(inner, feed.AddToolEnd("bash", isError: true));
+        var innerEntry = feed.Snapshot().First(e => e.Seq == inner);
+        Assert.True(innerEntry.IsError);
+        Assert.Equal(outer, feed.AddToolEnd("bash", isError: false));
+        Assert.False(feed.Snapshot().First(e => e.Seq == outer).IsError);
+    }
+
+    [Fact]
+    public void ToolGrouping_OrphanEnd_FallsBackWithoutLoss()
+    {
+        var feed = new ConversationFeed();
+        var seq = feed.AddToolEnd("bash", isError: true); // No open start.
+        var entry = Assert.Single(feed.Snapshot());
+        Assert.Equal(seq, entry.Seq);
+        Assert.True(entry.IsError);
+        Assert.Contains("failed", entry.Text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ToolGrouping_PreservesMapEvidence()
+    {
+        var feed = new ConversationFeed();
+        feed.AddToolStart("edit", "src/Foo.cs", path: "src/Foo.cs", isMutating: true);
+        feed.AddToolEnd("edit", isError: false);
+        var map = feed.BuildMap();
+        Assert.Contains(map.Milestones, m => m.Kind == "tool" && m.Title.Contains("edit", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(["src/Foo.cs"], map.ChangedFiles);
+        Assert.Equal(0, map.ErrorCount);
+    }
+
+    [Fact]
+    public void ReconcileTools_ReplacesPlaceholders_WithPersistedBodies()
+    {
+        var feed = new ConversationFeed();
+        feed.AddToolStart("read", "src/Foo.cs", path: null, isMutating: false);
+        feed.AddToolEnd("read", isError: false);
+        var history = new List<ConversationMessage>
+        {
+            new("user", "read it"),
+            new("assistant", "reading"),
+            new("tool", "[tool result: read]\nline one\nline two"),
+        };
+        feed.ReconcileToolResults(history);
+        Assert.Contains("line one\nline two", feed.Snapshot().Single().Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReconcileTools_SkipsMisalignedHistories()
+    {
+        // Cancelled mid-call: orphan start has no history counterpart.
+        // Nothing is touched rather than risking wrong replacement.
+        var feed = new ConversationFeed();
+        feed.AddToolStart("read", "src/Foo.cs", path: null, isMutating: false);
+        feed.AddToolEnd("read", isError: false);
+        feed.AddToolStart("bash", "sleep 99", path: null, isMutating: false); // Orphan: killed.
+        var history = new List<ConversationMessage>
+        {
+            new("tool", "[tool result: read]\nfull body"),
+        };
+        feed.ReconcileToolResults(history);
+        Assert.Equal(2, feed.Snapshot().Count);
+        Assert.DoesNotContain("full body", feed.Snapshot()[0].Text, StringComparison.Ordinal);
+        feed.ReconcileToolResults([]);
+        Assert.Equal(2, feed.Snapshot().Count);
+    }
+
+    [Fact]
     public void ToolActivity_ParsesPathsCommandsAndOutcomes_WithoutFabrication()
     {
         AssertActivity("""{"type":"tool_execution_start","toolCallId":"c1","toolName":"edit","args":{"path":"src/Foo.cs"}}""",
