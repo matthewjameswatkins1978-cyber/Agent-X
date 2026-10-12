@@ -15,8 +15,9 @@ from docs alone; doc-shaped claims are marked "documented, not observed".
   tool starts with argument summaries, streaming text, exit codes, timings,
   session totals. This is the level the GUI binds.
 - **Full trace**: deeper diagnostic evidence and available protocol details.
-  Redacted content previews, chunk byte counts, tool-call ids, zero-usage flags,
-  unknown-shape metadata (never raw values). Nothing is dropped silently.
+  Redacted content previews with stored/omitted counts, chunk byte counts,
+  tool-call ids, zero-usage flags, unknown-shape metadata (never raw values).
+  Nothing is dropped silently, and stored is never claimed for dropped data.
 
 ## Directly available (observed on the wire)
 
@@ -94,18 +95,26 @@ decodes instantly). Limits, stated plainly: secrets split across stream
 deltas, bare high-entropy tokens with no scheme or key, and novel schemes
 are NOT detected; complete detection is not promised.
 
-## Retention bounds (measured)
+## Retention bounds and evidence contract (measured)
 
 At most 2000 events and 512KB of retained text (args 4KB, tool output
-16KB collected / 2000 preview, deltas 4KB, partials 2KB, bash heads 500
-chars); overflow evicts oldest-first over an O(1) queue and counts every
-loss. True lengths are counted while storing capped, so truncation is
-always explicit: wire-`truncated` vs tap-truncated flags, and char counts
-are labeled chars with separately computed UTF-8 bytes. Measured burst:
-8000 mixed events through a real connection with hostile and slow
-subscribers in 4.1s (~1960 events/sec end-to-end), store exactly at bounds,
-managed heap delta ~5MB during the burst. Exit status renders as
-`completed, exit unknown` when unverified — never confirmed success.
+16KB retained / 2000 preview, deltas 4KB, partials 2KB retained / 1000
+preview, bash heads 1000 chars, message windows 400 chars); overflow
+evicts oldest-first over an O(1) queue and counts every loss. Four lengths
+stay distinct per event: source length (wire total), captured length
+(decode kept), stored length (event holds), visible preview length (render
+shows). Markers are honest about each layer: `[truncated]` means cut by
+the wire or the capture cap (data unavailable); `[+N chars omitted]`
+means not retained; `[+N chars stored]` means retained in the event and
+accessible through the Events API — and is only ever emitted when the
+content is genuinely stored. Tool results and partials retain their full
+captured text; chunk heads, message windows, and bash previews retain only
+the head and say omitted for the rest. Char counts are labeled chars with
+separately computed UTF-8 bytes. Measured burst: 8000 mixed events through
+a real connection with hostile and slow subscribers in 4.1s (~1960
+events/sec end-to-end), store exactly at bounds, managed heap delta ~5MB
+during the burst. Exit status renders as `completed, exit unknown` when
+unverified — never confirmed success.
 
 ## Prototype: PiEventTap (AgentX.Core)
 
@@ -115,9 +124,9 @@ O(1) queue capped at 2000 events AND 512KB retained text with counted
 eviction, per-subscriber fault isolation, never throws). Decode rules encode
 the map above: exit-code key spellings, `isError` ≠ exit status, zero-usage
 policy, redacted args (plain, JSON-quoted, and shell forms), metadata
-identifier gating with fail-closed withholding, three-layer truncation
-marking (wire / capture-cap / display fold with retained counts), and
-windowed message retention (true totals, bounded transient). Tests
+identifier gating with fail-closed withholding, evidence-contract marking
+(wire-truncated / omitted / stored with exact counts), and windowed message
+retention (true totals, bounded transient). Tests
 (`PiEventTapTests`, 8, plus `PiTapHardeningTests`, 15, plus
 `PiTapMetadataTests`, 10 metadata/boundary cases) run against a 12-record
 verbatim fixture taken from the live capture (`Fixtures/obs-sample.jsonl`).

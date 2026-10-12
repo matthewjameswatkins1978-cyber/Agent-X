@@ -147,7 +147,7 @@ public sealed class PiTapHardeningTests
         Assert.Equal(3000, progress.PartialChars);
         Assert.True(progress.PartialTruncated);
         Assert.True(progress.PartialPreview.Length <= 1000);
-        Assert.Contains("[+2000 chars retained]", progress.Render(VisibilityLevel.Detailed));
+        Assert.Contains("[+952 chars omitted][+1048 chars stored]", progress.Render(VisibilityLevel.Detailed));
         Assert.NotNull(progress.Render(VisibilityLevel.Detailed));
         Assert.Null(progress.Render(VisibilityLevel.Compact));
     }
@@ -167,7 +167,8 @@ public sealed class PiTapHardeningTests
         Assert.True(tap.TapTruncated);
         Assert.Equal(20000, tap.OutputChars);
         Assert.True(tap.OutputPreview.Length <= 2000);
-        Assert.Contains("[+18000 chars retained]", tap.Render(VisibilityLevel.Detailed));
+        Assert.Contains("[truncated][+3616 chars omitted][+14384 chars stored]", tap.Render(VisibilityLevel.Detailed));
+        Assert.Equal(16384, tap.RetainedText.Length);
         Assert.Contains("[truncated]", tap.Render(VisibilityLevel.Detailed));
     }
 

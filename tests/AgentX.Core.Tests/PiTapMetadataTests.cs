@@ -153,10 +153,13 @@ public sealed class PiTapMetadataTests
     {
         // 3000 retained / 2000 displayed: marker with the exact omitted count.
         var ended = Assert.IsType<ToolEnded>(PiEventTap.Parse(
-            """{"type":"tool_execution_end","toolCallId":"b1","toolName":"bash","isError":false,"result":{"content":[{"type":"text","text":"__T__"}]}}""".Replace("__T__", new string('t', 3000)), At));
+            """{"type":"tool_execution_end","toolCallId":"b1","toolName":"bash","isError":false,"result":{"content":[{"type":"text","text":"__T__"}]}}""".Replace("__T__", new string('t', 2000) + "ZZZTAIL" + new string('t', 993)), At));
         Assert.Equal(3000, ended.OutputChars);
         Assert.True(ended.OutputPreview.Length <= 2000);
-        Assert.Contains("[+1000 chars retained]", ended.Render(VisibilityLevel.Detailed));
+        Assert.Contains("[+1000 chars stored]", ended.Render(VisibilityLevel.Detailed));
+        Assert.DoesNotContain("omitted", ended.Render(VisibilityLevel.Detailed));
+        Assert.Contains("ZZZTAIL", ended.RetainedText);
+        Assert.DoesNotContain("ZZZTAIL", ended.Render(VisibilityLevel.Detailed));
         Assert.DoesNotContain("[truncated]", ended.Render(VisibilityLevel.Detailed));
 
         // Exactly at the cap: no marker at all.
@@ -169,7 +172,8 @@ public sealed class PiTapMetadataTests
         var partial = Assert.IsType<ToolProgress>(PiEventTap.Parse(
             """{"type":"tool_execution_update","toolCallId":"b3","toolName":"bash","args":{},"partialResult":{"content":[{"type":"text","text":"__T__"}]}}""".Replace("__T__", new string('p', 1500)), At));
         Assert.Equal(1500, partial.PartialChars);
-        Assert.Contains("[+500 chars retained]", partial.Render(VisibilityLevel.Detailed));
+        Assert.Contains("[+500 chars stored]", partial.Render(VisibilityLevel.Detailed));
+        Assert.DoesNotContain("omitted", partial.Render(VisibilityLevel.Detailed));
 
         // Bash head raised to 1000: 700 chars show whole, 1001 mark +1.
         var small = Assert.IsType<BashChunk>(PiEventTap.Parse(
@@ -178,13 +182,15 @@ public sealed class PiTapMetadataTests
         Assert.DoesNotContain("retained", small.Render(VisibilityLevel.Detailed));
         var big = Assert.IsType<BashChunk>(PiEventTap.Parse(
             """{"type":"bash_execution_update","id":"x","delta":"__T__"}""".Replace("__T__", new string('b', 1001)), At));
-        Assert.Contains("[+1 chars retained]", big.Render(VisibilityLevel.Detailed));
+        Assert.Contains("[+1 chars omitted]", big.Render(VisibilityLevel.Detailed));
+        Assert.DoesNotContain("stored", big.Render(VisibilityLevel.Detailed));
 
         // Message preview: 401 chars mark +1, 400 show whole.
         var over = Assert.IsType<AssistantMessage>(PiEventTap.Parse(
             """{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"__T__"}]}}""".Replace("__T__", new string('m', 401)), At));
         Assert.Equal(401, over.Chars);
-        Assert.Contains("[+1 chars retained]", over.Render(VisibilityLevel.Detailed));
+        Assert.Contains("[+1 chars omitted]", over.Render(VisibilityLevel.Detailed));
+        Assert.DoesNotContain("stored", over.Render(VisibilityLevel.Detailed));
         var at = Assert.IsType<AssistantMessage>(PiEventTap.Parse(
             """{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"__T__"}]}}""".Replace("__T__", new string('m', 400)), At));
         Assert.DoesNotContain("retained", at.Render(VisibilityLevel.Compact));
@@ -199,7 +205,8 @@ public sealed class PiTapMetadataTests
             """{"type":"message_end","message":{"role":"assistant","content":[__B__]}}""".Replace("__B__", blocks), At));
         Assert.Equal(20000, message.Chars);
         Assert.True(message.PreviewText.Length <= 400);
-        Assert.Contains("[+19600 chars retained]", message.Render(VisibilityLevel.Detailed));
+        Assert.Contains("[+19600 chars omitted]", message.Render(VisibilityLevel.Detailed));
+        Assert.DoesNotContain("stored", message.Render(VisibilityLevel.Detailed));
     }
 
     [Fact]

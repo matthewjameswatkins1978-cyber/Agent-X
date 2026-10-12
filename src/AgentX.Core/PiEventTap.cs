@@ -245,7 +245,7 @@ public sealed class PiEventTap : IDisposable
         var preview = Slice(redacted, MaxPartialPreview);
         return new ToolProgress(
             observedAtUtc, PiRedaction.Id(Str(root, "toolCallId")), PiRedaction.Name(Str(root, "toolName")),
-            preview, total, capped);
+            preview, total, capped, redacted);
     }
 
     private static AgentXEvent DecodeToolEnd(JsonElement root, DateTime observedAtUtc)
@@ -282,7 +282,7 @@ public sealed class PiEventTap : IDisposable
         var kept = tapCut && redacted.Length > MaxOutputChars ? redacted[..MaxOutputChars] : redacted;
         var preview = Slice(kept, MaxOutputPreview);
         return new ToolEnded(observedAtUtc, callId, name, isError, duration, exit, wireTruncated, tapCut,
-            outputTotal, Encoding.UTF8.GetByteCount(kept), preview);
+            outputTotal, Encoding.UTF8.GetByteCount(kept), preview, kept);
     }
 
     private static AgentXEvent DecodeResponse(JsonElement root, JsonDocument document, DateTime observedAtUtc)

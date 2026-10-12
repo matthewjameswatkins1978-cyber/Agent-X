@@ -47,7 +47,15 @@ public abstract record AgentXEvent(DateTime ObservedAtUtc, string EventType)
         return flat.Length <= max ? flat : flat[..max] + "…";
     }
 
-    protected static string CutSuffix(bool truncated, int omitted)
+    /// <summary>
+    /// Evidence-contract marker. Source length (wire total), captured length
+    /// (decode kept), stored length (event holds), and visible preview length
+    /// (render shows) stay distinct. [truncated] means cut by the wire or the
+    /// capture cap (data unavailable); [+N chars omitted] means not retained;
+    /// [+N chars stored] means retained in the event and accessible through
+    /// the Events API. Stored is never claimed for dropped data.
+    /// </summary>
+    protected static string CutSuffix(bool truncated, int omitted, int stored)
     {
         var suffix = string.Empty;
         if (truncated)
@@ -57,7 +65,12 @@ public abstract record AgentXEvent(DateTime ObservedAtUtc, string EventType)
 
         if (omitted > 0)
         {
-            suffix += $"[+{omitted} chars retained]";
+            suffix += $"[+{omitted} chars omitted]";
+        }
+
+        if (stored > 0)
+        {
+            suffix += $"[+{stored} chars stored]";
         }
 
         return suffix.Length == 0 ? string.Empty : "…" + suffix;
@@ -119,8 +132,8 @@ public sealed record TextDelta(DateTime ObservedAtUtc, string Delta, bool TapTru
     public override string? Render(VisibilityLevel level) => level switch
     {
         VisibilityLevel.Compact => null,
-        VisibilityLevel.Detailed => Delta + CutSuffix(TapTruncated, 0),
-        _ => Delta + CutSuffix(TapTruncated, 0),
+        VisibilityLevel.Detailed => Delta + CutSuffix(TapTruncated, 0, 0),
+        _ => Delta + CutSuffix(TapTruncated, 0, 0),
     };
 }
 
@@ -144,8 +157,8 @@ public sealed record ToolStarted(DateTime ObservedAtUtc, string CallId, string T
     public override string? Render(VisibilityLevel level) => level switch
     {
         VisibilityLevel.Compact => null,
-        VisibilityLevel.Detailed => $"Run {ToolName}: {ArgSummary}{CutSuffix(ArgsTruncated, 0)}",
-        _ => $"Run {ToolName} [{ToolCallAnnounced.ShortId(CallId)}]: {ArgSummary}{CutSuffix(ArgsTruncated, 0)}",
+        VisibilityLevel.Detailed => $"Run {ToolName}: {ArgSummary}{CutSuffix(ArgsTruncated, 0, 0)}",
+        _ => $"Run {ToolName} [{ToolCallAnnounced.ShortId(CallId)}]: {ArgSummary}{CutSuffix(ArgsTruncated, 0, 0)}",
     };
 }
 
@@ -155,16 +168,19 @@ public sealed record ToolStarted(DateTime ObservedAtUtc, string CallId, string T
 /// the tool's contract, which the wire does not state — so the tap never
 /// concatenates across updates).
 /// </summary>
-public sealed record ToolProgress(DateTime ObservedAtUtc, string CallId, string ToolName, string PartialPreview, int PartialChars, bool PartialTruncated)
+/// <summary>Latest bounded partial snapshot (never concatenated). RetainedText holds the full captured
+/// partial (up to cap); PartialPreview is the display fold. Omitted counts data beyond retention;
+/// stored counts retained data beyond the preview.</summary>
+public sealed record ToolProgress(DateTime ObservedAtUtc, string CallId, string ToolName, string PartialPreview, int PartialChars, bool PartialTruncated, string RetainedText)
     : AgentXEvent(ObservedAtUtc, "tool_execution_update")
 {
-    internal override int RetainedChars() => PartialPreview.Length;
+    internal override int RetainedChars() => RetainedText.Length;
 
     public override string? Render(VisibilityLevel level) => level switch
     {
         VisibilityLevel.Compact => null,
-        VisibilityLevel.Detailed => $"Partial from {ToolName}: {PartialPreview}{CutSuffix(PartialTruncated, Omitted(PartialChars, PartialPreview.Length))}",
-        _ => $"Partial from {ToolName} [{ToolCallAnnounced.ShortId(CallId)}] ({PartialChars} chars): {PartialPreview}{CutSuffix(PartialTruncated, Omitted(PartialChars, PartialPreview.Length))}",
+        VisibilityLevel.Detailed => $"Partial from {ToolName}: {PartialPreview}{CutSuffix(PartialTruncated, Omitted(PartialChars, RetainedText.Length), Omitted(RetainedText.Length, PartialPreview.Length))}",
+        _ => $"Partial from {ToolName} [{ToolCallAnnounced.ShortId(CallId)}] ({PartialChars} chars): {PartialPreview}{CutSuffix(PartialTruncated, Omitted(PartialChars, RetainedText.Length), Omitted(RetainedText.Length, PartialPreview.Length))}",
     };
 }
 
@@ -180,10 +196,10 @@ public sealed record ToolProgress(DateTime ObservedAtUtc, string CallId, string 
 public sealed record ToolEnded(
     DateTime ObservedAtUtc, string CallId, string ToolName, bool IsError,
     long? DurationMs, int? ExitCode, bool WireTruncated, bool TapTruncated,
-    int OutputChars, int RetainedBytes, string OutputPreview)
+    int OutputChars, int RetainedBytes, string OutputPreview, string RetainedText)
     : AgentXEvent(ObservedAtUtc, "tool_execution_end")
 {
-    internal override int RetainedChars() => OutputPreview.Length;
+    internal override int RetainedChars() => RetainedText.Length;
 
     public override string? Render(VisibilityLevel level)
     {
@@ -192,13 +208,13 @@ public sealed record ToolEnded(
             : ExitCode is null ? "completed, exit unknown"
             : "ok";
         var timing = DurationMs is long ms ? $" in {ms} ms" : string.Empty;
-        var marker = CutSuffix(WireTruncated || TapTruncated, Omitted(OutputChars, OutputPreview.Length));
+        var marker = CutSuffix(WireTruncated || TapTruncated, Omitted(OutputChars, RetainedText.Length), Omitted(RetainedText.Length, OutputPreview.Length));
         return level switch
         {
             VisibilityLevel.Compact => $"Tool {ToolName}: {status}.{timing}",
             VisibilityLevel.Detailed => $"Tool {ToolName}: {status}.{timing} {OutputPreview}{marker}",
             _ => $"Tool {ToolName} [{ToolCallAnnounced.ShortId(CallId)}]: {status}.{timing} " +
-                 $"(retained {OutputChars} chars / {RetainedBytes} bytes, wire-truncated: {WireTruncated}, tap-truncated: {TapTruncated}) " +
+                 $"(source {OutputChars} chars / {RetainedBytes} bytes, stored {RetainedText.Length} chars, wire-truncated: {WireTruncated}, tap-truncated: {TapTruncated}) " +
                  $"{OutputPreview}{marker}",
         };
     }
@@ -212,9 +228,9 @@ public sealed record AssistantMessage(DateTime ObservedAtUtc, int Chars, string 
 
     public override string? Render(VisibilityLevel level) => level switch
     {
-        VisibilityLevel.Compact => PreviewText + CutSuffix(false, Omitted(Chars, PreviewText.Length)),
-        VisibilityLevel.Detailed => PreviewText + CutSuffix(false, Omitted(Chars, PreviewText.Length)),
-        _ => $"Assistant message ({Chars} chars): {PreviewText}{CutSuffix(false, Omitted(Chars, PreviewText.Length))}",
+        VisibilityLevel.Compact => PreviewText + CutSuffix(false, Omitted(Chars, PreviewText.Length), 0),
+        VisibilityLevel.Detailed => PreviewText + CutSuffix(false, Omitted(Chars, PreviewText.Length), 0),
+        _ => $"Assistant message ({Chars} chars): {PreviewText}{CutSuffix(false, Omitted(Chars, PreviewText.Length), 0)}",
     };
 }
 
@@ -255,8 +271,8 @@ public sealed record BashChunk(DateTime ObservedAtUtc, string CommandId, string 
     public override string? Render(VisibilityLevel level) => level switch
     {
         VisibilityLevel.Compact => null,
-        VisibilityLevel.Detailed => HeadPreview + CutSuffix(false, Omitted(DeltaChars, HeadPreview.Length)),
-        _ => $"Bash chunk ({DeltaChars} chars): {HeadPreview}{CutSuffix(false, Omitted(DeltaChars, HeadPreview.Length))}",
+        VisibilityLevel.Detailed => HeadPreview + CutSuffix(false, Omitted(DeltaChars, HeadPreview.Length), 0),
+        _ => $"Bash chunk ({DeltaChars} chars): {HeadPreview}{CutSuffix(false, Omitted(DeltaChars, HeadPreview.Length), 0)}",
     };
 }
 
@@ -273,9 +289,9 @@ public sealed record BashResult(
     public override string? Render(VisibilityLevel level) => level switch
     {
         VisibilityLevel.Compact => null,
-        VisibilityLevel.Detailed => $"Bash done (exit: {(ExitCode?.ToString() ?? "unknown")}). {OutputPreview}{CutSuffix(Truncated, Omitted(OutputChars, OutputPreview.Length))}",
+        VisibilityLevel.Detailed => $"Bash done (exit: {(ExitCode?.ToString() ?? "unknown")}). {OutputPreview}{CutSuffix(Truncated, Omitted(OutputChars, OutputPreview.Length), 0)}",
         _ => $"Bash done (exit: {(ExitCode?.ToString() ?? "unknown")}, truncated: {Truncated}, " +
-             $"spill: {FullOutputPath ?? "none"}). {OutputPreview}{CutSuffix(Truncated, Omitted(OutputChars, OutputPreview.Length))}",
+             $"spill: {FullOutputPath ?? "none"}). {OutputPreview}{CutSuffix(Truncated, Omitted(OutputChars, OutputPreview.Length), 0)}",
     };
 }
 
