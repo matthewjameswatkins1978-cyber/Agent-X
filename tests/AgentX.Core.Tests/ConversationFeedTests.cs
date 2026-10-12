@@ -357,6 +357,7 @@ public sealed class ConversationFeedTests
         var orphan = rows.First(e => e.Seq == seq);
         Assert.True(orphan.IsError);
         Assert.Contains("(unverified)", orphan.Note ?? string.Empty, StringComparison.Ordinal);
+        Assert.Null(orphan.CallId); // Unproven start → never an identity key.
         // The proven start is untouched and still pairable by its own ID.
         var start = rows.First(e => e.Note == "started: bash");
         Assert.Equal("real", start.Text);
@@ -444,16 +445,18 @@ public sealed class ConversationFeedTests
         Assert.Equal(ReconcileOutcome.SkippedCountMismatch, feed.ReconcileToolResults(history));
         Assert.Equal(2, feed.Snapshot().Count);
         Assert.DoesNotContain("full body", feed.Snapshot()[0].Text, StringComparison.Ordinal);
-        Assert.DoesNotContain("not paired by identity", string.Join("\n", feed.Snapshot().Select(e => e.Text)), StringComparison.Ordinal);
+        Assert.DoesNotContain("proven to match their invocation", string.Join("\n", feed.Snapshot().Select(e => e.Text)), StringComparison.Ordinal);
         Assert.Equal(ReconcileOutcome.SkippedCountMismatch, feed.ReconcileToolResults([]));
         Assert.Equal(2, feed.Snapshot().Count);
     }
 
     [Fact]
-    public void ReconcileTools_RefusesEqualCountMisordered_WithOneMarker()
+    public void ReconcileTools_AppliesUniqueNameGroups_EvenWhenHistoryOrderDiffers()
     {
-        // Same count, swapped order: names disagree positionally, so nothing
-        // is replaced and one explicit marker records the refusal.
+        // One read and one bash call, history returned in reverse order:
+        // each (name, outcome) group has exactly ONE row and ONE body, so
+        // the mapping is provable without position — applied to the right
+        // rows, no marker.
         var feed = new ConversationFeed();
         feed.AddToolStart("read", "read it", path: null, isMutating: false);
         feed.AddToolEnd("read", isError: false);
@@ -464,15 +467,112 @@ public sealed class ConversationFeedTests
             new("tool", "[tool bash failed]\nbash body"),
             new("tool", "[tool result: read]\nread body"),
         };
+        Assert.Equal(ReconcileOutcome.Applied, feed.ReconcileToolResults(history));
+        var rows = feed.Snapshot();
+        Assert.Equal(2, rows.Count); // Bodies only — no marker for a proven mapping.
+        Assert.Equal("[tool result: read]\nread body", rows[0].Text);
+        Assert.Equal("[tool bash failed]\nbash body", rows[1].Text);
+        // A repeat with rows already in sync changes nothing, adds nothing.
+        Assert.Equal(ReconcileOutcome.InSync, feed.ReconcileToolResults(history));
+        Assert.Equal(2, feed.Snapshot().Count);
+    }
+
+    [Fact]
+    public void ReconcileTools_RefusesTwoSameNameSameOutcome_WhenHistoryOrderIsSwapped()
+    {
+        // Lucy's case: two concurrent successful reads (A/B), persisted
+        // results returned B/A, history carries no call IDs. Headers and
+        // error flags are identical — position cannot prove identity, so
+        // neither row is overwritten and one truthful marker records it.
+        var feed = new ConversationFeed();
+        feed.AddToolStart("read", "first read", path: null, isMutating: false, callId: "call-A");
+        feed.AddToolEnd("read", isError: false, callId: "call-A");
+        feed.AddToolStart("read", "second read", path: null, isMutating: false, callId: "call-B");
+        feed.AddToolEnd("read", isError: false, callId: "call-B");
+        var rowTexts = feed.Snapshot().Select(r => r.Text).ToArray();
+        var history = new List<ConversationMessage>
+        {
+            new("tool", "[tool result: read]\nBODY-B"),
+            new("tool", "[tool result: read]\nBODY-A"),
+        };
         Assert.Equal(ReconcileOutcome.SkippedAmbiguous, feed.ReconcileToolResults(history));
         var rows = feed.Snapshot();
-        Assert.Equal(3, rows.Count); // Two tool rows untouched + one marker.
-        Assert.DoesNotContain("bash body", rows[0].Text, StringComparison.Ordinal);
-        Assert.DoesNotContain("read body", rows[1].Text, StringComparison.Ordinal);
-        Assert.Contains("not paired by identity", rows[2].Text, StringComparison.Ordinal);
-        // A repeat refusal while ambiguous must not stack markers.
+        Assert.Equal(3, rows.Count); // two rows untouched + one marker
+        Assert.Equal(rowTexts[0], rows[0].Text);
+        Assert.Equal(rowTexts[1], rows[1].Text);
+        Assert.DoesNotContain("BODY-A", string.Join("\n", rows.Select(r => r.Text)), StringComparison.Ordinal);
+        Assert.DoesNotContain("BODY-B", string.Join("\n", rows.Select(r => r.Text)), StringComparison.Ordinal);
+        Assert.Contains("proven to match their invocation", rows[2].Text, StringComparison.Ordinal);
+        // A repeat refusal must not stack markers.
         Assert.Equal(ReconcileOutcome.SkippedAmbiguous, feed.ReconcileToolResults(history));
         Assert.Equal(3, feed.Snapshot().Count);
+    }
+
+    [Fact]
+    public void ReconcileTools_CallIdIdentity_ResolvesSwappedSameNameHistory()
+    {
+        // Same two successful reads — but the history DOES carry the call
+        // IDs (both sides derive from toolCall.id), in swapped order.
+        // Identity pairing assigns each body to its own row, never by
+        // position.
+        var feed = new ConversationFeed();
+        feed.AddToolStart("read", "first read", path: null, isMutating: false, callId: "call-A");
+        feed.AddToolEnd("read", isError: false, callId: "call-A");
+        feed.AddToolStart("read", "second read", path: null, isMutating: false, callId: "call-B");
+        feed.AddToolEnd("read", isError: false, callId: "call-B");
+        var history = new List<ConversationMessage>
+        {
+            new("tool", "[tool result: read]\nBODY-B", CallId: "call-B"),
+            new("tool", "[tool result: read]\nBODY-A", CallId: "call-A"),
+        };
+        Assert.Equal(ReconcileOutcome.Applied, feed.ReconcileToolResults(history));
+        var rows = feed.Snapshot();
+        Assert.Equal(2, rows.Count); // no marker: mapping was proven
+        Assert.Contains("BODY-A", rows[0].Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("BODY-B", rows[0].Text, StringComparison.Ordinal);
+        Assert.Contains("BODY-B", rows[1].Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("BODY-A", rows[1].Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReconcileTools_DuplicateHistoryCallIds_AreUnprovable()
+    {
+        // An ID repeated in the history identifies nothing: no guessing.
+        var feed = new ConversationFeed();
+        feed.AddToolStart("read", "one", path: null, isMutating: false, callId: "call-1");
+        feed.AddToolEnd("read", isError: false, callId: "call-1");
+        feed.AddToolStart("read", "two", path: null, isMutating: false, callId: "call-2");
+        feed.AddToolEnd("read", isError: false, callId: "call-2");
+        var history = new List<ConversationMessage>
+        {
+            new("tool", "[tool result: read]\nBODY-1", CallId: "dup"),
+            new("tool", "[tool result: read]\nBODY-2", CallId: "dup"),
+        };
+        Assert.Equal(ReconcileOutcome.SkippedAmbiguous, feed.ReconcileToolResults(history));
+        var rows = feed.Snapshot();
+        Assert.Equal(3, rows.Count);
+        Assert.DoesNotContain("BODY-", rows[0].Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("BODY-", rows[1].Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReconcileTools_RestoredRowsWithoutLifecycles_InSyncWithoutMarker()
+    {
+        // Restored rows ARE their own history: no lifecycle note to group
+        // and no IDs, but the texts match as a multiset — every possible
+        // mapping is a no-op, so nothing changes and no marker appears.
+        var history = new List<ConversationMessage>
+        {
+            new("tool", "[tool result: read]\nsame body"),
+            new("tool", "[tool bash failed]\nsame failure"),
+        };
+        var feed = new ConversationFeed();
+        feed.LoadHistory(history);
+        Assert.Equal(ReconcileOutcome.InSync, feed.ReconcileToolResults(history));
+        var rows = feed.Snapshot();
+        Assert.Equal(2, rows.Count);
+        Assert.Equal("[tool result: read]\nsame body", rows[0].Text);
+        Assert.Equal("[tool bash failed]\nsame failure", rows[1].Text);
     }
 
     [Fact]
@@ -532,6 +632,32 @@ public sealed class ConversationFeedTests
         Assert.Null(PiConversation.ParseToolActivity(other));
         using var malformed = JsonDocument.Parse("""{"type":"tool_execution_start"}""");
         Assert.Null(PiConversation.ParseToolActivity(malformed)); // No toolName: no fabricated activity.
+    }
+
+    [Fact]
+    public void History_ParsesToolCallIds_AndFeedPropagatesThem()
+    {
+        var oversized = "{\"data\":{\"messages\":["
+            + "{\"role\":\"toolResult\",\"toolCallId\":\"" + new string('x', 200) + "\",\"toolName\":\"read\",\"content\":[{\"type\":\"text\",\"text\":\"y\"}],\"isError\":false}"
+            + "]}}";
+        using var response = JsonDocument.Parse(
+            """{"data":{"messages":[{"role":"toolResult","toolCallId":"call-abc|fc-1","toolName":"read","content":[{"type":"text","text":"body"}],"isError":false},{"role":"toolResult","toolCallId":"","toolName":"read","content":[{"type":"text","text":"x"}],"isError":false},{"role":"user","content":"hi"}]}}""");
+        var history = PiConversation.ParseHistory(response);
+        Assert.Equal(3, history.Count);
+        Assert.Equal("call-abc|fc-1", history[0].CallId); // Raw: same value toolCall.id emits.
+        Assert.Null(history[1].CallId); // Empty → null (never an identity key).
+        Assert.Null(history[2].CallId);
+
+        using var oversizedResponse = JsonDocument.Parse(oversized);
+        var oversizedHistory = PiConversation.ParseHistory(oversizedResponse);
+        Assert.Null(oversizedHistory[0].CallId); // Oversized → null.
+
+        var feed = new ConversationFeed();
+        feed.LoadHistory(history);
+        var entries = feed.Snapshot();
+        Assert.Equal("call-abc|fc-1", entries[0].CallId); // Restored rows keep identity.
+        Assert.Null(entries[1].CallId);
+        Assert.Null(entries[2].CallId);
     }
 
     [Fact]

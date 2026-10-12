@@ -3,8 +3,14 @@ using System.Text.Json;
 
 namespace AgentX.Core;
 
-/// <summary>One restored history entry. Text is the full session text; display may truncate.</summary>
-public sealed record ConversationMessage(string Role, string Text)
+/// <summary>
+/// One restored history entry. Text is the full session text; display may
+/// truncate. <see cref="CallId"/> is the persisted tool-call ID (raw,
+/// never rendered; same value the wire events carry) so reconciliation can
+/// match a live row to its persisted result by identity — null when the
+/// message carries none.
+/// </summary>
+public sealed record ConversationMessage(string Role, string Text, string? CallId = null)
 {
     public string DisplayText(int maxChars = 2000)
         => Text.Length <= maxChars
@@ -593,8 +599,8 @@ public sealed class PiConversation : IAsyncDisposable
             "system" => null, // Prompt boilerplate; not conversation.
             "user" => new ConversationMessage("user", ExtractContentText(message)),
             "assistant" => new ConversationMessage("assistant", ExtractAssistantText(message)),
-            "toolResult" => new ConversationMessage("tool", FormatToolResult(message)),
-            "bashExecution" => new ConversationMessage("tool", FormatBashExecution(message)),
+            "toolResult" => new ConversationMessage("tool", FormatToolResult(message), HistoryCallId(message)),
+            "bashExecution" => new ConversationMessage("tool", FormatBashExecution(message), HistoryCallId(message)),
             "custom" => message.TryGetProperty("display", out var display)
                 && display.ValueKind == JsonValueKind.True
                 ? new ConversationMessage("system", ExtractContentText(message))
@@ -694,6 +700,23 @@ public sealed class PiConversation : IAsyncDisposable
         }
 
         return text.ToString();
+    }
+
+    /// <summary>
+    /// Observed tool-call ID from a persisted history message, normalized
+    /// exactly like the wire reader (raw for in-memory identity matching,
+    /// never rendered; empty/oversized → null) so session IDs and wire
+    /// IDs compare equal case-sensitively. Both derive from toolCall.id.
+    /// </summary>
+    private static string? HistoryCallId(JsonElement message)
+    {
+        if (!message.TryGetProperty("toolCallId", out var id) || id.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        var callId = id.GetString();
+        return string.IsNullOrEmpty(callId) || callId.Length > 160 ? null : callId;
     }
 
     private static string FormatToolResult(JsonElement message)

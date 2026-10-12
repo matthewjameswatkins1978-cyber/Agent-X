@@ -41,11 +41,15 @@ lightness intent, not claimed bit-exact terminal output.
   outcome rows marked "(unverified)", never merged into an unproven
   invocation. Grey while open, green on success, red on failure. Body is
   monospace with diff tinting (`+` green, `-` red, `@@` yellow; `+++`/`---`
-  headers exempt). Post-run, bodies reconcile to full persisted history
-  text ONLY under an identity contract (positional name + error agreement
-  per pair; identical texts need no proof). Refusal records one explicit
-  marker row instead of silently skipping. Over-cap output shows an
-  explicit `Show full output (N chars)` action; inline expansion itself is
+  headers exempt). Post-run, bodies reconcile to persisted history ONLY
+  under a demonstrable identity contract: exact call-ID identity where
+  both sides carry the observed ID (wire and session both derive it from
+  `toolCall.id`), else a (name, outcome) group with exactly one row and
+  one body — a unique candidate, never a positional guess. Duplicate IDs,
+  two same-name/same-outcome leftovers, unparseable bodies and note-less
+  rows without an ID keep their existing text; when those differ from the
+  leftovers, one truthful marker records the refusal (stack-proof).
+  Over-cap output shows an explicit `Show full output (N chars)` action; inline expansion itself is
   bounded (2000 lines / 100k chars) with exact totals in the notice — copy
   always uses the full text, so nothing is silently lost.
 - **Dispatch:** feed notifications collapse through a coalescer (at most
