@@ -70,6 +70,7 @@ public sealed class PiConversation : IAsyncDisposable
     private readonly Lock _clientGate = new();
     private bool _disposed;
     private int _reconnectCount;
+    private FeedBridge? _bridge;
 
     [Obsolete("Pass a client factory (Func<PiRpcClient>) so ReconnectAsync can replace the process. Single-client reconnect is unsupported.")]
     public PiConversation(PiRpcClient? client = null)
@@ -221,12 +222,43 @@ public sealed class PiConversation : IAsyncDisposable
     {
         client.EventReceived += OnClientEvent;
         client.TransportFailed += OnTransportFailed;
+        _bridge?.Reattach(client);
+    }
+
+    /// <summary>
+    /// Attach a live-feed bridge: its tap follows every client this conversation
+    /// uses, including replacements after reconnect, without host rewiring.
+    /// Call once, typically right after construction.
+    /// </summary>
+    public void AttachBridge(FeedBridge bridge)
+    {
+        ArgumentNullException.ThrowIfNull(bridge);
+        lock (_clientGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _bridge = bridge;
+            bridge.Reattach(Client);
+        }
     }
 
     private void Detach(PiRpcClient client)
     {
         client.EventReceived -= OnClientEvent;
         client.TransportFailed -= OnTransportFailed;
+        _bridge?.Detach();
+    }
+
+    /// <summary>Stop feeding the attached bridge. The bridge itself stays host-owned.</summary>
+    public void DetachBridge()
+    {
+        FeedBridge? bridge;
+        lock (_clientGate)
+        {
+            bridge = _bridge;
+            _bridge = null;
+        }
+
+        bridge?.Detach();
     }
 
     private void OnTransportFailed(object? sender, Exception error)
@@ -364,7 +396,7 @@ public sealed class PiConversation : IAsyncDisposable
             && args.Value.TryGetProperty("command", out var command)
             && command.ValueKind == JsonValueKind.String)
         {
-            return TruncateSingleLine(command.GetString() ?? string.Empty, 300);
+            return PiRedaction.Redact(TruncateSingleLine(command.GetString() ?? string.Empty, 300));
         }
 
         var path = ExtractToolPath(toolName, args);
@@ -389,7 +421,7 @@ public sealed class PiConversation : IAsyncDisposable
         {
             if (args.Value.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
             {
-                var path = value.GetString();
+                var path = PiRedaction.Redact(value.GetString() ?? string.Empty);
                 if (!string.IsNullOrWhiteSpace(path))
                 {
                     return path;
@@ -473,11 +505,11 @@ public sealed class PiConversation : IAsyncDisposable
             {
                 "agent_start" => "Pi is working…",
                 "tool_execution_start" when root.TryGetProperty("toolName", out var name)
-                    => $"Running tool: {name.GetString()}…",
+                    => $"Running tool: {PiRedaction.Name(name.GetString())}…",
                 "tool_execution_end" when root.TryGetProperty("toolName", out var endName)
                     => root.TryGetProperty("isError", out var isError) && isError.ValueKind == JsonValueKind.True
-                        ? $"Tool {endName.GetString()} failed."
-                        : $"Tool {endName.GetString()} finished.",
+                        ? $"Tool {PiRedaction.Name(endName.GetString())} failed."
+                        : $"Tool {PiRedaction.Name(endName.GetString())} finished.",
                 "auto_retry_start" => "Pi hit a transient error — retrying…",
                 "compaction_start" => "Pi is compacting context…",
                 "agent_settled" => null, // Receipt line reports this instead.
@@ -638,15 +670,17 @@ public sealed class PiConversation : IAsyncDisposable
         var name = message.TryGetProperty("toolName", out var n) ? n.GetString() ?? "?" : "?";
         var failed = message.TryGetProperty("isError", out var e) && e.ValueKind == JsonValueKind.True;
         var body = ExtractContentText(message);
-        var header = failed ? $"[tool {name} failed]" : $"[tool result: {name}]";
-        return string.IsNullOrEmpty(body) ? header : header + "\n" + body;
+        var header = failed ? $"[tool {PiRedaction.Name(name)} failed]" : $"[tool result: {PiRedaction.Name(name)}]";
+        return string.IsNullOrEmpty(body) ? header : header + "\n" + PiRedaction.Redact(body);
     }
 
     private static string FormatBashExecution(JsonElement message)
     {
         var command = message.TryGetProperty("command", out var c) ? c.GetString() ?? string.Empty : string.Empty;
         var output = message.TryGetProperty("output", out var o) ? o.GetString() ?? string.Empty : string.Empty;
-        return string.IsNullOrEmpty(output) ? $"Ran `{command}`" : $"Ran `{command}`\n{output}";
+        var safeCommand = PiRedaction.Redact(command);
+        var safeOutput = PiRedaction.Redact(output);
+        return string.IsNullOrEmpty(output) ? $"Ran `{safeCommand}`" : $"Ran `{safeCommand}`\n{safeOutput}";
     }
 
     public static string FormatHistoryForDisplay(IReadOnlyList<ConversationMessage> history, int perMessageChars = 2000)

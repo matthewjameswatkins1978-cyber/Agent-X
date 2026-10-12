@@ -131,11 +131,43 @@ retention (true totals, bounded transient). Tests
 `PiTapMetadataTests`, 10 metadata/boundary cases) run against a 12-record
 verbatim fixture taken from the live capture (`Fixtures/obs-sample.jsonl`).
 
-## GUI binding contract
+## Live Feed integration (Gate C1)
 
-The panel binds `PiEventTap.Captured`, renders `Render(level)` lines, and
-offers the three levels with Detailed default. Deltas append to the live
-view; `ToolEnded` lines persist with timing and exit status; `StatsSnapshot`
-feeds a status strip (tokens, cost, context %). The GUI must never present
-`RunHealthy` as task acceptance (existing receipt rule stands) and must label
-client-stamped times as observed, not Pi-reported.
+`FeedBridge` (Core) routes typed tap events into the single
+`ConversationFeed` history — no second history, no competing writers:
+
+- The conversation path owns ALL text (user, assistant deltas, reconcile)
+  and the base tool start/end rows. The bridge never writes text and never
+  duplicates base rows; it adds plain system detail rows (duration, exit,
+  previews, markers) rendered by the existing generic view mapping.
+- `VisibilityLevel` (default Detailed) gates detail-row creation from the
+  change moment; history is never rewritten. Compact adds nothing beyond
+  base rows; Full adds progress and diagnostic rows.
+- Tool start/end correlate by observed `toolCallId`; end detail rows carry
+  the same short id as their start detail rows. Retained output is
+  retrievable per call id via `GetRetainedText` — the supported route to
+  inspect folded content.
+- The base tool path (`ParseToolActivity`, summaries, tool names, tool-role
+  history rows) is redacted at emission with the same shapes. User and
+  assistant rows stay byte-exact by boundary — including when the model
+  echoes a user-supplied value (verified live: the only non-user carrier
+  was the assistant echo). Tool-role history rows are redacted. Redaction
+  limits from the tap contract apply unchanged.
+- Correlated poll responses bypass subscribers; the host passes received
+  documents to `FeedBridge.RecordResponse`, which updates `LatestStats` /
+  `LatestEngine` for status binding without fabricating rows. No live poll
+  site exists yet — polled stats are unit-covered, live-unverified.
+- Bounded and non-blocking: at most ~3 small rows per tool call, capped
+  call-id map, tap-owned store bounds, synchronous fast handlers only
+  (GUI marshaling stays with the host, as before).
+
+## UI binding contract for the Live surface
+
+Without touching the existing panel or navigation: bind the feed as today;
+set `FeedBridge.Level` from the visibility selector (default Detailed);
+read `LatestStats` / `LatestEngine` for the status strip (null until a host
+poll is recorded); resolve `GetRetainedText(callId)` for copy/inspect
+actions on folded tool output; re-attach the bridge after reconnect
+(`Detach` then `Attach`) since the conversation swaps the client process.
+The GUI must never present `RunHealthy` as task acceptance (existing receipt
+rule stands) and must label client-stamped times as observed, not Pi-reported.
