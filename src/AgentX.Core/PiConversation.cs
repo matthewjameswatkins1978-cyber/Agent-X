@@ -236,8 +236,16 @@ public sealed class PiConversation : IAsyncDisposable
         lock (_clientGate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            _bridge = bridge;
-            bridge.Reattach(Client);
+            // Replacing the bridge detaches the previous one FIRST so no
+            // orphaned tap keeps routing to a superseded feed. Field access
+            // (not the Client property) avoids re-entering this lock.
+            if (!ReferenceEquals(_bridge, bridge))
+            {
+                _bridge?.Detach();
+                _bridge = bridge;
+            }
+
+            bridge.Reattach(_client);
         }
     }
 

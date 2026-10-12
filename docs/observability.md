@@ -155,13 +155,20 @@ verbatim fixture taken from the live capture (`Fixtures/obs-sample.jsonl`).
   limits from the tap contract apply unchanged.
 - Correlated poll responses bypass subscribers; the host passes received
   documents to `FeedBridge.RecordResponse`, which updates `LatestStats` /
-  `LatestEngine` for status binding without fabricating rows. No live poll
+  site exists yet — polled stats are unit-covered, live-UNVERIFIED (NOT
+  IMPLEMENTED in any host).
   site exists yet — polled stats are unit-covered, live-unverified.
 - Bounded and non-blocking: at most ~3 small rows per tool call, capped
   call-id map, tap-owned store bounds, synchronous fast handlers only
   (GUI marshaling stays with the host, as before).
 
-## UI binding contract for the Live surface
+## UI binding contract for the Live surface (NOT IMPLEMENTED)
+
+Status: Core bridge delivered and tested; MainWindow host attachment,
+visibility selector, live stats poll site, and inspector actions are NOT
+IMPLEMENTED in this diff (Agent TWO UI ownership) and live polled stats
+are NOT VERIFIED (no host poll site exists yet). The contract below is the
+precise binding surface for that follow-up.
 
 Without touching the existing panel or navigation: bind the feed as today;
 set `FeedBridge.Level` from the visibility selector (default Detailed);

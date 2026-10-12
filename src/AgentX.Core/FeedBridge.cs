@@ -21,17 +21,16 @@ namespace AgentX.Core;
 ///   them to <see cref="RecordResponse(JsonDocument)"/> (the approved
 ///   boundary). Stats update <see cref="LatestStats"/> for status binding;
 ///   no rows are fabricated for polls that never happened.
-/// - Bounded: the call-id map is capped; rows are small previews; the tap
-///   bounds the event store. Handlers do no I/O and never throw out.
+/// - Bounded: rows are small previews and the tap bounds the event store
+///   (2000 events / 512KB text, counted eviction). Correlation needs no
+///   bridge state: start/end rows carry the observed short call id and
+///   retained lookup scans the bounded tap store. Handlers do no I/O and
+///   never throw out.
 /// </summary>
 public sealed class FeedBridge : IDisposable
 {
-    private const int MaxTrackedCalls = 1024;
-
     private readonly ConversationFeed _feed;
     private readonly object _gate = new();
-    private readonly HashSet<string> _calls = new();
-    private readonly Queue<string> _callOrder = new();
     private PiEventTap? _tap;
     private bool _disposed;
 
@@ -171,7 +170,6 @@ public sealed class FeedBridge : IDisposable
         switch (e)
         {
             case ToolStarted started:
-                Track(started.CallId);
                 if (Level >= VisibilityLevel.Detailed)
                 {
                     _feed.AddSystemNotice(DetailRow(started));
@@ -186,7 +184,6 @@ public sealed class FeedBridge : IDisposable
 
                 break;
             case ToolEnded ended:
-                Forget(ended.CallId);
                 if (Level >= VisibilityLevel.Detailed)
                 {
                     _feed.AddSystemNotice(EndRow(ended));
@@ -222,40 +219,6 @@ public sealed class FeedBridge : IDisposable
 
     private static string EndRow(ToolEnded ended)
         => $"[result {ToolCallAnnounced.ShortId(ended.CallId)}] {ended.Render(VisibilityLevel.Detailed) ?? string.Empty}";
-
-    private void Track(string callId)
-    {
-        if (string.IsNullOrEmpty(callId))
-        {
-            return;
-        }
-
-        lock (_gate)
-        {
-            if (_calls.Count >= MaxTrackedCalls && _callOrder.TryDequeue(out var oldest))
-            {
-                _calls.Remove(oldest);
-            }
-
-            if (_calls.Add(callId))
-            {
-                _callOrder.Enqueue(callId);
-            }
-        }
-    }
-
-    private void Forget(string callId)
-    {
-        if (string.IsNullOrEmpty(callId))
-        {
-            return;
-        }
-
-        lock (_gate)
-        {
-            _calls.Remove(callId);
-        }
-    }
 
     public void Detach()
     {

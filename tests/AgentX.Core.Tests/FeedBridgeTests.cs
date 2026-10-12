@@ -281,6 +281,59 @@ public sealed class FeedBridgeTests
         conversation.DetachBridge();
     }
 
+    [Fact]
+    public async Task ConversationReplaceBridge_OrphanDeliversNothing_NewBridgeRoutes()
+    {
+        var feed = new ConversationFeed();
+        using var bridgeA = new FeedBridge(feed);
+        using var bridgeB = new FeedBridge(feed);
+        await using var conversation = new PiConversation(() => new PiRpcClient());
+        conversation.AttachBridge(bridgeA);
+        var tapA = (PiEventTap)typeof(FeedBridge).GetField("_tap", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(bridgeA)!;
+        conversation.AttachBridge(bridgeB);
+        tapA.Publish(Assert.IsType<ToolStarted>(PiEventTap.Parse(
+            """{"type":"tool_execution_start","toolCallId":"old1","toolName":"bash","args":{"command":"echo"}}""", At)));
+        Assert.Equal(0, SystemRows(feed));
+        var tapB = (PiEventTap)typeof(FeedBridge).GetField("_tap", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(bridgeB)!;
+        Assert.NotSame(tapA, tapB);
+        tapB.Publish(Assert.IsType<ToolStarted>(PiEventTap.Parse(
+            """{"type":"tool_execution_start","toolCallId":"new1","toolName":"bash","args":{"command":"echo"}}""", At)));
+        Assert.Equal(1, SystemRows(feed));
+        conversation.DetachBridge();
+    }
+
+    [Fact]
+    public async Task LongAlternatingStream_StaysBoundedAndExact()
+    {
+        var feed = new ConversationFeed();
+        using var bridge = new FeedBridge(feed);
+        await using var loop = new BridgeLoopback();
+        bridge.AttachConnection(loop.Connection);
+        const int pairs = 3000;
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var before = GC.GetTotalMemory(true);
+        for (var i = 0; i < pairs; i++)
+        {
+            await loop.WriteStdoutLineAsync("""{"type":"tool_execution_start","toolCallId":"K__I__","toolName":"bash","args":{"command":"echo __I__"}}""".Replace("__I__", i.ToString()));
+            await loop.WriteStdoutLineAsync("""{"type":"tool_execution_end","toolCallId":"K__I__","toolName":"bash","isError":false,"result":{"content":[{"type":"text","text":"r__I__"}]}}""".Replace("__I__", i.ToString()));
+        }
+
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (DateTime.UtcNow < deadline && feed.Count < pairs * 2)
+        {
+            await Task.Delay(10);
+        }
+
+        watch.Stop();
+        var tap = (PiEventTap)typeof(FeedBridge).GetField("_tap", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(bridge)!;
+        _output.WriteLine($"LONG-STREAM pairs={pairs} rows={feed.Count} events={tap.Events.Count} dropped={tap.DroppedEvents} retainedChars={tap.RetainedTextChars} elapsedMs={watch.ElapsedMilliseconds} managedDelta={GC.GetTotalMemory(false) - before}");
+        Assert.Equal(pairs * 2, feed.Count);
+        Assert.True(tap.Events.Count <= 2000);
+        Assert.True(tap.RetainedTextChars <= 512 * 1024);
+        Assert.True(tap.DroppedEvents > 0);
+        bridge.Detach();
+    }
+
     private sealed class BridgeLoopback : IAsyncDisposable
     {
         private readonly Pipe _input = new();
