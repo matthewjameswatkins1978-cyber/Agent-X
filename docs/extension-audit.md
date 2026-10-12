@@ -1,5 +1,11 @@
 # Extension Audit Verdicts (Pi 1.1.0, 2026-10-12)
 
+> **Pending independent acceptance.** The verdicts below are the auditor's
+> measured findings, not merge decisions. Studio PR #2 and QA PR #1 carry
+> Lucy-reviewed correctness blockers and remain unmerged at the time of
+> writing; no guardrail here counts as admitted until Lucy merges it.
+> Follow-up rounds are recorded on those PRs, not folded into this verdict.
+
 Mission: audit and harden the three remaining default-load extensions.
 Standard applied: no extension keeps default-load status merely for being installed.
 All fixes are on isolated branches with PRs; Lucy merges. No Garden work started.
@@ -33,14 +39,17 @@ Reproduced ordinary-packet activation live in a disposable repo + local bare
 remote with real Pi. Found and fixed: unprotected push path (now refuses
 main/master/foundation/release*), bare `git add -A` (removed; explicit
 pathspec commits + staged-list ledger record + `paths` param), acceptance
-items never bound to evidence (now `accepts:[n]` + `#n` dogfood citations),
-stale `pushed_sha` + `verify_push=false` passing COMPLETE (now bound to final
-revision), dirty worktree completing (now blocked), silent below-threshold
-inaction (now explicit idle section), jobless ship looking tracked (now
-labeled). Live fire proved end to end: mission seeded, probe2.txt created,
-feature branch pushed and remote-verified, tagged checks, COMPLETE with
-ledger/receipt/remote all agreeing (44f178a) and main untouched; the
-unrelated harness config stayed uncommitted. Deterministic suite 104/104.
+items never bound to evidence (now `accepts:[n]` tags plus human confirmation
+only on the NEEDS_HUMAN resume edge), stale `pushed_sha` + `verify_push=false`
+passing COMPLETE (now bound to final revision), dirty worktree completing (now
+blocked), silent below-threshold inaction (now explicit idle section), jobless
+ship looking tracked (now labeled). Follow-up round: pathspec-restricted
+commits (pre-staged unrelated files stay staged), protected destinations
+including `bootstrap/*` plus configured targets with pre-write refusal and no
+HEAD-to-other-ref retargeting, caller revisions bound to the live checkout,
+and agent dogfood citations stripped of covering power. Live fire repeated
+through the hardened gates: COMPLETE with ledger, receipt and remote agreeing
+(76f8c2f) and the unrelated config preserved. Deterministic suite 111/111.
 **Verdict: KEEP default-load** — earned by measured daily use plus the
 hardened, tested gates. Preserved the in-flight Threadmoth boundary rule.
 
@@ -89,7 +98,18 @@ the 3.2.0 → 5.2.0 upgrade separately — breaking changes require migration ca
 
 - Interactive GUI click-through of a Studio mission still needs a manual pass.
 - Per-extension memory attribution inconclusive (method limitation).
-- Out-of-range `#n` dogfood citations are ignored as external refs by design.
+- Agent-supplied dogfood citations never cover acceptance; human confirmation
+  lands only on the NEEDS_HUMAN resume edge (or missions close as PARTIAL).
 - Real-model PASS on a substantive QA spec not yet demonstrated live.
 - sg/ast-grep binary absent, so the live structural-search smoke stays skipped.
 - `mcp connect` hang and native headless trust are Pi-core issues, out of scope.
+
+## Adversarial-testing candidate: Terrorbats (not yet run)
+
+Terrorbats (`The-Terror-Bats` repo, known packs `packs/first-flight.yaml` and
+`packs/species.yaml`, separate Antigravity review ongoing) is the candidate
+for subsequent acceptance work — e.g. a species Bat falsifying "ship stages
+only selected paths" with process isolation and content-addressed evidence.
+Its local installation and packs have NOT been dynamically verified in this
+audit (deterministic node:test hostile cases carry the current evidence), and
+nothing here interferes with Antigravity's review.
