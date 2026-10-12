@@ -1,10 +1,12 @@
 # Extension Audit Verdicts (Pi 1.1.0, 2026-10-12)
 
-> **Pending independent acceptance.** The verdicts below are the auditor's
-> measured findings, not merge decisions. Studio PR #2 and QA PR #1 carry
-> Lucy-reviewed correctness blockers and remain unmerged at the time of
-> writing; no guardrail here counts as admitted until Lucy merges it.
-> Follow-up rounds are recorded on those PRs, not folded into this verdict.
+> **Acceptance status (factual).** The verdicts below are the auditor's
+> measured findings. Source acceptance is now recorded: Studio PR #2 merged
+> as `9fd3f70` and QA PR #1 merged as `b5ccd8e`; reported evidence preserved
+> (Studio deterministic suite 114/114, QA 209 tests / 208 pass / 1 skipped).
+> A source merge is not runtime proof: live installation behavior and the
+> interactive GUI click-through remain separately outstanding and are not
+> claimed here. This audit (PR #5) itself remains pending Lucy's merge decision.
 
 Mission: audit and harden the three remaining default-load extensions.
 Standard applied: no extension keeps default-load status merely for being installed.
