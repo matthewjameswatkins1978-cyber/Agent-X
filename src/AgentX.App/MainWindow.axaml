@@ -33,7 +33,7 @@
           <TextBlock Text="Workspace" FontWeight="SemiBold" VerticalAlignment="Center" />
           <ComboBox Grid.Column="1" x:Name="WorkspaceCombo" MinWidth="280"
                     SelectionChanged="WorkspaceCombo_OnChanged" />
-          <Button Grid.Column="2" Content="Add project…" Click="AddWorkspace_OnClick" />
+          <Button Grid.Column="2" x:Name="AddWorkspaceButton" Content="Add project…" Click="AddWorkspace_OnClick" />
           <Button Grid.Column="3" Content="Reconnect" Click="ReconnectPi_OnClick" />
         </Grid>
         <TextBlock x:Name="WorkspaceDetailText" Text="Select a workspace, then Connect." Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />

@@ -97,18 +97,93 @@ public sealed class WorkspaceRegistry
                 $"Workspace registry '{path}' is unreadable; left in place for inspection, nothing was deleted or reset.", ex);
         }
 
+        var seenSessionIds = new HashSet<string>(StringComparer.Ordinal);
+        var seenRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in entries)
         {
-            if (string.IsNullOrWhiteSpace(entry.Slug) || string.IsNullOrWhiteSpace(entry.ProjectRoot))
+            var validated = ValidateStoredEntry(path, entry);
+            if (!registry._bySlug.TryAdd(validated.Slug, validated))
             {
                 throw new InvalidDataException(
-                    $"Workspace registry '{path}' contains an incomplete entry; left in place for inspection.");
+                    $"Workspace registry '{path}' lists slug '{validated.Slug}' twice; left in place for inspection.");
             }
 
-            registry._bySlug[entry.Slug] = entry;
+            if (!seenSessionIds.Add(validated.SessionId))
+            {
+                throw new InvalidDataException(
+                    $"Workspace registry '{path}' reuses session id '{validated.SessionId}'; left in place for inspection.");
+            }
+
+            if (!seenRoots.Add(validated.ProjectRoot))
+            {
+                throw new InvalidDataException(
+                    $"Workspace registry '{path}' lists project '{validated.ProjectRoot}' twice; left in place for inspection.");
+            }
         }
 
         return registry;
+    }
+
+    /// <summary>
+    /// Fail-closed validation for one stored entry. Rejects blank fields,
+    /// malformed slugs, session ids that disagree with their slug, reserved
+    /// legacy names, and non-rooted project paths — so a hand-edited or
+    /// planted registry file cannot redirect managed paths or collide with
+    /// the legacy session. Returns the entry with a canonical project root.
+    /// Throws InvalidDataException; the file is never modified here.
+    /// </summary>
+    public static WorkspaceRegistration ValidateStoredEntry(string registryPath, WorkspaceRegistration entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        void Fail(string reason) => throw new InvalidDataException(
+            $"Workspace registry '{registryPath}' {reason}; left in place for inspection.");
+
+        if (string.IsNullOrWhiteSpace(entry.Slug)
+            || entry.Slug.Length > 64
+            || !System.Text.RegularExpressions.Regex.IsMatch(entry.Slug, "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$"))
+        {
+            Fail($"rejects slug '{entry.Slug ?? ""}' (lowercase letters, digits and dashes only)");
+        }
+
+        if (entry.Slug == "legacy" || entry.Slug == AgentXWorkspace.LegacySessionId)
+        {
+            Fail($"rejects reserved slug '{entry.Slug}'");
+        }
+
+        if (entry.SessionId != AgentXWorkspace.SessionIdPrefix + entry.Slug)
+        {
+            Fail($"rejects session id '{entry.SessionId ?? ""}' disagreeing with slug '{entry.Slug}'");
+        }
+
+        if (string.IsNullOrWhiteSpace(entry.ProjectRoot))
+        {
+            Fail("contains an entry with a blank project root");
+        }
+
+        // Raw rootedness first: a stored relative path would resolve against
+        // whatever the process working directory happens to be.
+        if (!Path.IsPathRooted(entry.ProjectRoot))
+        {
+            Fail($"rejects non-rooted project path '{entry.ProjectRoot}'");
+        }
+
+        string canonical;
+        try
+        {
+            canonical = AgentXWorkspace.CanonicalizeProjectRoot(entry.ProjectRoot);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            throw new InvalidDataException(
+                $"Workspace registry '{registryPath}' contains an unusable project path '{entry.ProjectRoot}'; left in place for inspection.", ex);
+        }
+
+        if (!Path.IsPathRooted(canonical))
+        {
+            Fail($"rejects non-rooted project path '{entry.ProjectRoot}'");
+        }
+
+        return entry with { ProjectRoot = canonical };
     }
 
     public void Save()

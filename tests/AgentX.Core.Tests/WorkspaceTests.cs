@@ -4,6 +4,13 @@ namespace AgentX.Core.Tests;
 
 public sealed class WorkspaceTests
 {
+    private readonly Xunit.Abstractions.ITestOutputHelper _output;
+
+    public WorkspaceTests(Xunit.Abstractions.ITestOutputHelper output)
+    {
+        _output = output;
+    }
+
     private static string TempRoot(string name)
     {
         var root = Path.Combine(Path.GetTempPath(), $"ax-ws-test-{name}-{Guid.NewGuid():N}");
@@ -87,19 +94,21 @@ public sealed class WorkspaceTests
     }
 
     [Fact]
-    public void Workspace_PathsAreDisjoint_FromLegacy()
+    public void Workspace_RunsInProjectRoot_LegacyStaysManaged()
     {
+        // P1-1: Pi's working directory for a workspace IS the selected
+        // project root (relative tools execute there); legacy keeps the
+        // managed agent-cwd. Separation is by session id + execution root.
         var root = TempRoot("disjoint");
         try
         {
             var legacy = AgentXWorkspace.Legacy(root);
-            var workspace = AgentXWorkspace.ForProject(root, ProjectDir(root, "Proj"));
+            var project = ProjectDir(root, "Proj");
+            var workspace = AgentXWorkspace.ForProject(root, project);
+            Assert.Equal(project, workspace.WorkingDirectory);
+            Assert.Equal(Path.Combine(root, "agent-cwd"), legacy.WorkingDirectory);
             Assert.NotEqual(legacy.SessionId, workspace.SessionId);
             Assert.NotEqual(legacy.WorkingDirectory, workspace.WorkingDirectory);
-            Assert.Contains(
-                Path.Combine("workspaces", workspace.Slug, "cwd"),
-                workspace.WorkingDirectory, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("agent-cwd", workspace.WorkingDirectory, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -302,5 +311,158 @@ public sealed class WorkspaceTests
         Assert.Throws<ArgumentException>(
             () => new PiConversation(new PiRpcClient(PiRpcOptions.Default())));
 #pragma warning restore CS0618
+    }
+
+    [Fact]
+    public void ForProject_SlugCarriesStableHashSuffix()
+    {
+        var root = TempRoot("hashshape");
+        try
+        {
+            var workspace = AgentXWorkspace.ForProject(root, ProjectDir(root, "Proj"));
+            Assert.Matches(@"-[0-9a-f]{8}$", workspace.Slug);
+            Assert.Equal("ax-" + workspace.Slug, workspace.SessionId);
+            Assert.True(workspace.SessionId.Length <= 48, $"Session id too long: {workspace.SessionId}");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CaseAliases_ShareOneIdentity()
+    {
+        // P2: Windows paths are case-insensitive; differently-cased spellings
+        // of one directory must derive one session id (lowered hash input).
+        var root = TempRoot("casealias");
+        try
+        {
+            var project = ProjectDir(root, "MixedCase");
+            var lower = AgentXWorkspace.ForProject(root, project.ToLowerInvariant());
+            var upper = AgentXWorkspace.ForProject(root, project.ToUpperInvariant());
+            Assert.Equal(lower.SessionId, upper.SessionId);
+            var registry = new WorkspaceRegistry(root);
+            registry.GetOrRegister(project);
+            registry.GetOrRegister(project.ToUpperInvariant()); // Same root: still one entry.
+            Assert.Single(registry.List());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SymlinkAlias_SharesTargetIdentity()
+    {
+        // P2: a directory symlink and its target are one project, one session.
+        var root = TempRoot("linkalias");
+        try
+        {
+            var target = ProjectDir(root, "Real");
+            FileSystemInfo link;
+            try
+            {
+                link = Directory.CreateSymbolicLink(Path.Combine(root, "Alias"), target);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            {
+                _output.WriteLine($"SKIP: symlink creation needs privilege here: {ex.Message}");
+                return;
+            }
+
+            Assert.Equal(
+                AgentXWorkspace.CanonicalizeProjectRoot(target),
+                AgentXWorkspace.CanonicalizeProjectRoot(link.FullName));
+            var viaTarget = AgentXWorkspace.ForProject(root, target);
+            var viaLink = AgentXWorkspace.ForProject(root, link.FullName);
+            Assert.Equal(viaTarget.SessionId, viaLink.SessionId);
+            var registry = new WorkspaceRegistry(root);
+            registry.GetOrRegister(target);
+            registry.GetOrRegister(link.FullName);
+            Assert.Single(registry.List());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SessionMatch_AcceptsSelfAndUnknown_RejectsForeign()
+    {
+        var root = TempRoot("match");
+        try
+        {
+            var workspace = AgentXWorkspace.ForProject(root, ProjectDir(root, "Proj"));
+            workspace.ValidateSessionMatch(workspace.SessionId); // Exact echo: fine.
+            workspace.ValidateSessionMatch(null); // Pi reported nothing: allowed, host shows as-is.
+            var foreign = Assert.Throws<PiRpcTransportException>(
+                () => workspace.ValidateSessionMatch("ax-someone-elses-session-12345678"));
+            Assert.Contains(workspace.SessionId, foreign.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("..\\..", "ax-..\\..", "C:\\x")]
+    [InlineData("ABC", "ax-ABC", "C:\\x")]
+    [InlineData("legacy", "ax-legacy", "C:\\x")]
+    [InlineData("agent-x-main", "ax-agent-x-main", "C:\\x")]
+    [InlineData("ok-slug-12345678", "ax-WRONG", "C:\\x")]
+    [InlineData("ok-slug-12345678", "agent-x-main", "C:\\x")]
+    [InlineData("ok-slug-12345678", "ax-ok-slug-12345678", "relative\\path")]
+    [InlineData("", "ax-", "C:\\x")]
+    public void Registry_RejectsUntrustedEntries_FilePreserved(string slug, string sessionId, string projectRoot)
+    {
+        // P1-2 matrix: hostile slugs, session/slug disagreement, legacy
+        // squats and non-rooted projects all fail closed with the file kept.
+        var root = TempRoot("untrusted");
+        try
+        {
+            Directory.CreateDirectory(root);
+            var path = WorkspaceRegistry.RegistryPath(root);
+            var payload = System.Text.Json.JsonSerializer.Serialize(new[]
+            {
+                new WorkspaceRegistration(slug, projectRoot, sessionId, DateTime.UtcNow),
+            });
+            File.WriteAllText(path, payload);
+            Assert.Throws<InvalidDataException>(() => WorkspaceRegistry.Load(root));
+            Assert.True(File.Exists(path));
+            Assert.Equal(payload, File.ReadAllText(path)); // Byte-identical: untouched.
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Registry_RejectsDuplicateSlugsSessionsRoots()
+    {
+        var root = TempRoot("duplicates");
+        try
+        {
+            Directory.CreateDirectory(root);
+            var a = new WorkspaceRegistration("dup-slug-11111111", @"C:\proj-a", "ax-dup-slug-11111111", DateTime.UtcNow);
+            var b = new WorkspaceRegistration("dup-slug-11111111", @"C:\proj-b", "ax-dup-slug-11111111", DateTime.UtcNow);
+            var c = new WorkspaceRegistration("other-22222222", @"C:\proj-c", "ax-dup-slug-11111111", DateTime.UtcNow);
+            var d = new WorkspaceRegistration("third-33333333", @"C:\PROJ-A", "ax-third-33333333", DateTime.UtcNow);
+            foreach (var pair in new[] { new[] { a, b }, new[] { a, c }, new[] { a, d } })
+            {
+                var path = WorkspaceRegistry.RegistryPath(root);
+                File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(pair));
+                Assert.Throws<InvalidDataException>(() => WorkspaceRegistry.Load(root));
+                Assert.True(File.Exists(path));
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 }

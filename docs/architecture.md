@@ -20,12 +20,14 @@ The core owns the exact imported string, UTF-8 byte count, and compact line star
 ## Workspace sessions and recovery (feature/agent-x-workspace-recovery)
 
 Project-aware session identity replaces the single global session: one
-project root maps to one `ax-<tail>-<hash>` Pi session id and one managed
-working directory (`workspaces/<slug>/cwd`), with the legacy `agent-x-main` /
-`agent-cwd` session preserved untouched and selectable. A JSON registry
-tracks roots idempotently, refuses slug sharing loudly, and never deletes a
-corrupt file silently. `PiConversation` builds clients from a factory so
-`ReconnectAsync` can swap a dead process for a fresh one on the same
+project root maps to one `ax-<tail>-<hash>` Pi session id, and Pi runs IN
+that project root (user's OS authority — isolation between projects, not a
+sandbox), with the legacy `agent-x-main` / `agent-cwd` session preserved
+untouched and selectable. A JSON registry tracks roots idempotently,
+validates every entry fail-closed, refuses slug sharing loudly, and never
+modifies a corrupt file (GUI enters recovery mode instead). `PiConversation` builds clients from a factory so
+`ReconnectAsync` retires the previous writer before connecting its
+replacement (single-writer rule) on the same
 persisted session; `ConnectionLost` plus a GUI Reconnect button (with
 run-in-flight and wrong-workspace guards) complete the loop. Details and
 live evidence in `docs/workspace-sessions.md`.

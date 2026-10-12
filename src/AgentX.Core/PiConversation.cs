@@ -142,23 +142,32 @@ public sealed class PiConversation : IAsyncDisposable
 
     /// <summary>
     /// Attach a fresh Pi process to the same persisted session after a
-    /// transport failure (or a GUI close). Disposes the old client, builds
-    /// an equivalent one via the factory, reconnects and restores history.
-    /// The old client's restored history is kept until the refresh lands,
-    /// so a failed reconnect never wipes what was already known. Throws
-    /// (leaving the conversation disconnected) when the new process cannot
-    /// start; the host may retry. Never reports interruption as success:
-    /// no receipt is issued here — the interrupted run keeps whatever the
-    /// host recorded, and restored history speaks for itself.
+    /// transport failure (or a GUI close). Retires the previous writer FIRST
+    /// (detach + dispose) and only then connects the replacement, so two
+    /// live Pi processes never share one session — even briefly. Builds the
+    /// replacement before retiring, so a factory failure leaves the old
+    /// client untouched. Restored history is kept until the refresh lands,
+    /// so a failed reconnect never wipes what was already known, and the
+    /// conversation stays disconnected for a host retry. Never reports
+    /// interruption as success: no receipt is issued here — the interrupted
+    /// run keeps whatever the host recorded, and restored history speaks
+    /// for itself.
     /// </summary>
     public async Task<PiEngineState> ReconnectAsync(CancellationToken cancellationToken = default)
     {
+        PiRpcClient previous;
         PiRpcClient replacement;
         lock (_clientGate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            previous = _client;
             replacement = _clientFactory();
         }
+
+        // Single-writer rule: the old process is gone before the new one
+        // starts. History still holds the pre-reconnect restore throughout.
+        Detach(previous);
+        await previous.DisposeAsync().ConfigureAwait(false);
 
         try
         {
@@ -170,17 +179,23 @@ public sealed class PiConversation : IAsyncDisposable
             throw;
         }
 
-        PiRpcClient previous;
+        bool swapped;
         lock (_clientGate)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            previous = _client;
-            _client = replacement;
-            Attach(replacement);
+            swapped = !_disposed;
+            if (swapped)
+            {
+                _client = replacement;
+                Attach(replacement);
+            }
         }
 
-        Detach(previous);
-        await previous.DisposeAsync().ConfigureAwait(false);
+        if (!swapped)
+        {
+            await replacement.DisposeAsync().ConfigureAwait(false);
+            throw new ObjectDisposedException(nameof(PiConversation));
+        }
+
         await RefreshHistoryAsync(cancellationToken).ConfigureAwait(false);
         var state = await Client.GetStateAsync(cancellationToken).ConfigureAwait(false);
         lock (_clientGate)

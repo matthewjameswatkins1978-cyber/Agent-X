@@ -60,6 +60,10 @@ public sealed class WorkspaceSessionTests
     /// workspace (exact-echo, ~6 s each) and assert on the persisted USER
     /// marker, never on model wording. Bash is still exercised per workspace
     /// to prove tool execution paths resolve inside each isolated cwd.
+    ///
+    /// Execution-directory note (P1-1): the workspace working directory IS
+    /// the project root, so relative tool paths below must land files in
+    /// the temp projects — asserted on disk, shell-agnostically.
     /// </summary>
     [Fact]
     public async Task Isolation_TwoWorkspaces_KeepSeparateHistories()
@@ -87,14 +91,24 @@ public sealed class WorkspaceSessionTests
             Assert.NotEqual(wsA.WorkingDirectory, wsB.WorkingDirectory);
 
             var sw = Stopwatch.StartNew();
+            // Trusted-project visibility: a pre-existing project file must be
+            // readable through Pi's relative execution context (no inference).
+            File.WriteAllText(Path.Combine(projA, "seed-A.txt"), $"seed content {markerA}");
+            File.WriteAllText(Path.Combine(projB, "seed-B.txt"), $"seed content {markerB}");
             await using (var clientA = new PiRpcClient(wsA.ToPiRpcOptions()))
             {
                 await clientA.ConnectAsync(ct);
                 var stateA = await clientA.GetStateAsync(ct);
                 Assert.Equal(wsA.SessionId, stateA.SessionId);
-                var ranA = await clientA.RunBashAsync($"echo {markerA}-tool", ct);
-                Assert.Equal(0, ranA.ExitCode);
-                Assert.Contains($"{markerA}-tool", ranA.Output, StringComparison.Ordinal);
+                wsA.ValidateSessionMatch(stateA.SessionId);
+                var seedA = await clientA.RunBashAsync("type seed-A.txt", ct);
+                Assert.Equal(0, seedA.ExitCode);
+                Assert.Contains($"seed content {markerA}", seedA.Output, StringComparison.Ordinal);
+                // Relative write must land IN the project, then read back.
+                var writeA = await clientA.RunBashAsync($"echo {markerA}-tool > ax-note-A.txt", ct);
+                Assert.Equal(0, writeA.ExitCode);
+                var readA = await clientA.RunBashAsync("type ax-note-A.txt", ct);
+                Assert.Contains($"{markerA}-tool", readA.Output, StringComparison.Ordinal);
                 var (replyA, abortedA) = await clientA.PromptAndWaitAsync($"Reply with exactly: GREEN {markerA}", null, ct);
                 Assert.False(abortedA);
                 using var messagesA = await clientA.GetMessagesAsync(ct);
@@ -102,14 +116,24 @@ public sealed class WorkspaceSessionTests
                 Assert.Contains(historyA, m => m.Role == "user" && m.Text.Contains(markerA));
             }
 
+            Assert.Equal($"seed content {markerA}", File.ReadAllText(Path.Combine(projA, "seed-A.txt")).Trim());
+            Assert.Contains(markerA, File.ReadAllText(Path.Combine(projA, "ax-note-A.txt")));
+            Assert.False(File.Exists(Path.Combine(projB, "ax-note-A.txt"))); // No cross-write.
+
             await using (var clientB = new PiRpcClient(wsB.ToPiRpcOptions()))
             {
                 await clientB.ConnectAsync(ct);
                 var stateB = await clientB.GetStateAsync(ct);
                 Assert.Equal(wsB.SessionId, stateB.SessionId);
+                wsB.ValidateSessionMatch(stateB.SessionId);
                 using var messagesB0 = await clientB.GetMessagesAsync(ct);
                 var historyB0 = PiConversation.ParseHistory(messagesB0);
                 Assert.DoesNotContain(historyB0, m => m.Text.Contains(markerA));
+                var seedB = await clientB.RunBashAsync("type seed-B.txt", ct);
+                Assert.Equal(0, seedB.ExitCode);
+                Assert.Contains($"seed content {markerB}", seedB.Output, StringComparison.Ordinal);
+                var writeB = await clientB.RunBashAsync($"echo {markerB}-tool > ax-note-B.txt", ct);
+                Assert.Equal(0, writeB.ExitCode);
                 var (replyB, abortedB) = await clientB.PromptAndWaitAsync($"Reply with exactly: BLUE {markerB}", null, ct);
                 Assert.False(abortedB);
                 using var messagesB1 = await clientB.GetMessagesAsync(ct);
@@ -122,16 +146,30 @@ public sealed class WorkspaceSessionTests
             await using (var clientA2 = new PiRpcClient(wsA.ToPiRpcOptions()))
             {
                 await clientA2.ConnectAsync(ct);
+                var reopened = await clientA2.GetStateAsync(ct);
+                wsA.ValidateSessionMatch(reopened.SessionId);
                 using var messagesA2 = await clientA2.GetMessagesAsync(ct);
                 var historyA2 = PiConversation.ParseHistory(messagesA2);
                 Assert.Contains(historyA2, m => m.Role == "user" && m.Text.Contains(markerA));
                 Assert.DoesNotContain(historyA2, m => m.Text.Contains(markerB));
             }
 
-            _output.WriteLine($"Isolation: 4 sequential connects + 1 bash + 2 tiny prompts in {sw.ElapsedMilliseconds} ms.");
-            // Pi must never write into the anchored projects themselves.
-            Assert.Empty(Directory.GetFileSystemEntries(projA));
-            Assert.Empty(Directory.GetFileSystemEntries(projB));
+            _output.WriteLine($"Isolation: 4 sequential connects + relative file roundtrips + 2 tiny prompts in {sw.ElapsedMilliseconds} ms.");
+            // Each project holds exactly its own files — nothing stray, nothing shared.
+            Assert.Equal(
+                new[] { "ax-note-A.txt", "seed-A.txt" },
+                Directory.GetFiles(projA).Select(Path.GetFileName).OrderBy(n => n).ToArray());
+            Assert.Equal(
+                new[] { "ax-note-B.txt", "seed-B.txt" },
+                Directory.GetFiles(projB).Select(Path.GetFileName).OrderBy(n => n).ToArray());
+            // ...and outside the two projects, only Agent X's own files exist.
+            var sep = Path.DirectorySeparatorChar.ToString();
+            var nonProjectFiles = Directory.GetFiles(root, "*", SearchOption.AllDirectories)
+                .Select(f => Path.GetRelativePath(root, f))
+                .Where(f => !f.StartsWith("first-proj" + sep) && !f.StartsWith("second-proj" + sep))
+                .ToArray();
+            Assert.DoesNotContain(nonProjectFiles, f => f.EndsWith("ax-note-A.txt") || f.EndsWith("ax-note-B.txt"));
+            Assert.Contains(nonProjectFiles, f => f.EndsWith(".jsonl")); // Real session files persisted.
         }
         finally
         {
@@ -172,21 +210,49 @@ public sealed class WorkspaceSessionTests
             await conversation.ConnectAsync(ct);
             Assert.Contains(conversation.History, m => m.Text.Contains(marker));
 
-            for (var i = 1; i <= 3; i++)
+            // Reconnect under a HEALTHY active process, five times: with the
+            // dispose-first single-writer rule, each swap retires the old
+            // process before the new one starts, so the persisted marker count
+            // must stay STABLE — growth would prove two live writers. (The
+            // marker appears twice: user prompt plus exact echo.)
+            var baseline = conversation.History.Count(m => m.Text.Contains(marker));
+            Assert.Equal(2, baseline);
+            for (var i = 1; i <= 5; i++)
             {
                 var state = await conversation.ReconnectAsync(ct);
                 Assert.True(conversation.IsConnected);
                 Assert.Equal(i, conversation.ReconnectCount);
-                Assert.Contains(conversation.History, m => m.Text.Contains(marker));
+                Assert.Equal(baseline, conversation.History.Count(m => m.Text.Contains(marker)));
                 Assert.Equal(workspace.SessionId, state.SessionId);
+                workspace.ValidateSessionMatch(state.SessionId);
             }
 
-            _output.WriteLine($"3 sequential reconnects with stable history in {sw.ElapsedMilliseconds} ms.");
+            _output.WriteLine($"5 sequential reconnects, marker count stable at {baseline}, in {sw.ElapsedMilliseconds} ms.");
         }
         finally
         {
             Cleanup(root, _output);
         }
+    }
+
+    [Fact]
+    public async Task LegacySession_StillOpens_ReadOnly()
+    {
+        // The real pre-workspace global session must keep opening: connect
+        // only, get_state only, no prompts, no tools, no writes.
+        if (!PiAvailable())
+        {
+            return;
+        }
+
+        using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        await using var client = new PiRpcClient(
+            PiRpcOptions.Persistent(PiSessionOptions.Default()));
+        await client.ConnectAsync(budget.Token);
+        var state = await client.GetStateAsync(budget.Token);
+        Assert.Equal("agent-x-main", state.SessionId);
+        AgentXWorkspace.Legacy(PiSessionOptions.Default().ManagedRoot).ValidateSessionMatch(state.SessionId);
+        _output.WriteLine($"Legacy session opens: model={state.ModelName ?? state.ModelId}.");
     }
 
     [Fact]

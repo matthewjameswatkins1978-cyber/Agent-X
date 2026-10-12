@@ -25,11 +25,18 @@ public partial class MainWindow : Window
     private readonly List<WorkspaceChoice> _workspaceChoices = new();
     private string? _connectedKey;
     private string? _connectedLabel;
+    // Recovery mode: the registry file was unreadable at startup. Registration
+    // stays disabled (the corrupt original must never be overwritten) while the
+    // legacy session keeps working. Set alongside _registry; read on UI thread.
+    private bool _registryReadOnly;
+    // True while a connect or reconnect is underway: blocks re-entrant
+    // Connect/Reconnect/switch transitions. Set alongside _piBusy on UI thread.
+    private bool _connecting;
 
     private static string ManagedRoot => PiSessionOptions.Default().ManagedRoot;
 
     private sealed record WorkspaceChoice(
-        string Key, string Label, string Detail, bool IsLegacy, WorkspaceRegistration? Registration)
+        string Key, string Label, string Detail, string ExecutionRoot, bool IsLegacy, WorkspaceRegistration? Registration)
     {
         public override string ToString() => Label;
 
@@ -67,17 +74,25 @@ public partial class MainWindow : Window
         _workspaceChoices.Add(new WorkspaceChoice(
             "legacy",
             "Legacy session (agent-x-main)",
-            $"Pre-workspace global session — preserved as-is. Session {legacy.SessionId} in {legacy.WorkingDirectory}.",
+            $"Pre-workspace global session — preserved as-is. Session {legacy.SessionId}. Pi runs in {legacy.WorkingDirectory} with your user authority.",
+            legacy.WorkingDirectory,
             IsLegacy: true,
             Registration: null));
         try
         {
             _registry = WorkspaceRegistry.Load(ManagedRoot);
+            _registryReadOnly = false;
+            AddWorkspaceButton.IsEnabled = true;
         }
         catch (InvalidDataException ex)
         {
+            // Recovery mode: keep the corrupt file byte-identical. Registration
+            // is disabled until the user repairs or backs up the file and
+            // restarts; the legacy session below still connects.
             _registry = new WorkspaceRegistry(ManagedRoot);
-            StatusText.Text = $"Workspace registry unreadable — legacy session only. File preserved at {WorkspaceRegistry.RegistryPath(ManagedRoot)}: {ex.Message}";
+            _registryReadOnly = true;
+            AddWorkspaceButton.IsEnabled = false;
+            StatusText.Text = $"Workspace registry unreadable — registration disabled (file preserved, legacy session works). Repair or back up {WorkspaceRegistry.RegistryPath(ManagedRoot)}, then restart. {ex.Message}";
             WorkspaceCombo.ItemsSource = _workspaceChoices.ToArray();
             WorkspaceCombo.SelectedIndex = 0;
             return;
@@ -94,7 +109,8 @@ public partial class MainWindow : Window
             _workspaceChoices.Add(new WorkspaceChoice(
                 registration.Slug,
                 $"{name} ({registration.Slug})",
-                $"{registration.ProjectRoot} — session {registration.SessionId}.",
+                $"{registration.ProjectRoot} — session {registration.SessionId}. Pi runs HERE with your user authority (isolated from other projects, not sandboxed).",
+                registration.ProjectRoot,
                 IsLegacy: false,
                 Registration: registration));
         }
@@ -116,6 +132,12 @@ public partial class MainWindow : Window
 
     private async void AddWorkspace_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
+        if (_registryReadOnly)
+        {
+            StatusText.Text = $"Registration disabled while the registry is unreadable — repair or back up {WorkspaceRegistry.RegistryPath(ManagedRoot)}, then restart.";
+            return;
+        }
+
         var folders = await StorageProvider.OpenFolderPickerAsync(new Avalonia.Platform.Storage.FolderPickerOpenOptions
         {
             Title = "Select project folder",
@@ -269,13 +291,24 @@ public partial class MainWindow : Window
 
     private async void ConnectPi_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (_conversation?.IsConnected == true)
+        // One controlled transition: while a conversation object exists
+        // (connected OR dead) only Disconnect or Reconnect may change state.
+        // Otherwise a failed transport plus Connect would strand the old
+        // conversation — undisposed, still subscribed — beside a new one.
+        if (_conversation is not null)
         {
-            if (SelectedChoice?.Key != _connectedKey)
+            if (_conversation.IsConnected && SelectedChoice?.Key == _connectedKey)
             {
-                StatusText.Text = "Disconnect before switching workspaces — histories never mix.";
+                return;
             }
 
+            StatusText.Text = "Disconnect before switching workspaces or reconnecting — histories never mix.";
+            return;
+        }
+
+        if (_connecting || _piBusy)
+        {
+            StatusText.Text = "A connection or run is already underway.";
             return;
         }
 
@@ -286,6 +319,13 @@ public partial class MainWindow : Window
         }
 
         var workspace = choice.ToWorkspace(ManagedRoot);
+        if (!choice.IsLegacy && !Directory.Exists(workspace.ProjectRoot))
+        {
+            StatusText.Text = $"Project folder unavailable: {workspace.ProjectRoot} — refusing to connect elsewhere.";
+            return;
+        }
+
+        _connecting = true;
         PiConnectionState.Text = "Connecting…";
         var conversation = new PiConversation(() => new PiRpcClient(workspace.ToPiRpcOptions()));
         conversation.ActivityChanged += Conversation_ActivityChanged;
@@ -295,6 +335,9 @@ public partial class MainWindow : Window
         {
             // This workspace's Pi-native session, resumed by stable session id.
             var state = await conversation.ConnectAsync();
+            // Runtime identity check BEFORE showing a restore: the reported
+            // session must be the one requested, never a foreign history.
+            workspace.ValidateSessionMatch(state.SessionId);
             _conversation = conversation;
             _connectedKey = choice.Key;
             _connectedLabel = choice.Label;
@@ -308,6 +351,7 @@ public partial class MainWindow : Window
             PiRunStatus.Text = history.Count == 0
                 ? $"New session for '{choice.Label}' — no previous conversation."
                 : $"Restored '{choice.Label}' with {history.Count} message(s). Send a prompt to continue.";
+            StatusText.Text = $"Pi runs in {choice.ExecutionRoot} with your user authority.";
         }
         catch (Exception ex)
         {
@@ -317,6 +361,10 @@ public partial class MainWindow : Window
             await conversation.DisposeAsync();
             PiConnectionState.Text = "Connection failed";
             PiModelText.Text = ex.Message;
+        }
+        finally
+        {
+            _connecting = false;
         }
     }
 
@@ -340,16 +388,28 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (_connecting)
+        {
+            StatusText.Text = "A connection is already underway.";
+            return;
+        }
+
         if (conversation.IsConnected)
         {
             StatusText.Text = "Already connected — nothing to reconnect.";
             return;
         }
 
+        _connecting = true;
         PiConnectionState.Text = "Reconnecting…";
         try
         {
             var state = await conversation.ReconnectAsync();
+            if (SelectedChoice is { } current)
+            {
+                current.ToWorkspace(ManagedRoot).ValidateSessionMatch(state.SessionId);
+            }
+
             PiConnectionState.Text = "Connected";
             PiModelText.Text = DescribeState(state);
             // The feed keeps whatever it already holds (including any
@@ -366,6 +426,10 @@ public partial class MainWindow : Window
         {
             PiConnectionState.Text = "Reconnect failed";
             PiRunStatus.Text = $"Reconnect failed: {ex.Message} — session is persisted; press Reconnect to retry.";
+        }
+        finally
+        {
+            _connecting = false;
         }
     }
 
@@ -699,9 +763,17 @@ public partial class MainWindow : Window
 
     private void Conversation_ActivityChanged(object? sender, string activity)
     {
-        // Compact tool/error/processing signal; streamed text flows via the accumulator.
+        // Stale-callback guard: only the CURRENT conversation may touch the
+        // feed or the map. A queued post from a previous workspace (or a
+        // disposed conversation) is dropped, never mixed into the new one.
+        var source = sender as PiConversation;
         Dispatcher.UIThread.Post(() =>
         {
+            if (!ReferenceEquals(source, _conversation))
+            {
+                return;
+            }
+
             PiActivityText.Text = activity;
             // The session map shows real observed activity, never stale idle.
             _feed.SetActivity(string.IsNullOrWhiteSpace(activity) ? null : activity);
@@ -711,8 +783,14 @@ public partial class MainWindow : Window
 
     private void Conversation_ToolActivityChanged(object? sender, PiToolActivity activity)
     {
+        var source = sender as PiConversation;
         Dispatcher.UIThread.Post(() =>
         {
+            if (!ReferenceEquals(source, _conversation))
+            {
+                return;
+            }
+
             var seq = activity.IsStart
                 ? _feed.AddToolStart(activity.ToolName, activity.Summary, activity.Path, activity.IsMutating)
                 : _feed.AddToolEnd(activity.ToolName, activity.IsError);
