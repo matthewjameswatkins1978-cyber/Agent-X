@@ -17,6 +17,20 @@ The core owns the exact imported string, UTF-8 byte count, and compact line star
 3. **Protect Pi behind an Agent X boundary.** Do not patch Pi or make plugins depend on its private internals. Kernel integration remains a later decision after Pi behavior and license/provenance are reviewed.
 4. **Treat rendered rows as a view.** The immutable original text is authoritative; line entries are lazy slices and the UI must not become the data store.
 
+## Pi persistent sessions (feature/pi-persistent-sessions)
+
+The GUI now connects to a Pi-native persistent session (`agent-x-main`) in an
+Agent X-managed directory (`%LocalAppData%/AgentX/sessions`, stable `agent-cwd`
+working directory so Pi's project-session lookup is deterministic). `--session-id`
+opens the exact session or creates it; `--no-session` remains available via
+`PiRpcOptions.Default()` for ephemeral use. `PiConversation` (Core, UI-free)
+restores history with `get_messages` on connect, streams prompts, keeps tool/error
+activity on a compact status line, and issues a `PiRunReceipt` per run so idle
+(no automatic work left) is never confused with healthy (settled, not aborted,
+no observed errors) — and healthy is never presented as passing acceptance
+checks. Large messages are preserved byte-for-byte in the session;
+only display truncates, with an explicit notice.
+
 ## Pi RPC integration (feature/pi-rpc-integration)
 
 First live connection to the Pi 1.1.0 engine over its documented JSONL RPC protocol.

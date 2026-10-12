@@ -10,15 +10,31 @@ public sealed record PiRpcOptions(
     string Arguments,
     string? WorkingDirectory = null)
 {
+    private const string BaseArguments = "--mode rpc --no-extensions --no-skills";
+
     /// <summary>
-    /// Default launch: separate Pi process, no session persistence, extensions
+    /// Default launch: separate Pi process, ephemeral session, extensions
     /// and skills disabled. Provider authentication flows from the existing
     /// environment and config; Agent X never copies or passes credentials.
     /// </summary>
     public static PiRpcOptions Default(string? workingDirectory = null) => new(
         @"D:\AgentTools\bin\pi.cmd",
-        "--mode rpc --no-session --no-extensions --no-skills",
+        $"{BaseArguments} --no-session",
         workingDirectory);
+
+    /// <summary>
+    /// Persistent launch: Pi-native session in an Agent X-managed directory,
+    /// resumed by stable session id across GUI restarts.
+    /// </summary>
+    public static PiRpcOptions Persistent(PiSessionOptions session, string? executablePath = null)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        session.EnsureDirectories();
+        return new PiRpcOptions(
+            executablePath ?? @"D:\AgentTools\bin\pi.cmd",
+            $"{BaseArguments} {session.ToArguments()}",
+            session.WorkingDirectory);
+    }
 }
 
 /// <summary>
@@ -209,6 +225,28 @@ public sealed class PiRpcClient : IAsyncDisposable
         var connection = RequireConnection();
         using var response = await connection.SendCommandAsync("abort", null, cancellationToken).ConfigureAwait(false);
         ThrowOnCommandError(response);
+    }
+
+    /// <summary>All messages in the conversation (AgentMessage union; tolerate unknown roles).</summary>
+    public async Task<JsonDocument> GetMessagesAsync(CancellationToken cancellationToken = default)
+    {
+        var connection = RequireConnection();
+        var response = await connection.SendCommandAsync("get_messages", null, cancellationToken).ConfigureAwait(false);
+        ThrowOnCommandError(response);
+        return response;
+    }
+
+    /// <summary>Text of the last assistant message, or null when there is none.</summary>
+    public async Task<string?> GetLastAssistantTextAsync(CancellationToken cancellationToken = default)
+    {
+        var connection = RequireConnection();
+        using var response = await connection.SendCommandAsync("get_last_assistant_text", null, cancellationToken).ConfigureAwait(false);
+        ThrowOnCommandError(response);
+        return response.RootElement.TryGetProperty("data", out var data)
+            && data.TryGetProperty("text", out var text)
+            && text.ValueKind == JsonValueKind.String
+            ? text.GetString()
+            : null;
     }
 
     public Task<bool> WaitForSettledAsync(CancellationToken cancellationToken = default)

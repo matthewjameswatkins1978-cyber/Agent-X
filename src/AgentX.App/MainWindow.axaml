@@ -29,6 +29,8 @@
           <Button Grid.Column="3" Content="Disconnect" Click="DisconnectPi_OnClick" />
         </Grid>
         <TextBlock x:Name="PiModelText" Text="Pi engine not connected." Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />
+        <TextBlock x:Name="PiActivityText" Text="" Foreground="#7DD3A8" FontSize="12" TextWrapping="Wrap" />
+        <TextBlock x:Name="PiRunStatus" Text="" Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />
         <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
           <TextBox x:Name="PiPromptBox" PlaceholderText="Ask Pi anything…" />
           <Button Grid.Column="1" x:Name="PiSendButton" Content="Send" Click="SendPrompt_OnClick" />
