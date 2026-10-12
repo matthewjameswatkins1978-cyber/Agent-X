@@ -32,7 +32,7 @@ public sealed class PiEventTap : IDisposable
     private const int MaxDeltaChars = 4096;
     private const int MaxPartialChars = 2048;
     private const int MaxPartialPreview = 1000;
-    private const int MaxBashHead = 500;
+    private const int MaxBashHead = 1000;
     private const int MaxMessagePreview = 400;
 
     private readonly PiRpcClient? _client;
@@ -164,7 +164,7 @@ public sealed class PiEventTap : IDisposable
             "tool_execution_update" => DecodeToolProgress(root, observedAtUtc),
             "tool_execution_end" => DecodeToolEnd(root, observedAtUtc),
             "bash_execution_update" => new BashChunk(
-                observedAtUtc, Str(root, "id") ?? string.Empty,
+                observedAtUtc, PiRedaction.Id(Str(root, "id")),
                 Head(Str(root, "delta"), MaxBashHead), Str(root, "delta")?.Length ?? 0),
             "response" => DecodeResponse(root, document, observedAtUtc),
             _ => DescribeUnknown(root, type.Length > 0 ? type : "unknown", observedAtUtc),
@@ -190,12 +190,12 @@ public sealed class PiEventTap : IDisposable
             if (nestedType is "toolcall_start")
             {
                 return new ToolCallAnnounced(
-                    observedAtUtc, Str(nested, "id") ?? string.Empty, Str(nested, "toolName") ?? string.Empty);
+                    observedAtUtc, PiRedaction.Id(Str(nested, "id")), PiRedaction.Name(Str(nested, "toolName")));
             }
 
             // Thinking blocks arrive empty (encrypted signature only); text/tool blocks end
             // with authoritative content already covered by message_end.
-            return DescribeUnknown(nested, "message_update." + nestedType, observedAtUtc);
+            return DescribeUnknown(nested, "message_update." + PiRedaction.TypeToken(nestedType), observedAtUtc);
         }
 
         if (root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
@@ -214,8 +214,11 @@ public sealed class PiEventTap : IDisposable
             && message.ValueKind == JsonValueKind.Object
             && Str(message, "role") == "assistant")
         {
-            var (text, total, _) = CollectText(message, int.MaxValue);
-            var preview = PiRedaction.Redact(AgentXEvent.PreviewForTap(text, MaxMessagePreview));
+            // Retention window: stream blocks, keep the preview head, count the
+            // true total. Peak transient is the largest single block, never the
+            // whole message; retention never exceeds the preview cap.
+            var (text, total, _) = CollectText(message, MaxMessagePreview);
+            var preview = PiRedaction.Redact(text);
             return new AssistantMessage(observedAtUtc, total, preview);
         }
 
@@ -229,7 +232,7 @@ public sealed class PiEventTap : IDisposable
         var cut = redacted.Length > MaxArgsChars;
         var kept = cut ? redacted[..MaxArgsChars] : redacted;
         return new ToolStarted(
-            observedAtUtc, Str(root, "toolCallId") ?? string.Empty, Str(root, "toolName") ?? string.Empty,
+            observedAtUtc, PiRedaction.Id(Str(root, "toolCallId")), PiRedaction.Name(Str(root, "toolName")),
             kept, cut, PiRedaction.Redact(ArgSummary(root)));
     }
 
@@ -239,16 +242,16 @@ public sealed class PiEventTap : IDisposable
         // replaces or extends the previous one, so the tap never concatenates.
         var (text, total, capped) = CollectText(root, MaxPartialChars, "partialResult");
         var redacted = PiRedaction.Redact(text);
-        var preview = AgentXEvent.PreviewForTap(redacted, MaxPartialPreview);
+        var preview = Slice(redacted, MaxPartialPreview);
         return new ToolProgress(
-            observedAtUtc, Str(root, "toolCallId") ?? string.Empty, Str(root, "toolName") ?? string.Empty,
+            observedAtUtc, PiRedaction.Id(Str(root, "toolCallId")), PiRedaction.Name(Str(root, "toolName")),
             preview, total, capped);
     }
 
     private static AgentXEvent DecodeToolEnd(JsonElement root, DateTime observedAtUtc)
     {
-        var callId = Str(root, "toolCallId") ?? string.Empty;
-        var name = Str(root, "toolName") ?? string.Empty;
+        var callId = PiRedaction.Id(Str(root, "toolCallId"));
+        var name = PiRedaction.Name(Str(root, "toolName"));
         var isError = Bool(root, "isError");
         long? duration = NumOpt(root, "durationMs");
         string text = string.Empty;
@@ -277,7 +280,7 @@ public sealed class PiEventTap : IDisposable
         var redacted = PiRedaction.Redact(text);
         var tapCut = collectCapped || redacted.Length > MaxOutputChars;
         var kept = tapCut && redacted.Length > MaxOutputChars ? redacted[..MaxOutputChars] : redacted;
-        var preview = AgentXEvent.PreviewForTap(kept, MaxOutputPreview);
+        var preview = Slice(kept, MaxOutputPreview);
         return new ToolEnded(observedAtUtc, callId, name, isError, duration, exit, wireTruncated, tapCut,
             outputTotal, Encoding.UTF8.GetByteCount(kept), preview);
     }
@@ -287,25 +290,23 @@ public sealed class PiEventTap : IDisposable
         var command = Str(root, "command") ?? string.Empty;
         if (command == "get_state")
         {
-            // Engine state reuses the established typed model on the live document.
-            return new EngineStateObserved(observedAtUtc, PiEngineState.FromResponse(document));
+            // Engine state reuses the established typed model on the live document,
+            // with every nested string redacted before the event is constructed.
+            return new EngineStateObserved(observedAtUtc, RedactState(PiEngineState.FromResponse(document)));
         }
 
         if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
         {
-            return DescribeUnknown(root, "response." + command, observedAtUtc);
+            return DescribeUnknown(root, "response." + PiRedaction.TypeToken(command), observedAtUtc);
         }
 
         return command switch
         {
-            "get_session_stats" => new StatsSnapshot(observedAtUtc, Str(data, "sessionId"),
+            "get_session_stats" => new StatsSnapshot(observedAtUtc, PiRedaction.Id(Str(data, "sessionId")),
                 ToolCalls(data), Tokens(data), Cost(data), ContextPercent(data)),
-            "prompt" => new PromptAccepted(observedAtUtc, Str(data, "disposition") ?? string.Empty),
-            "bash" => new BashResult(observedAtUtc,
-                NumOpt(data, "exitCode") is long e ? (int)e : null,
-                Bool(data, "truncated"), Str(data, "fullOutputPath"),
-                PiRedaction.Redact(AgentXEvent.PreviewForTap(Str(data, "output") ?? string.Empty, MaxOutputPreview))),
-            _ => DescribeUnknown(root, "response." + command, observedAtUtc),
+            "prompt" => new PromptAccepted(observedAtUtc, PiRedaction.Disposition(Str(data, "disposition"))),
+            "bash" => DecodeBash(data, observedAtUtc),
+            _ => DescribeUnknown(root, "response." + PiRedaction.TypeToken(command), observedAtUtc),
         };
     }
 
@@ -324,13 +325,23 @@ public sealed class PiEventTap : IDisposable
             {
                 if (names.Count < 24)
                 {
-                    names.Add(property.Name);
+                    names.Add(PiRedaction.FieldName(property.Name));
                 }
             }
         }
 
-        return new OtherEvent(observedAtUtc, type, string.Join(",", names), total);
+        return new OtherEvent(observedAtUtc, PiRedaction.TypeToken(type), string.Join(",", names), total);
     }
+
+    private static PiEngineState RedactState(PiEngineState state) => state with
+    {
+        ModelId = NullIfEmpty(PiRedaction.Model(state.ModelId)),
+        ModelName = NullIfEmpty(PiRedaction.Text(state.ModelName)),
+        Provider = NullIfEmpty(PiRedaction.Text(state.Provider)),
+        SessionId = NullIfEmpty(PiRedaction.Id(state.SessionId)),
+    };
+
+    private static string? NullIfEmpty(string gated) => gated.Length == 0 ? null : gated;
 
     /// <summary>One-line argument summary. Known scalar fields first; otherwise a field count. Never invents values.</summary>
     internal static string ArgSummary(JsonElement root)
@@ -368,6 +379,31 @@ public sealed class PiEventTap : IDisposable
 
         var redacted = PiRedaction.Redact(text);
         return redacted.Length <= max ? redacted : redacted[..max];
+    }
+
+    /// <summary>Cut an already-redacted string without adding markers. Marking belongs to renders.</summary>
+    private static string Slice(string text, int max) => text.Length <= max ? text : text[..max];
+
+    /// <summary>Bounded head of a possibly large output with its true length: slice first, then redact the retained window.</summary>
+    private static (string Head, int Total) OutputHead(string? output, int max)
+    {
+        if (string.IsNullOrEmpty(output))
+        {
+            return (string.Empty, 0);
+        }
+
+        var total = output.Length;
+        var head = total <= max ? output : output[..max];
+        return (PiRedaction.Redact(head), total);
+    }
+
+    private static AgentXEvent DecodeBash(JsonElement data, DateTime observedAtUtc)
+    {
+        var (head, total) = OutputHead(Str(data, "output"), MaxOutputPreview);
+        return new BashResult(observedAtUtc,
+            NumOpt(data, "exitCode") is long e ? (int)e : null,
+            Bool(data, "truncated"), PiRedaction.Path(Str(data, "fullOutputPath")),
+            head, total);
     }
 
     private static (string Kept, int Total, bool Capped) CollectText(JsonElement container, int cap, string field = "content")

@@ -15,8 +15,8 @@ from docs alone; doc-shaped claims are marked "documented, not observed".
   tool starts with argument summaries, streaming text, exit codes, timings,
   session totals. This is the level the GUI binds.
 - **Full trace**: deeper diagnostic evidence and available protocol details.
-  Raw record previews, chunk byte counts, tool-call ids, zero-usage flags,
-  unknown shapes preserved verbatim. Nothing is dropped silently.
+  Redacted content previews, chunk byte counts, tool-call ids, zero-usage flags,
+  unknown-shape metadata (never raw values). Nothing is dropped silently.
 
 ## Directly available (observed on the wire)
 
@@ -52,8 +52,8 @@ from docs alone; doc-shaped claims are marked "documented, not observed".
 - Working directory: launcher-known (Agent X spawns Pi), **not
   protocol-observed**. No `cwd` field appeared in any tool event.
 - File inventory: only inside tool args/result text, tool-specifically.
-  Generic path extraction is heuristic, not verified — the tap keeps args
-  verbatim and summarizes only `command:` / `path:` scalars.
+  Generic path extraction is heuristic, not verified — the tap keeps redacted
+  args (4KB cap) and summarizes only `command:` / `path:` scalars.
 - Live cost/tokens: only via `get_session_stats` polling.
 
 ## Unavailable
@@ -83,9 +83,12 @@ genuinely pending request. The tap never claims pollables it was not handed;
 Every retained string is redacted before storage or broadcast, so all event
 properties, subscriber payloads, and render levels are already safe:
 bearer/basic values, api_key/secret/token/password key=value pairs
-(including ENV_CASE), private-key blocks, and GitHub/OpenAI/Slack/AWS token
-prefixes. Unknown shapes keep metadata only (type, field names, size) —
-never raw values — and unparseable records keep kind and size only.
+(shell, ENV_CASE, and JSON-quoted forms), private-key blocks, and
+GitHub/OpenAI/Slack/AWS token prefixes. Metadata fields (tool names, call
+and session ids, dispositions, model ids, type tokens, property names) are
+redacted then kept only on identifier shape, else withheld. Unknown shapes
+keep metadata only (gated type, gated field names, size) — never raw
+values — and unparseable records keep kind and size only.
 Patterns run in linear time with a keyword fast-path (a 100KB benign field
 decodes instantly). Limits, stated plainly: secrets split across stream
 deltas, bare high-entropy tokens with no scheme or key, and novel schemes
@@ -108,11 +111,16 @@ managed heap delta ~5MB during the burst. Exit status renders as
 
 `PiEvents.cs` (typed records + `VisibilityLevel` + per-level `Render`) and
 `PiEventTap.cs` (subscribe, decode synchronously before document release,
-bounded store of 5000 with counted overflow, per-subscriber fault isolation,
-never throws). Decode rules encode the map above: exit-code key spellings,
-`isError` ≠ exit status, zero-usage policy, verbatim args, capped previews.
-Tests (`PiEventTapTests`, 8, plus `PiTapHardeningTests`, 14 hostile/plumbing/robustness cases) run against a 12-record verbatim fixture taken
-from the live capture (`Fixtures/obs-sample.jsonl`).
+O(1) queue capped at 2000 events AND 512KB retained text with counted
+eviction, per-subscriber fault isolation, never throws). Decode rules encode
+the map above: exit-code key spellings, `isError` ≠ exit status, zero-usage
+policy, redacted args (plain, JSON-quoted, and shell forms), metadata
+identifier gating with fail-closed withholding, three-layer truncation
+marking (wire / capture-cap / display fold with retained counts), and
+windowed message retention (true totals, bounded transient). Tests
+(`PiEventTapTests`, 8, plus `PiTapHardeningTests`, 15, plus
+`PiTapMetadataTests`, 10 metadata/boundary cases) run against a 12-record
+verbatim fixture taken from the live capture (`Fixtures/obs-sample.jsonl`).
 
 ## GUI binding contract
 

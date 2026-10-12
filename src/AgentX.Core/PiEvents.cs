@@ -47,8 +47,24 @@ public abstract record AgentXEvent(DateTime ObservedAtUtc, string EventType)
         return flat.Length <= max ? flat : flat[..max] + "…";
     }
 
-    protected static string TruncationMarker(bool wireTruncated, bool tapTruncated)
-        => wireTruncated || tapTruncated ? "…[truncated]" : string.Empty;
+    protected static string CutSuffix(bool truncated, int omitted)
+    {
+        var suffix = string.Empty;
+        if (truncated)
+        {
+            suffix += "[truncated]";
+        }
+
+        if (omitted > 0)
+        {
+            suffix += $"[+{omitted} chars retained]";
+        }
+
+        return suffix.Length == 0 ? string.Empty : "…" + suffix;
+    }
+
+    protected static int Omitted(int total, int previewLength) => Math.Max(0, total - previewLength);
+
 }
 
 /// <summary>A low-level agent run started.</summary>
@@ -103,8 +119,8 @@ public sealed record TextDelta(DateTime ObservedAtUtc, string Delta, bool TapTru
     public override string? Render(VisibilityLevel level) => level switch
     {
         VisibilityLevel.Compact => null,
-        VisibilityLevel.Detailed => Delta + TruncationMarker(false, TapTruncated),
-        _ => Delta + TruncationMarker(false, TapTruncated),
+        VisibilityLevel.Detailed => Delta + CutSuffix(TapTruncated, 0),
+        _ => Delta + CutSuffix(TapTruncated, 0),
     };
 }
 
@@ -128,8 +144,8 @@ public sealed record ToolStarted(DateTime ObservedAtUtc, string CallId, string T
     public override string? Render(VisibilityLevel level) => level switch
     {
         VisibilityLevel.Compact => null,
-        VisibilityLevel.Detailed => $"Run {ToolName}: {ArgSummary}{TruncationMarker(false, ArgsTruncated)}",
-        _ => $"Run {ToolName} [{ToolCallAnnounced.ShortId(CallId)}]: {ArgSummary}{TruncationMarker(false, ArgsTruncated)}",
+        VisibilityLevel.Detailed => $"Run {ToolName}: {ArgSummary}{CutSuffix(ArgsTruncated, 0)}",
+        _ => $"Run {ToolName} [{ToolCallAnnounced.ShortId(CallId)}]: {ArgSummary}{CutSuffix(ArgsTruncated, 0)}",
     };
 }
 
@@ -147,8 +163,8 @@ public sealed record ToolProgress(DateTime ObservedAtUtc, string CallId, string 
     public override string? Render(VisibilityLevel level) => level switch
     {
         VisibilityLevel.Compact => null,
-        VisibilityLevel.Detailed => $"Partial from {ToolName}: {PartialPreview}{TruncationMarker(false, PartialTruncated)}",
-        _ => $"Partial from {ToolName} [{ToolCallAnnounced.ShortId(CallId)}] ({PartialChars} chars): {PartialPreview}{TruncationMarker(false, PartialTruncated)}",
+        VisibilityLevel.Detailed => $"Partial from {ToolName}: {PartialPreview}{CutSuffix(PartialTruncated, Omitted(PartialChars, PartialPreview.Length))}",
+        _ => $"Partial from {ToolName} [{ToolCallAnnounced.ShortId(CallId)}] ({PartialChars} chars): {PartialPreview}{CutSuffix(PartialTruncated, Omitted(PartialChars, PartialPreview.Length))}",
     };
 }
 
@@ -176,7 +192,7 @@ public sealed record ToolEnded(
             : ExitCode is null ? "completed, exit unknown"
             : "ok";
         var timing = DurationMs is long ms ? $" in {ms} ms" : string.Empty;
-        var marker = TruncationMarker(WireTruncated, TapTruncated);
+        var marker = CutSuffix(WireTruncated || TapTruncated, Omitted(OutputChars, OutputPreview.Length));
         return level switch
         {
             VisibilityLevel.Compact => $"Tool {ToolName}: {status}.{timing}",
@@ -196,9 +212,9 @@ public sealed record AssistantMessage(DateTime ObservedAtUtc, int Chars, string 
 
     public override string? Render(VisibilityLevel level) => level switch
     {
-        VisibilityLevel.Compact => PreviewText,
-        VisibilityLevel.Detailed => PreviewText,
-        _ => $"Assistant message ({Chars} chars): {PreviewText}",
+        VisibilityLevel.Compact => PreviewText + CutSuffix(false, Omitted(Chars, PreviewText.Length)),
+        VisibilityLevel.Detailed => PreviewText + CutSuffix(false, Omitted(Chars, PreviewText.Length)),
+        _ => $"Assistant message ({Chars} chars): {PreviewText}{CutSuffix(false, Omitted(Chars, PreviewText.Length))}",
     };
 }
 
@@ -239,8 +255,8 @@ public sealed record BashChunk(DateTime ObservedAtUtc, string CommandId, string 
     public override string? Render(VisibilityLevel level) => level switch
     {
         VisibilityLevel.Compact => null,
-        VisibilityLevel.Detailed => HeadPreview,
-        _ => $"Bash chunk ({DeltaChars} chars): {HeadPreview}",
+        VisibilityLevel.Detailed => HeadPreview + CutSuffix(false, Omitted(DeltaChars, HeadPreview.Length)),
+        _ => $"Bash chunk ({DeltaChars} chars): {HeadPreview}{CutSuffix(false, Omitted(DeltaChars, HeadPreview.Length))}",
     };
 }
 
@@ -249,7 +265,7 @@ public sealed record BashChunk(DateTime ObservedAtUtc, string CommandId, string 
 /// response; FullOutputPath points at the spilled bytes when present.
 /// </summary>
 public sealed record BashResult(
-    DateTime ObservedAtUtc, int? ExitCode, bool Truncated, string? FullOutputPath, string OutputPreview)
+    DateTime ObservedAtUtc, int? ExitCode, bool Truncated, string? FullOutputPath, string OutputPreview, int OutputChars)
     : AgentXEvent(ObservedAtUtc, "response.bash")
 {
     internal override int RetainedChars() => OutputPreview.Length + (FullOutputPath?.Length ?? 0);
@@ -257,9 +273,9 @@ public sealed record BashResult(
     public override string? Render(VisibilityLevel level) => level switch
     {
         VisibilityLevel.Compact => null,
-        VisibilityLevel.Detailed => $"Bash done (exit: {(ExitCode?.ToString() ?? "unknown")}). {OutputPreview}{TruncationMarker(Truncated, false)}",
+        VisibilityLevel.Detailed => $"Bash done (exit: {(ExitCode?.ToString() ?? "unknown")}). {OutputPreview}{CutSuffix(Truncated, Omitted(OutputChars, OutputPreview.Length))}",
         _ => $"Bash done (exit: {(ExitCode?.ToString() ?? "unknown")}, truncated: {Truncated}, " +
-             $"spill: {FullOutputPath ?? "none"}). {OutputPreview}{TruncationMarker(Truncated, false)}",
+             $"spill: {FullOutputPath ?? "none"}). {OutputPreview}{CutSuffix(Truncated, Omitted(OutputChars, OutputPreview.Length))}",
     };
 }
 

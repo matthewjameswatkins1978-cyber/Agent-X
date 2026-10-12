@@ -146,8 +146,8 @@ public sealed class PiTapHardeningTests
             """{"type":"tool_execution_update","toolCallId":"c3","toolName":"bash","args":{},"partialResult":{"content":[{"type":"text","text":"__BIG__"}]}}""".Replace("__BIG__", big), At));
         Assert.Equal(3000, progress.PartialChars);
         Assert.True(progress.PartialTruncated);
-        Assert.EndsWith("…", progress.PartialPreview);
-        Assert.True(progress.PartialPreview.Length <= 1001);
+        Assert.True(progress.PartialPreview.Length <= 1000);
+        Assert.Contains("[+2000 chars retained]", progress.Render(VisibilityLevel.Detailed));
         Assert.NotNull(progress.Render(VisibilityLevel.Detailed));
         Assert.Null(progress.Render(VisibilityLevel.Compact));
     }
@@ -166,8 +166,8 @@ public sealed class PiTapHardeningTests
             """{"type":"tool_execution_end","toolCallId":"c5","toolName":"bash","isError":false,"result":{"content":[{"type":"text","text":"__HUGE__"}]}}""".Replace("__HUGE__", huge), At));
         Assert.True(tap.TapTruncated);
         Assert.Equal(20000, tap.OutputChars);
-        Assert.EndsWith("…", tap.OutputPreview);
-        Assert.True(tap.OutputPreview.Length <= 2001);
+        Assert.True(tap.OutputPreview.Length <= 2000);
+        Assert.Contains("[+18000 chars retained]", tap.Render(VisibilityLevel.Detailed));
         Assert.Contains("[truncated]", tap.Render(VisibilityLevel.Detailed));
     }
 
