@@ -17,6 +17,18 @@ The core owns the exact imported string, UTF-8 byte count, and compact line star
 3. **Protect Pi behind an Agent X boundary.** Do not patch Pi or make plugins depend on its private internals. Kernel integration remains a later decision after Pi behavior and license/provenance are reviewed.
 4. **Treat rendered rows as a view.** The immutable original text is authoritative; line entries are lazy slices and the UI must not become the data store.
 
+## Conversation feed and session map (feature/agent-x-conversation-ux)
+
+The Pi panel renders a structured `ConversationFeed` (Core, UI-free) instead of
+one rebuild-per-character text box: restored history plus the live turn, tool
+activity, errors and per-run receipts, each row selectable with byte-exact
+copy. Streamed deltas buffer in `StreamingTextAccumulator` and reach the
+screen on a 10 Hz flush; completion reconciles against the authoritative
+returned text. `SessionMapSnapshot` derives current activity, milestones,
+changed files (edit/write calls only, unverified on disk), heuristic test
+commands and error counts — decisions are never inferred. Design details in
+`docs/session-map-design.md`. The transcript import path is untouched.
+
 ## Pi persistent sessions (feature/pi-persistent-sessions)
 
 The GUI now connects to a Pi-native persistent session (`agent-x-main`) in an

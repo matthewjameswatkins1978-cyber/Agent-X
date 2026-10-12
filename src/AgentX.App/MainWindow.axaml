@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:app="using:AgentX.App"
         xmlns:core="using:AgentX.Core"
         x:Class="AgentX.App.MainWindow"
         Title="Agent X — Transcript"
@@ -36,9 +37,41 @@
           <Button Grid.Column="1" x:Name="PiSendButton" Content="Send" Click="SendPrompt_OnClick" />
           <Button Grid.Column="2" x:Name="PiCancelButton" Content="Cancel" Click="CancelPrompt_OnClick" IsEnabled="False" />
         </Grid>
-        <TextBox x:Name="PiResponseBox" IsReadOnly="True" TextWrapping="Wrap"
-                 AcceptsReturn="True" MinHeight="120" MaxHeight="220"
-                 PlaceholderText="Pi's streamed response appears here." FontSize="13" />
+        <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8">
+          <TextBlock Text="Conversation" FontWeight="SemiBold" VerticalAlignment="Center" />
+          <CheckBox Grid.Column="1" x:Name="AutoScrollCheck" Content="Auto-scroll" IsChecked="True" />
+          <Button Grid.Column="2" Content="Copy selected message" Click="CopySelectedMessage_OnClick" />
+          <Button Grid.Column="3" Content="Copy full conversation" Click="CopyFullConversation_OnClick" />
+        </Grid>
+        <ListBox x:Name="ConversationList" MinHeight="160" MaxHeight="300"
+                 SelectionMode="Single">
+          <ListBox.ItemsPanel>
+            <ItemsPanelTemplate>
+              <VirtualizingStackPanel />
+            </ItemsPanelTemplate>
+          </ListBox.ItemsPanel>
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="app:ConversationViewItem">
+              <StackPanel Spacing="2" Margin="6,6">
+                <TextBlock Text="{Binding Header}" Foreground="{Binding RoleBrush}"
+                           FontSize="11" FontWeight="SemiBold" />
+                <SelectableTextBlock Text="{Binding DisplayText}" TextWrapping="Wrap"
+                                         FontSize="13" />
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+        <Expander Header="Session map (current activity, milestones, files, tests)" IsExpanded="False">
+          <StackPanel Spacing="8">
+            <SelectableTextBlock x:Name="SessionMapText" Text="Connect to Pi to build the session map."
+                                   TextWrapping="Wrap" FontSize="12" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="Copy session map" Click="CopySessionMap_OnClick" />
+              <CheckBox x:Name="VerboseMapCheck" Content="Verbose milestones" IsChecked="False"
+                        IsCheckedChanged="VerboseMapCheck_OnChanged" />
+            </StackPanel>
+          </StackPanel>
+        </Expander>
       </StackPanel>
     </Border>
 
