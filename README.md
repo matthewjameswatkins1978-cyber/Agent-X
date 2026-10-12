@@ -1,5 +1,7 @@
 # Agent X
 
+**Release plan:** [Road to 1.0 RC1](docs/roadmap-1-0-rc1.md) (evidence-gated, Windows-first; roadmap is not a release claim).
+
 Agent X is an AI-first, native agent environment. A resident AI should operate the environment through dependable, typed capabilities; the managed Garden will own toolchains and plugin admission. Pi is the protected, initially unmodified agent kernel. Third-party plugins target Agent X rather than Pi internals. Human and AI clients share the same typed operations and verifiable outcomes.
 
 This repository is a deliberately small bootstrap. The first vertical slice is a native Avalonia desktop transcript viewer: import a large packet from the clipboard, index its lines without duplicating the source text, render the line list through a virtualized control, and copy or export the complete original text.
@@ -9,7 +11,7 @@ This repository is a deliberately small bootstrap. The first vertical slice is a
 - GUI prototype: Avalonia 12.1.4, .NET 10, C#.
 - Framework license: MIT. [Avalonia license](https://github.com/AvaloniaUI/Avalonia/blob/main/licence.md)
 - Core import operation and transcript model are independent of Avalonia.
-- The Pi kernel, Garden, resident AI, plugin system, and agent protocol are not implemented yet.
+- A protected Pi 1.1.0 JSONL RPC connection, Pi-native sessions, workspace identity/recovery, conversation feed and Session Map are now merged. The Garden, resident AI and Agent X plugin admission runtime remain deferred. See the RC1 roadmap for release gates and the two active PRs (observability and native desktop shell).
 - A user-run Windows smoke check loaded the 100,000-line view, scrolled to the final rows, and confirmed the copy/export actions completed immediately. Larger packet sizes still need measured verification; see the performance plan below.
 
 ## Build and run
