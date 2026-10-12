@@ -180,6 +180,11 @@ public sealed class ConversationFeed
                 _entries[index] = _entries[index] with { IsStreaming = false };
             }
 
+            // Settling the turn means Pi is no longer working: drop transient
+            // activity here (not only in the host) so no map render — whatever
+            // its call order — can show a stale "working" state once idle.
+            _activity = null;
+
             if (receipt is not null)
             {
                 _entries.Add(new FeedEntry(

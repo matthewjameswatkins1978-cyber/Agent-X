@@ -247,11 +247,14 @@ public partial class MainWindow : Window
             _feed.EndAssistantTurn(_liveSeq, receipt);
             AddMissingReceiptItem();
             UpdateStreamingItem();
-            RebuildSessionMap();
-            var updates = _liveAccumulator?.FlushCount ?? 0;
+            // Settle first, render second: the map must never show a stale
+            // "working" state once Pi is idle (EndAssistantTurn also clears
+            // activity in Core as a backstop).
             PiConnectionState.Text = "Idle";
             PiActivityText.Text = string.Empty;
             _feed.SetActivity(null);
+            RebuildSessionMap();
+            var updates = _liveAccumulator?.FlushCount ?? 0;
             PiRunStatus.Text = $"Last run: {receipt.Display} ({receipt.AssistantChars:N0} chars in {updates:N0} UI updates, {_feed.Count} feed entries.)";
             StatusText.Text = receipt.RunHealthy
                 ? $"Pi replied with {text.Length:N0} characters — healthy run (correctness needs separate acceptance checks)."

@@ -20,7 +20,7 @@ conversation feed stays authoritative and the map never fabricates.
 
 | Row | Source | Honesty label |
 |---|---|---|
-| Current activity | latest `agent_start` / tool / retry event | transient; "idle" when quiet |
+| Current activity | latest `agent_start` / tool / retry event | transient; "idle" when quiet; cleared automatically when a turn settles (`EndAssistantTurn`), so render order cannot strand a stale "working" state |
 | Prompt milestones | user entries | verbatim first line |
 | Tool milestones | `tool_execution_start`/`_end` | name + outcome; failures flagged |
 | Changed files | `edit`/`write` start args with an explicit path | "observed via call, not verified on disk"; `read`/`grep` paths excluded (a read is not a change) |

@@ -105,6 +105,28 @@ public sealed class ConversationFeedTests
     }
 
     [Fact]
+    public void Feed_EndTurn_ClearsActivity_SoSettledMapShowsIdle()
+    {
+        // Settle-transition regression (PR #4 re-review): ending a turn must
+        // drop transient activity in Core, so a map rendered in any host call
+        // order shows idle — never a stale "working" state — once Pi settles.
+        // Covers both the success path (receipt) and the cancel path (null).
+        var feed = new ConversationFeed();
+        feed.SetActivity("Running tool: read…");
+        var completed = feed.BeginAssistantTurn();
+        feed.AppendDelta(completed, "text");
+        feed.EndAssistantTurn(completed, new PiRunReceipt(true, false, 0, 4, 2));
+        Assert.Null(feed.BuildMap().CurrentActivity);
+        Assert.Contains("idle", feed.BuildMap().ToDisplayText(verbose: false), StringComparison.OrdinalIgnoreCase);
+
+        feed.SetActivity("Pi is working…");
+        var cancelled = feed.BeginAssistantTurn();
+        feed.AppendDelta(cancelled, "partial");
+        feed.EndAssistantTurn(cancelled, null);
+        Assert.Null(feed.BuildMap().CurrentActivity);
+    }
+
+    [Fact]
     public void Feed_Activity_TracksWork_StartToolIdle()
     {
         // The session map must show real observed activity, never a stale idle.
