@@ -22,4 +22,8 @@
     <ProjectReference Include="..\..\src\AgentX.Core\AgentX.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Fixtures\*.jsonl" />
+  </ItemGroup>
+
 </Project>
