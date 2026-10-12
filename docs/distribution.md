@@ -17,26 +17,34 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/New-PortableDist.ps1
 
 The script refuses a dirty tree (provenance must match a commit), publishes
 `src/AgentX.App` self-contained for `win-x64` (single-file off, trimmed
-off), stamps `version.txt`, copies `packaging/` notices, zips the folder,
-writes `SHA256SUMS.txt`, then re-extracts and re-hashes to verify, including
+off), stamps `version.txt`, copies `packaging/` notices, zips the folder's
+CONTENTS (so the archive root is the documented layout), writes
+`SHA256SUMS.txt`, then re-extracts and re-hashes to verify, including
 EXACT-path assertions (`app\AgentX.App.exe`, `README.txt`, `NOTICE.txt`,
 `THIRD-PARTY-NOTICES.txt`, `version.txt` at extraction root) plus a guard
 against a wrapper-folder layout, so the README instructions always match a
-real extraction. The archive holds the portable folder's CONTENTS at root.
-Outputs land in `artifacts/dist/` (git-ignored). The script is plain
-PowerShell 5.1-compatible — no packaging frameworks.
+real extraction. Outputs land in `artifacts/dist/` (git-ignored). The
+script is plain PowerShell 5.1-compatible — no packaging frameworks.
 
 Each run embeds a build timestamp and machine name, so output is traceable
 to a commit but NOT proven bit-for-bit reproducible across builds; a new
 hash for identical source is expected until determinism is demonstrated.
 
-Reference build: `AgentX-rc1-d1-20261012-c657b7b-win-x64.zip`
-(74,258,484 bytes zipped, 215,795,423 bytes / 230 files extracted).
+Reference build: `AgentX-rc1-d1-20261012-2d03bf8-win-x64.zip` (built from
+commit `2d03bf8`; 74,240,724 bytes zipped, 215,795,863 bytes / 230 files
+extracted).
 
 ```text
 SHA256SUMS.txt:
-2ce5bb0a5fa37dd67814e33bd29418bd9d6b70c9e91835b0e2135db2e0265e7b  AgentX-rc1-d1-20261012-c657b7b-win-x64.zip
+1c828a66f7ffa3f5dc6ec356d5c96df856f54b2e7c3320030858103a238a4431  AgentX-rc1-d1-20261012-2d03bf8-win-x64.zip
 ```
+
+Verified extraction layout (exact paths at archive root, no wrapper
+folder): `app\AgentX.App.exe` (226 files under `app\`), `README.txt`,
+`NOTICE.txt`, `THIRD-PARTY-NOTICES.txt`, `version.txt`. The script's
+verification asserts these exact paths and fails on a nested-root archive;
+the layout was also checked independently against the ZIP entry list and
+by extracting and launching `app\AgentX.App.exe` from the extracted root.
 
 ## What runs without what
 
@@ -65,8 +73,10 @@ report the true cause; out of scope for packaging — documented in
 ## Measured characteristics (reference build)
 
 - Cold launch to window, isolated profile (redirected LOCALAPPDATA +
-  USERPROFILE, SDK/toolchain scrubbed from PATH): **1560 ms**.
-- Working set at window: **~179 MB** (self-contained runtime + Avalonia).
+  USERPROFILE, SDK/toolchain scrubbed from PATH), launching the extracted
+  reference build's `app\AgentX.App.exe`: **1569 ms**.
+- Working set at window: **~152 MB** (self-contained runtime + Avalonia;
+  ~179 MB on the earlier pre-correction build's equivalent probe).
 - First launch wrote **zero files** to the fresh profile (no prefs,
   sessions, or registry until used).
 - Published `AgentX.Core.dll` connects to real Pi 1.1.0 (ephemeral
@@ -74,8 +84,11 @@ report the true cause; out of scope for packaging — documented in
 
 ## Rollback
 
-1. Close Agent X. 2. Delete the unzipped folder. 3. Optionally delete
-`%LocalAppData%\AgentX` (sessions/workspaces). Nothing else was touched.
+1. Close Agent X. 2. Delete the extracted `app\` folder plus `README.txt`,
+`NOTICE.txt`, `THIRD-PARTY-NOTICES.txt` and `version.txt` (or the
+containing folder if you unzipped into its own new folder). 3. Optionally
+delete `%LocalAppData%\AgentX` (sessions/workspaces). Nothing else was
+touched.
 
 ## NOT VERIFIED / limitations
 
