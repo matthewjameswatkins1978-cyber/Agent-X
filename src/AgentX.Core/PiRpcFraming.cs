@@ -30,7 +30,8 @@ public static class PiRpcFraming
     {
         id = null;
         command = null;
-        if (!record.RootElement.TryGetProperty("type", out var type)
+        if (record.RootElement.ValueKind != JsonValueKind.Object
+            || !record.RootElement.TryGetProperty("type", out var type)
             || type.GetString() != "response")
         {
             return false;

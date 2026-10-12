@@ -166,9 +166,7 @@ public sealed record ToolStarted(DateTime ObservedAtUtc, string CallId, string T
 /// A tool reported a partial result mid-execution. The tap keeps the latest
 /// bounded snapshot per event (partials may replace or append depending on
 /// the tool's contract, which the wire does not state — so the tap never
-/// concatenates across updates).
-/// </summary>
-/// <summary>Latest bounded partial snapshot (never concatenated). RetainedText holds the full captured
+/// concatenates across updates). RetainedText holds the full captured
 /// partial (up to cap); PartialPreview is the display fold. Omitted counts data beyond retention;
 /// stored counts retained data beyond the preview.</summary>
 public sealed record ToolProgress(DateTime ObservedAtUtc, string CallId, string ToolName, string PartialPreview, int PartialChars, bool PartialTruncated, string RetainedText)
