@@ -538,7 +538,7 @@ public sealed class PiEventTap : IDisposable
         Publish(decoded);
     }
 
-    private void Publish(AgentXEvent decoded)
+    internal void Publish(AgentXEvent decoded)
     {
         lock (_gate)
         {
