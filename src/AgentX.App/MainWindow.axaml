@@ -5,7 +5,7 @@
         Title="Agent X — Transcript"
         Width="1100" Height="760" MinWidth="720" MinHeight="480"
         Background="#101318">
-  <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="24" RowSpacing="16">
+  <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" Margin="24" RowSpacing="16">
     <StackPanel Grid.Row="0" Spacing="4">
       <TextBlock Text="Agent X" FontSize="26" FontWeight="SemiBold" />
       <TextBlock Text="A fast, faithful view of the whole conversation." Foreground="#AAB2BF" />
@@ -20,7 +20,27 @@
       <Button Content="Export full text" Click="ExportFullText_OnClick" />
     </WrapPanel>
 
-    <Border Grid.Row="2" BorderBrush="#343B47" BorderThickness="1" CornerRadius="8" Padding="8">
+    <Border Grid.Row="2" BorderBrush="#343B47" BorderThickness="1" CornerRadius="8" Padding="12">
+      <StackPanel Spacing="8">
+        <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+          <TextBlock Text="Pi agent" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+          <TextBlock x:Name="PiConnectionState" Grid.Column="1" Text="Disconnected" Foreground="#AAB2BF" VerticalAlignment="Center" />
+          <Button Grid.Column="2" Content="Connect" Click="ConnectPi_OnClick" />
+          <Button Grid.Column="3" Content="Disconnect" Click="DisconnectPi_OnClick" />
+        </Grid>
+        <TextBlock x:Name="PiModelText" Text="Pi engine not connected." Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />
+        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+          <TextBox x:Name="PiPromptBox" PlaceholderText="Ask Pi anything…" />
+          <Button Grid.Column="1" x:Name="PiSendButton" Content="Send" Click="SendPrompt_OnClick" />
+          <Button Grid.Column="2" x:Name="PiCancelButton" Content="Cancel" Click="CancelPrompt_OnClick" IsEnabled="False" />
+        </Grid>
+        <TextBox x:Name="PiResponseBox" IsReadOnly="True" TextWrapping="Wrap"
+                 AcceptsReturn="True" MinHeight="120" MaxHeight="220"
+                 PlaceholderText="Pi's streamed response appears here." FontSize="13" />
+      </StackPanel>
+    </Border>
+
+    <Border Grid.Row="3" BorderBrush="#343B47" BorderThickness="1" CornerRadius="8" Padding="8">
       <ListBox x:Name="TranscriptList" Background="Transparent" BorderThickness="0">
         <ListBox.ItemsPanel>
           <ItemsPanelTemplate>
@@ -37,7 +57,7 @@
       </ListBox>
     </Border>
 
-    <TextBlock x:Name="StatusText" Grid.Row="3" Text="Copy a packet, then select Paste packet."
+    <TextBlock x:Name="StatusText" Grid.Row="4" Text="Copy a packet, then select Paste packet."
                Foreground="#AAB2BF" TextWrapping="Wrap" />
   </Grid>
 </Window>
