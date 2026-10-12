@@ -14,8 +14,10 @@ public sealed record ConversationMessage(string Role, string Text)
 
 /// <summary>
 /// Outcome of one prompt run. Idle (Pi has no automatic work left) is not the
-/// same as verified: only a settled, non-aborted run with no observed errors
-/// counts as verified.
+/// same as healthy, and healthy is not the same as externally verified: only
+/// a settled, non-aborted run with no observed errors counts as healthy.
+/// Whether the task output passes acceptance checks is a separate question
+/// answered outside this receipt.
 /// </summary>
 public sealed record PiRunReceipt(
     bool Settled,
@@ -24,7 +26,7 @@ public sealed record PiRunReceipt(
     int AssistantChars,
     int MessageCount)
 {
-    public bool Verified => Settled && !Aborted && ErrorCount == 0;
+    public bool RunHealthy => Settled && !Aborted && ErrorCount == 0;
 
     public string Display => !Settled
         ? "Not settled — Pi may still have automatic work pending."
@@ -32,13 +34,13 @@ public sealed record PiRunReceipt(
             ? "Aborted — task did not complete."
             : ErrorCount > 0
                 ? $"Settled with {ErrorCount} problem{(ErrorCount == 1 ? "" : "s")} — review before trusting this answer."
-                : "Verified — settled cleanly with no errors.";
+                : "Healthy — settled cleanly with no observed errors. (Output correctness needs separate acceptance checks.)";
 }
 
 /// <summary>
 /// GUI-facing conversation over a Pi RPC client: loads Pi-native history on
 /// connect, streams new prompts, reports compact tool/error activity, and
-/// issues a verification receipt per run. No UI references; the host marshals
+/// issues a per-run health receipt. No UI references; the host marshals
 /// events to its own thread.
 /// </summary>
 public sealed class PiConversation : IAsyncDisposable
@@ -93,7 +95,7 @@ public sealed class PiConversation : IAsyncDisposable
 
     /// <summary>
     /// Send a prompt and stream assistant text. Returns the streamed text plus
-    /// a verification receipt. Cancellation throws; call RefreshHistoryAsync
+    /// a run-health receipt. Cancellation throws; call RefreshHistoryAsync
     /// afterwards to reconcile partially persisted work.
     /// </summary>
     public async Task<(string Text, PiRunReceipt Receipt)> SendAsync(

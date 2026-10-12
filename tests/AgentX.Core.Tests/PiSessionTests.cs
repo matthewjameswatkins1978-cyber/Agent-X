@@ -1,3 +1,4 @@
+using System.IO.Pipelines;
 using System.Text;
 using System.Text.Json;
 using AgentX.Core;
@@ -90,17 +91,30 @@ public sealed class PiSessionTests
     }
 
     [Fact]
-    public void Receipt_DistinguishesIdleFromVerified()
+    public void Receipt_DistinguishesIdleFromHealthy_AndHealthyFromExternallyVerified()
     {
-        var verified = new PiRunReceipt(Settled: true, Aborted: false, ErrorCount: 0, AssistantChars: 10, MessageCount: 2);
-        Assert.True(verified.Verified);
-        Assert.Contains("Verified", verified.Display, StringComparison.Ordinal);
+        var healthy = new PiRunReceipt(Settled: true, Aborted: false, ErrorCount: 0, AssistantChars: 10, MessageCount: 2);
+        Assert.True(healthy.RunHealthy);
+        Assert.Contains("Healthy", healthy.Display, StringComparison.Ordinal);
 
-        Assert.False(new PiRunReceipt(true, Aborted: true, 0, 0, 0).Verified);
+        Assert.False(new PiRunReceipt(true, Aborted: true, 0, 0, 0).RunHealthy);
         var withErrors = new PiRunReceipt(true, false, 2, 5, 2);
-        Assert.False(withErrors.Verified);
+        Assert.False(withErrors.RunHealthy);
         Assert.Contains("2 problems", withErrors.Display, StringComparison.Ordinal);
-        Assert.False(new PiRunReceipt(false, false, 0, 0, 0).Verified);
+        Assert.False(new PiRunReceipt(false, false, 0, 0, 0).RunHealthy);
+
+        // A healthy run is not external verification of task output: no
+        // receipt wording may claim the task passed acceptance checks.
+        foreach (var receipt in new[]
+        {
+            healthy,
+            new PiRunReceipt(true, Aborted: true, 0, 0, 0),
+            withErrors,
+            new PiRunReceipt(false, false, 0, 0, 0),
+        })
+        {
+            Assert.DoesNotContain("verif", receipt.Display, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     [Fact]
@@ -136,8 +150,10 @@ public sealed class PiSessionTests
     {
         // Simulates GUI close/reopen: a fresh connection restores the persisted
         // exchange via get_messages, parsed by the same code the GUI uses.
+        // The input pipe stays open so no EOF faults the fresh connection.
+        var pipe = new Pipe();
         var written = new MemoryStream();
-        await using var reopened = new PiRpcConnection(Stream.Null, written, leaveOpen: true);
+        await using var reopened = new PiRpcConnection(pipe.Reader.AsStream(), written, leaveOpen: true);
         reopened.Start();
         var load = reopened.SendCommandAsync("get_messages");
         var sentId = await WaitForSentIdAsync(written);
@@ -148,6 +164,7 @@ public sealed class PiSessionTests
         var history = PiConversation.ParseHistory(response);
         Assert.Contains(history, m => m.Role == "user" && m.Text == "Hello Pi");
         Assert.Contains(history, m => m.Role == "assistant" && m.Text.Contains("Hello human"));
+        await pipe.Writer.CompleteAsync();
     }
 
     [Fact]

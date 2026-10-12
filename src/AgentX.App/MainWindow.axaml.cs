@@ -225,14 +225,14 @@ public partial class MainWindow : Window
             PiConnectionState.Text = "Idle";
             PiActivityText.Text = string.Empty;
             PiRunStatus.Text = $"Last run: {receipt.Display} ({receipt.AssistantChars:N0} chars, {receipt.MessageCount} session messages.)";
-            StatusText.Text = receipt.Verified
-                ? $"Pi replied with {_streamedResponse.Length:N0} characters — verified."
+            StatusText.Text = receipt.RunHealthy
+                ? $"Pi replied with {_streamedResponse.Length:N0} characters — healthy run (output not externally verified)."
                 : $"Pi run finished — {receipt.Display}";
         }
         catch (OperationCanceledException)
         {
             PiConnectionState.Text = "Cancelled";
-            PiRunStatus.Text = "Last run: cancelled — no verification. Reconnect state is unchanged; history refreshes on next connect.";
+            PiRunStatus.Text = "Last run: cancelled — not healthy and not verified. Reconnect state is unchanged; history refreshes on next connect.";
             if (_conversation is not null)
             {
                 try
