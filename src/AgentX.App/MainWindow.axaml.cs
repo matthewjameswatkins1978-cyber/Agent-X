@@ -31,10 +31,11 @@ public partial class MainWindow : Window
     // workspace even if the picker selection moved meanwhile. Set on
     // connect, cleared only on disconnect — never by selection changes.
     private AgentXWorkspace? _connectedWorkspace;
-    // Per-workspace feed memory (view state only; Pi sessions persist
-    // server-side). Switching tabs while disconnected snapshots the current
-    // feed and restores the target's — nothing mixes, nothing is lost.
-    private readonly Dictionary<string, FeedEntry[]> _feedMemory = new();
+    // Per-workspace ownership: every identity transition — user tab click
+    // or programmatic reselect after a registry rebuild — flows through one
+    // coordinator, so the guarded switch and the feed-memory sync cannot be
+    // bypassed by a suppressed UI event.
+    private WorkspaceSessionCoordinator _coordinator = null!;
     // Guards against re-entrant UI updates (programmatic reselect, pref sync).
     private bool _suppressTabEvents;
     private bool _syncingPrefs;
@@ -69,6 +70,7 @@ public partial class MainWindow : Window
         _flushTimer.Tick += (_, _) => FlushLive();
         var (prefs, note) = AgentXPreferences.Load(ManagedRoot);
         _prefs = prefs;
+        _coordinator = new WorkspaceSessionCoordinator(_feed, WorkspaceCatalog.LegacyKey);
         ApplyTheme();
         ThemeCombo.ItemsSource = AgentXPreferences.KnownThemes;
         _syncingPrefs = true;
@@ -104,11 +106,63 @@ public partial class MainWindow : Window
             WorkspaceTabs.Items.Add(MakeTab(entry, isConnected: false));
         }
 
-        SelectTab(selectKey ?? WorkspaceCatalog.LegacyKey);
+        // One authoritative transition for programmatic reselects too: a
+        // connected workspace keeps its tab (new registrations never steal
+        // the view), and a disconnected reselect snapshots/restores feeds
+        // exactly like a user click. Suppressed selection alone would skip
+        // all of that and can show the wrong project's history.
+        string target;
+        if (_conversation is not null)
+        {
+            target = _connectedKey ?? WorkspaceCatalog.LegacyKey;
+        }
+        else if (selectKey is not null && TabsContain(selectKey))
+        {
+            target = selectKey;
+        }
+        else
+        {
+            target = WorkspaceCatalog.LegacyKey;
+        }
+
+        var result = _coordinator.RequestTransition(target);
+        SelectTab(_coordinator.ActiveKey);
+        RebuildConversationList();
+        RebuildSessionMap();
+        if (OverviewPanel.IsVisible)
+        {
+            RebuildOverview();
+        }
+
+        UpdateEmptyState();
+        if (!result.Accepted)
+        {
+            StatusText.Text = $"Staying on '{_connectedLabel}' — {result.RefusalReason} Histories never mix.";
+        }
+        else if (_conversation is null && SelectedEntry is { } current)
+        {
+            StatusText.Text = current.IsLegacy
+                ? "Legacy session selected — press Connect."
+                : $"Workspace '{current.Label}' selected — press Connect.";
+        }
+
         if (_catalog.RecoveryError is { } recovery)
         {
             StatusText.Text = recovery;
         }
+    }
+
+    private bool TabsContain(string key)
+    {
+        foreach (var item in WorkspaceTabs.Items)
+        {
+            if (item is TabStripItem tab && (tab.Tag as CatalogEntry)?.Key == key)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static TabStripItem MakeTab(CatalogEntry entry, bool isConnected)
@@ -187,17 +241,18 @@ public partial class MainWindow : Window
             return;
         }
 
-        // A live (or dead-but-assigned) conversation pins its workspace: only
-        // Disconnect frees the tabs. Otherwise a tab click could strand the
-        // old process beside a new one or show the wrong history.
-        if (_conversation is not null && entry.Key != _connectedKey)
+        // Same authoritative path as programmatic reselects: the coordinator
+        // refuses pinned workspaces and syncs feed memory atomically.
+        var result = _coordinator.RequestTransition(entry.Key);
+        if (!result.Accepted)
         {
             StatusText.Text = $"Disconnect from '{_connectedLabel}' before opening '{entry.Label}' — histories never mix.";
-            SelectTab(_connectedKey ?? WorkspaceCatalog.LegacyKey);
+            SelectTab(_coordinator.ActiveKey);
             return;
         }
 
-        SwitchFeedMemory(entry.Key);
+        RebuildConversationList();
+        RebuildSessionMap();
         if (OverviewPanel.IsVisible)
         {
             RebuildOverview();
@@ -210,35 +265,6 @@ public partial class MainWindow : Window
                 ? "Legacy session selected — press Connect."
                 : $"Workspace '{entry.Label}' selected — press Connect.";
         }
-    }
-
-    /// <summary>
-    /// Snapshot the loaded feed under its workspace key and restore the
-    /// target's (or clear when never visited). View state only; Pi sessions
-    /// persist server-side and reload on Connect.
-    /// </summary>
-    private string? _activeKey;
-
-    private void SwitchFeedMemory(string newKey)
-    {
-        if (_activeKey is not null && _activeKey != newKey)
-        {
-            _feedMemory[_activeKey] = _feed.Snapshot().ToArray();
-        }
-
-        _activeKey = newKey;
-        if (_feedMemory.TryGetValue(newKey, out var saved))
-        {
-            _feed.LoadSnapshot(saved);
-        }
-        else
-        {
-            _feed.LoadHistory([]);
-            _feedMemory[newKey] = [];
-        }
-
-        RebuildConversationList();
-        RebuildSessionMap();
     }
 
     // --- Pages: presentation-only switches. ---
@@ -353,7 +379,9 @@ public partial class MainWindow : Window
             var workspace = registry.GetOrRegister(path);
             registry.Save();
             LoadWorkspaceTabs(selectKey: workspace.Slug);
-            StatusText.Text = $"Workspace '{workspace.Slug}' ready — session {workspace.SessionId}. Press Connect.";
+            StatusText.Text = _conversation is not null && workspace.Slug != _connectedKey
+                ? $"Workspace '{workspace.Slug}' registered — disconnect from '{_connectedLabel}' to open it."
+                : $"Workspace '{workspace.Slug}' ready — session {workspace.SessionId}. Press Connect.";
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
@@ -542,10 +570,12 @@ public partial class MainWindow : Window
             _connectedKey = choice.Key;
             _connectedLabel = choice.Label;
             _connectedWorkspace = workspace;
+            _coordinator.NoteConnected(choice.Key);
             PiConnectionState.Text = "Connected";
             PiModelText.Text = DescribeState(state);
             var history = conversation.History;
             _feed.LoadHistory(history);
+            _coordinator.RefreshMemory();
             _feed.SetActivity(null);
             RebuildConversationList();
             RebuildSessionMap();
@@ -1398,6 +1428,7 @@ public partial class MainWindow : Window
         _connectedKey = null;
         _connectedLabel = null;
         _connectedWorkspace = null;
+        _coordinator.NoteDisconnected();
 
         Dispatcher.UIThread.Post(() =>
         {

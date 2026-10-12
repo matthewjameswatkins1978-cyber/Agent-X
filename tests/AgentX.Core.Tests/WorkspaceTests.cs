@@ -525,6 +525,8 @@ public sealed class WorkspaceTests
             var newer = Path.Combine(workspace.SessionDirectory, $"2026-06-01T00-00-00-000Z_{workspace.SessionId}.jsonl");
             File.WriteAllText(older, "old");
             File.WriteAllText(newer, "new-persisted-bytes");
+            File.SetLastWriteTimeUtc(older, new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+            File.SetLastWriteTimeUtc(newer, new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc));
             var found = workspace.FindSessionFile();
             Assert.NotNull(found);
             Assert.Equal(newer, found.Value.Path);

@@ -6,6 +6,23 @@ pristine afterwards (agent-cwd untouched, sessions empty, no registry, no
 preferences file). Screenshots unavailable session-wide (display off);
 evidence is measured UIA geometry + functional assertions + clipboard proofs.
 
+## Ownership repair (PR #10 follow-up, Lucy's P1s)
+
+Programmatic tab reconstruction and the initial selection now flow through
+`WorkspaceSessionCoordinator`, the single authoritative transition (guard +
+feed-memory sync), instead of suppressed bare selection:
+
+- Unit: 7 coordinator regression tests (initial seeding, Legacy-B-Legacy
+  with live-only receipts/notices, refusal while connected, disconnect
+  then switch, same-key no-op, RefreshMemory history pickup, blank keys).
+- Live: Legacy to temp-B round trip preserved the full live feed including
+  the live-only run receipt; refusal while connected reverted selection
+  with the histories-never-mix status and Idle state intact; corrupt
+  `[null]` registry still degrades to legacy-only tabs with the file
+  byte-identical.
+- Add-while-connected keeps the connected tab (code path reviewed; native
+  picker submit remains NOT VERIFIED — manual script stands).
+
 ## Verified live
 
 - **Tabs + pages render.** Workspace tabs (Legacy, ax-nav-a, ax-nav-b —
