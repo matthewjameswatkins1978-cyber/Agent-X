@@ -265,6 +265,76 @@ public sealed class PiRpcTests
     }
 
     [Fact]
+    public async Task ThrowingSubscriber_DoesNotKillReader_OrStrandWaiters()
+    {
+        // Lucy's blocker: a throwing EventReceived observer used to propagate
+        // out of ReadLoopAsync, faulting the background reader without
+        // FailTransport and stranding every outstanding request. The reader
+        // must survive (or fail transport explicitly), remaining observers
+        // must still be notified, and dispatched documents must be released.
+        await using var loop = new Loopback();
+        var connection = loop.Connection;
+
+        connection.EventReceived += (_, _) => throw new InvalidOperationException("boom");
+        var observed = new List<string>();
+        var rawLines = new List<string>();
+        connection.EventReceived += (_, args) =>
+        {
+            lock (observed)
+            {
+                observed.Add(args.EventType);
+                // Read synchronously during dispatch, as the ownership
+                // contract requires; the raw line survives disposal regardless.
+                rawLines.Add(args.RawLine);
+            }
+        };
+        var subscriberErrors = new List<Exception>();
+        connection.SubscriberError += (_, error) =>
+        {
+            lock (subscriberErrors)
+            {
+                subscriberErrors.Add(error);
+            }
+        };
+
+        // Outstanding command and settled waiter, resolved through the real
+        // background reader while the throwing subscriber is attached.
+        var command = connection.SendCommandAsync("get_state");
+        var settled = connection.WaitForSettledAsync();
+        var sentId = await WaitForNextSentIdAsync(loop.Written, linesSeen: 0);
+        await loop.WriteStdoutLineAsync("""{"type":"agent_start"}""");
+        await loop.WriteStdoutLineAsync(
+            "{\"id\":\"" + sentId + "\",\"type\":\"response\",\"command\":\"get_state\",\"success\":true,\"data\":{}}");
+        using var response = await command.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(response.RootElement.GetProperty("success").GetBoolean());
+
+        await loop.WriteStdoutLineAsync("""{"type":"agent_settled","aborted":false}""");
+        Assert.False(await settled.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        // The fault was reported, not hidden; the healthy observer still saw
+        // every event byte-intact despite the thrower running first; the
+        // reader stayed alive throughout. Dispatched documents are released
+        // by the connection after dispatch (rented pool buffers), so the
+        // test pins the synchronous view instead of retaining documents.
+        Assert.Equal(2, connection.SubscriberErrorCount);
+        Assert.Equal(2, subscriberErrors.Count);
+        Assert.IsType<InvalidOperationException>(connection.LastSubscriberError);
+        Assert.Contains("agent_start", Snapshot(observed));
+        Assert.Contains("agent_settled", Snapshot(observed));
+        Assert.Contains("""{"type":"agent_start"}""", Snapshot(rawLines));
+        Assert.Contains("""{"type":"agent_settled","aborted":false}""", Snapshot(rawLines));
+
+        // Reader still healthy: a further command round-trips.
+        var linesSeen = SentLineCount(loop.Written);
+        var second = connection.SendCommandAsync("get_state");
+        var secondId = await WaitForNextSentIdAsync(loop.Written, linesSeen);
+        await loop.WriteStdoutLineAsync(
+            "{\"id\":\"" + secondId + "\",\"type\":\"response\",\"command\":\"get_state\",\"success\":true,\"data\":{}}");
+        using var secondResponse = await second.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(secondResponse.RootElement.GetProperty("success").GetBoolean());
+    }
+
+    [Fact]
     public void FailedCommand_SurfacesCommandAndError()
     {
         const string line = """{"id":"r3","type":"response","command":"set_model","success":false,"error":"Model not found: invalid/model"}""";
@@ -294,11 +364,61 @@ public sealed class PiRpcTests
             Connection.Start();
         }
 
+        /// <summary>Feed one protocol line through the real background reader.</summary>
+        public async Task WriteStdoutLineAsync(string line)
+        {
+            var framed = Encoding.UTF8.GetBytes(line + "\n");
+            await _input.Writer.WriteAsync(framed);
+        }
+
         public async ValueTask DisposeAsync()
         {
             await Connection.DisposeAsync();
             await _input.Writer.CompleteAsync();
             Written.Dispose();
+        }
+    }
+
+    private static int SentLineCount(MemoryStream written)
+    {
+        string text;
+        lock (written)
+        {
+            text = Encoding.UTF8.GetString(written.ToArray());
+        }
+
+        return text.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
+    }
+
+    private static async Task<string> WaitForNextSentIdAsync(MemoryStream written, int linesSeen)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            string text;
+            lock (written)
+            {
+                text = Encoding.UTF8.GetString(written.ToArray());
+            }
+
+            var lines = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            if (lines.Length > linesSeen)
+            {
+                using var record = JsonDocument.Parse(lines[^1]);
+                return record.RootElement.GetProperty("id").GetString()!;
+            }
+
+            await Task.Delay(10);
+        }
+
+        throw new TimeoutException("Timed out waiting for a written RPC command.");
+    }
+
+    private static List<T> Snapshot<T>(List<T> source)
+    {
+        lock (source)
+        {
+            return new List<T>(source);
         }
     }
 
