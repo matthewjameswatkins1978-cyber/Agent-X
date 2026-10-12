@@ -21,6 +21,7 @@ public sealed class PiRpcConnection : IAsyncDisposable
     private Task? _readerTask;
     private long _malformedLines;
     private bool _disposed;
+    private int _eofSignaled;
 
     public PiRpcConnection(Stream input, Stream output, bool leaveOpen = true)
     {
@@ -30,6 +31,13 @@ public sealed class PiRpcConnection : IAsyncDisposable
     }
 
     public event EventHandler<PiRpcEventArgs>? EventReceived;
+
+    /// <summary>
+    /// Raised when the transport dies (stdout EOF or stream error). Pending
+    /// commands are already faulted; event-driven waiters should observe this
+    /// to avoid hanging on records that will never arrive.
+    /// </summary>
+    public event EventHandler<Exception>? TransportFailed;
 
     public long MalformedLineCount => Interlocked.Read(ref _malformedLines);
 
@@ -57,6 +65,10 @@ public sealed class PiRpcConnection : IAsyncDisposable
     {
         ArgumentException.ThrowIfNullOrEmpty(type);
         ObjectDisposedException.ThrowIf(_disposed, this);
+        if (Volatile.Read(ref _eofSignaled) != 0)
+        {
+            throw new PiRpcTransportException("Pi RPC stdout is closed; the connection cannot accept commands.");
+        }
 
         var id = Guid.NewGuid().ToString("N");
         var command = new Dictionary<string, object?> { ["id"] = id, ["type"] = type };
@@ -105,35 +117,59 @@ public sealed class PiRpcConnection : IAsyncDisposable
 
     /// <summary>
     /// Complete when the next agent_settled event arrives. Call only while a run
-    /// is active; returns the event's aborted flag.
+    /// is active; returns the event's aborted flag. Transport failure faults
+    /// the returned task instead of leaving the caller hung.
     /// </summary>
     public Task<bool> WaitForSettledAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Task.FromCanceled<bool>(cancellationToken);
+        }
+
+        if (Volatile.Read(ref _eofSignaled) != 0)
+        {
+            return Task.FromException<bool>(
+                new PiRpcTransportException("Pi RPC stdout is closed; the run will never settle."));
+        }
+
         var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var registration = cancellationToken.Register(() => completion.TrySetCanceled(cancellationToken));
 
         void Handler(object? sender, PiRpcEventArgs args)
         {
             if (PiRpcFraming.IsSettledEvent(args.Record, out var aborted))
             {
-                EventReceived -= Handler;
                 completion.TrySetResult(aborted);
             }
         }
 
-        EventReceived += Handler;
-        if (cancellationToken.IsCancellationRequested)
+        void Fault(object? sender, Exception error)
         {
-            EventReceived -= Handler;
-            return Task.FromCanceled<bool>(cancellationToken);
+            completion.TrySetException(error);
         }
 
-        return completion.Task.ContinueWith(t =>
-        {
-            EventReceived -= Handler;
-            return t.GetAwaiter().GetResult();
-        }, cancellationToken, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        // The registration must live until the wait finishes: disposing it on
+        // method return (as a `using` would) silently disables later
+        // cancellation, and the orphaned handler would leak. Both the
+        // registration and the subscriptions are released in the continuation.
+        EventReceived += Handler;
+        TransportFailed += Fault;
+        var registration = cancellationToken.Register(() => completion.TrySetCanceled(cancellationToken));
+
+        return completion.Task.ContinueWith(
+            static (t, state) =>
+            {
+                var (self, reg, handler, fault) = ((PiRpcConnection, CancellationTokenRegistration, EventHandler<PiRpcEventArgs>, EventHandler<Exception>))state!;
+                self.EventReceived -= handler;
+                self.TransportFailed -= fault;
+                reg.Dispose();
+                return t.GetAwaiter().GetResult();
+            },
+            (this, registration, (EventHandler<PiRpcEventArgs>)Handler, (EventHandler<Exception>)Fault),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     /// <summary>Fail all outstanding commands, e.g. when the process exits.</summary>
@@ -145,6 +181,30 @@ public sealed class PiRpcConnection : IAsyncDisposable
             {
                 completion.TrySetException(error);
             }
+        }
+    }
+
+    /// <summary>
+    /// Fault pending commands and notify event-driven waiters. Used for stdout
+    /// EOF and stream errors so no caller hangs on records that will never arrive.
+    /// </summary>
+    private void FailTransport(Exception error)
+    {
+        if (Interlocked.Exchange(ref _eofSignaled, 1) == 0)
+        {
+            FailPendingCommands(error);
+            try
+            {
+                TransportFailed?.Invoke(this, error);
+            }
+            catch (Exception)
+            {
+                // Subscriber faults must not take down the reader.
+            }
+        }
+        else
+        {
+            FailPendingCommands(error);
         }
     }
 
@@ -200,7 +260,11 @@ public sealed class PiRpcConnection : IAsyncDisposable
                 int read = await _input.ReadAsync(chunk, cancellationToken).ConfigureAwait(false);
                 if (read == 0)
                 {
-                    break; // stdout closed: orderly or crashed shutdown.
+                    // Stdout closed while we may still owe callers responses or
+                    // events: fault them instead of leaving them hung. This
+                    // fires independently of any process-exit notification.
+                    FailTransport(new PiRpcTransportException("Pi RPC stdout closed unexpectedly."));
+                    break;
                 }
 
                 int segmentStart = 0;
@@ -239,7 +303,7 @@ public sealed class PiRpcConnection : IAsyncDisposable
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException)
         {
-            FailPendingCommands(new PiRpcTransportException("Pi RPC stream closed unexpectedly.", ex));
+            FailTransport(new PiRpcTransportException("Pi RPC stream closed unexpectedly.", ex));
         }
     }
 

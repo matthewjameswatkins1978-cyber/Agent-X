@@ -42,6 +42,9 @@ public sealed class PiRpcClient : IAsyncDisposable
 
     public event EventHandler<PiRpcEventArgs>? EventReceived;
 
+    /// <summary>Forwarded when the RPC transport dies (stdout EOF or stream error).</summary>
+    public event EventHandler<Exception>? TransportFailed;
+
     public bool IsRunning => _process is { HasExited: false };
 
     public string? StderrTail
@@ -100,6 +103,7 @@ public sealed class PiRpcClient : IAsyncDisposable
         _process = process;
         _connection = new PiRpcConnection(process.StandardOutput.BaseStream, process.StandardInput.BaseStream, leaveOpen: true);
         _connection.EventReceived += (_, args) => EventReceived?.Invoke(this, args);
+        _connection.TransportFailed += (_, error) => TransportFailed?.Invoke(this, error);
         _connection.Start();
         process.Exited += (_, _) => _connection?.FailPendingCommands(
             new PiRpcTransportException($"Pi exited with code {process.ExitCode}. {StderrTail}"));
@@ -173,7 +177,13 @@ public sealed class PiRpcClient : IAsyncDisposable
             }
         }
 
+        void Fault(object? sender, Exception error)
+        {
+            settled.TrySetException(error);
+        }
+
         EventReceived += Handler;
+        connection.TransportFailed += Fault;
         try
         {
             var disposition = await SendPromptAsync(message, cancellationToken).ConfigureAwait(false);
@@ -189,6 +199,7 @@ public sealed class PiRpcClient : IAsyncDisposable
         finally
         {
             EventReceived -= Handler;
+            connection.TransportFailed -= Fault;
         }
     }
 
