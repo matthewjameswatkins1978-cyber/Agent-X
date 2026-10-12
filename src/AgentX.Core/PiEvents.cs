@@ -214,7 +214,7 @@ public sealed record ToolEnded(
             VisibilityLevel.Compact => $"Tool {ToolName}: {status}.{timing}",
             VisibilityLevel.Detailed => $"Tool {ToolName}: {status}.{timing} {OutputPreview}{marker}",
             _ => $"Tool {ToolName} [{ToolCallAnnounced.ShortId(CallId)}]: {status}.{timing} " +
-                 $"(source {OutputChars} chars / {RetainedBytes} bytes, stored {RetainedText.Length} chars, wire-truncated: {WireTruncated}, tap-truncated: {TapTruncated}) " +
+                 $"(source {OutputChars} chars, stored {RetainedText.Length} chars / {RetainedBytes} UTF-8 bytes, wire-truncated: {WireTruncated}, tap-truncated: {TapTruncated}) " +
                  $"{OutputPreview}{marker}",
         };
     }
