@@ -55,11 +55,16 @@ welcome but adjustable". The per-message display caps (2,000 chars history,
 32,000 live) behave the same way: bounded view, explicit notice, full text
 one copy away.
 
-## Performance contract
+## Performance contract and evidence precision
 
 `BuildMap()` is O(entries) with small constants and runs only on discrete
 events (connect, tool lifecycle, run completion) — never per streamed
 delta. Live deltas flow through `StreamingTextAccumulator` at a 10 Hz UI
-flush; see the benchmark in `ConversationFeedTests`
-(20,000 deltas / ~520 KB: ~1,851 ms naive per-delta rebuild vs ~1 ms
-batched, 10 UI updates).
+flush. The benchmarks are deliberately scoped micro-benchmarks, not GUI
+measurements: the accumulator test covers string batching only (1913 ms
+naive per-delta rebuild vs 1 ms batched for 20,000 deltas / ~520 KB), and
+the feed-path test covers accumulator flush plus feed concatenation
+(50 flushes x 10 KB = 500,000 chars in 6 ms, Core only). Neither includes
+Avalonia layout, selection, clipboard, or visual smoke — those stay behind
+the human smoke gate (connect → send/stream → copy selected/full →
+cancel/reopen/restore) and must not be claimed as verified until exercised.

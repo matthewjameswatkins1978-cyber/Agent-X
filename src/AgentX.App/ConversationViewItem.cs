@@ -12,6 +12,7 @@ namespace AgentX.App;
 public sealed class ConversationViewItem : INotifyPropertyChanged
 {
     private string _displayText;
+    private string _fullText;
 
     public ConversationViewItem(long seq, string role, string header, string displayText, string fullText)
     {
@@ -19,7 +20,7 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
         Role = role;
         Header = header;
         _displayText = displayText;
-        FullText = fullText;
+        _fullText = fullText;
         RoleBrush = RoleBrushes.GetValueOrDefault(role, RoleBrushes["system"]);
     }
 
@@ -29,7 +30,18 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
 
     public string Header { get; }
 
-    public string FullText { get; }
+    public string FullText
+    {
+        get => _fullText;
+        set
+        {
+            if (_fullText != value)
+            {
+                _fullText = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FullText)));
+            }
+        }
+    }
 
     public IBrush RoleBrush { get; }
 

@@ -85,6 +85,113 @@ public sealed class ConversationFeedTests
     }
 
     [Fact]
+    public void Feed_CopySource_FollowsReconcile_AndKeepsCancelPartial()
+    {
+        // GUI copy path reads GetEntryText(seq): completion must serve the
+        // authoritative reconciled text, cancellation the kept partial.
+        var feed = new ConversationFeed();
+        var completed = feed.BeginAssistantTurn();
+        feed.AppendDelta(completed, "streamed chunk");
+        Assert.Equal("streamed chunk", feed.GetEntryText(completed));
+        feed.ReconcileStreamingText(completed, "authoritative full response");
+        feed.EndAssistantTurn(completed, new PiRunReceipt(true, false, 0, 28, 2));
+        Assert.Equal("authoritative full response", feed.GetEntryText(completed));
+
+        var cancelled = feed.BeginAssistantTurn();
+        feed.AppendDelta(cancelled, "partial before cancel");
+        feed.EndAssistantTurn(cancelled, null);
+        Assert.Equal("partial before cancel", feed.GetEntryText(cancelled));
+        Assert.Null(feed.GetEntryText(999_999));
+    }
+
+    [Fact]
+    public void Feed_Activity_TracksWork_StartToolIdle()
+    {
+        // The session map must show real observed activity, never a stale idle.
+        var feed = new ConversationFeed();
+        Assert.Contains("idle", feed.BuildMap().ToDisplayText(verbose: false), StringComparison.OrdinalIgnoreCase);
+        feed.SetActivity("Pi is working…");
+        Assert.Equal("Pi is working…", feed.BuildMap().CurrentActivity);
+        feed.SetActivity("Running tool: read…");
+        Assert.Contains("Running tool: read", feed.BuildMap().ToDisplayText(verbose: false), StringComparison.Ordinal);
+        feed.SetActivity(null);
+        Assert.Null(feed.BuildMap().CurrentActivity);
+        Assert.Contains("idle", feed.BuildMap().ToDisplayText(verbose: false), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Map_ReceiptSummarizes_WithoutAddingErrorEvents()
+    {
+        // An unhealthy receipt with no tool failures: zero error EVENTS,
+        // but the summary stays visible as LastReceipt.
+        var feed = new ConversationFeed();
+        var seq = feed.BeginAssistantTurn();
+        feed.AppendDelta(seq, "text");
+        feed.EndAssistantTurn(seq, new PiRunReceipt(true, false, 1, 4, 2));
+        var map = feed.BuildMap();
+        Assert.Equal(0, map.ErrorCount);
+        Assert.NotNull(map.LastReceipt);
+        Assert.Contains(map.Milestones, m => m.Kind == "receipt");
+
+        // A transport loss is recorded as one error event, never a receipt.
+        feed.AddError("Connection to Pi lost: stdout closed.");
+        map = feed.BuildMap();
+        Assert.Equal(1, map.ErrorCount);
+        Assert.DoesNotContain(map.Milestones, m => m.Kind == "receipt" && m.Seq > seq + 1);
+    }
+
+    [Fact]
+    public void RunProgressSink_DropsLateReports_AcrossRuns()
+    {
+        // Simulates queued Progress callbacks arriving after their run
+        // closed (cancel/complete) and after the next run began: they must
+        // be dropped, never appended into the new run's accumulator.
+        var first = new RunProgressSink();
+        first.Report("run1-a ");
+        Assert.True(first.IsOpen);
+        first.Close(); // run ends (cancel or complete)
+        Assert.False(first.IsOpen);
+        first.Report("run1-LATE "); // delayed callback from the dead run
+        Assert.Equal("run1-a ", first.Accumulator.FlushAndGetCommitted());
+
+        var second = new RunProgressSink(); // next prompt's sink
+        second.Report("run2-a");
+        first.Report("run1-STALER "); // staler still arriving
+        Assert.Equal("run2-a", second.Accumulator.FlushAndGetCommitted());
+        Assert.Equal("run1-a ", first.Accumulator.CommittedText);
+    }
+
+    [Fact]
+    public void FeedPath_BoundedStreaming_StaysExact_WithFewFlushes()
+    {
+        // Bounded companion to the accumulator micro-benchmark: the fuller
+        // Core path (accumulator flush -> feed AppendDelta concatenation),
+        // still excluding Avalonia layout and clipboard. 50 flushes x 10 KB.
+        var sink = new RunProgressSink();
+        var feed = new ConversationFeed();
+        var seq = feed.BeginAssistantTurn();
+        var chunk = new string('y', 10_000);
+        var watch = Stopwatch.StartNew();
+        for (var i = 0; i < 50; i++)
+        {
+            sink.Report(chunk);
+            var flushed = sink.Accumulator.Flush();
+            Assert.NotEmpty(flushed);
+            feed.AppendDelta(seq, flushed);
+        }
+
+        watch.Stop();
+        sink.Close();
+        feed.EndAssistantTurn(seq, null);
+        var text = feed.GetEntryText(seq);
+        Assert.NotNull(text);
+        Assert.Equal(500_000, text.Length);
+        Assert.Equal(new string('y', 500_000), text);
+        Assert.Equal(50, sink.Accumulator.FlushCount);
+        _output.WriteLine($"FEED PATH (Core only, no Avalonia): 50 flushes x 10 KB = {text.Length:N0} chars in {watch.ElapsedMilliseconds} ms.");
+    }
+
+    [Fact]
     public void Feed_Reconcile_ReplacesPartialChunks_WithAuthoritativeText()
     {
         var feed = new ConversationFeed();
@@ -135,7 +242,9 @@ public sealed class ConversationFeedTests
         Assert.Equal(["src/Foo.cs"], map.ChangedFiles); // edit path only; read is not a change.
         Assert.DoesNotContain("src/Foo.cs", map.TestCommands);
         Assert.Single(map.TestCommands); // bash test command observed (heuristic).
-        Assert.Equal(2, map.ErrorCount); // failed tool end + unhealthy receipt.
+        // One failed tool + its summarizing receipt counts as ONE error event:
+        // the receipt summarizes the run, it is not a second failure.
+        Assert.Equal(1, map.ErrorCount);
         Assert.DoesNotContain(map.Milestones, m => m.Kind == "decision"); // Decisions are never inferred.
         Assert.All(map.Milestones, m => Assert.True(m.Seq > 0)); // Every milestone links to feed evidence.
 
@@ -176,10 +285,14 @@ public sealed class ConversationFeedTests
     [Fact]
     public void StreamingBatching_MatchesNaiveText_WithFewFlushes()
     {
-        // Regression benchmark for the per-character UI rebuild this slice
+        // Micro-benchmark for the per-character UI rebuild this slice
         // replaces (MainWindow used to assign TextBox.Text = full ToString()
-        // on every delta). Timings print to test output for the PR record;
-        // the assertions pin exactness and batching, never wall-clock time.
+        // on every delta). Scope is deliberately narrow: it measures the
+        // STRING cost of naive rebuild vs batched accumulation only — not
+        // feed concatenation (see FeedPath_BoundedStreaming), Avalonia
+        // layout, or clipboard. Timings print to test output for the PR
+        // record; the assertions pin exactness and batching, never
+        // wall-clock time.
         const int deltas = 20_000;
         const string delta = "0123456789abcdefghij012345"; // 26 chars -> ~520KB
 
@@ -210,8 +323,8 @@ public sealed class ConversationFeedTests
         Assert.Equal(naive.ToString(), batchedText);
         Assert.Equal(520_000, batchedText.Length);
         Assert.Equal(10, accumulator.FlushCount); // One flush per 2,000-delta batch; the final call finds nothing pending.
-        _output.WriteLine($"NAIVE per-delta ToString: {naiveWatch.ElapsedMilliseconds} ms for {deltas:N0} deltas.");
-        _output.WriteLine($"BATCHED accumulator flush: {batchedWatch.ElapsedMilliseconds} ms for {deltas:N0} deltas in {accumulator.FlushCount} flushes.");
+        _output.WriteLine($"NAIVE per-delta ToString (strings only, no UI): {naiveWatch.ElapsedMilliseconds} ms for {deltas:N0} deltas.");
+        _output.WriteLine($"BATCHED accumulator flush (strings only, no UI): {batchedWatch.ElapsedMilliseconds} ms for {deltas:N0} deltas in {accumulator.FlushCount} flushes.");
     }
 
     private readonly Xunit.Abstractions.ITestOutputHelper _output;

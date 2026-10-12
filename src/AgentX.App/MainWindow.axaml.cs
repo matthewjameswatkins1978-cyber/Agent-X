@@ -177,6 +177,7 @@ public partial class MainWindow : Window
             PiModelText.Text = DescribeState(state);
             var history = conversation.History;
             _feed.LoadHistory(history);
+            _feed.SetActivity(null);
             RebuildConversationList();
             RebuildSessionMap();
             PiRunStatus.Text = history.Count == 0
@@ -227,12 +228,14 @@ public partial class MainWindow : Window
         _liveSeq = _feed.BeginAssistantTurn();
         _conversationItems.Add(ToViewItem(LookupEntry(_liveSeq)));
         MaybeAutoScroll();
-        _liveAccumulator = new StreamingTextAccumulator();
         _promptLifetime = new CancellationTokenSource();
         _flushTimer.Start();
-        // Deltas only buffer here — no UI work per delta. The flush tick
-        // moves them into the feed and appends one chunk to the live view.
-        var progress = new Progress<string>(delta => _liveAccumulator?.Append(delta));
+        // Run-local sink (not a closure over a mutable field): deltas buffer
+        // here with no UI work per delta, and Close retires the run so any
+        // late callback is dropped instead of bleeding into the next run.
+        var sink = new RunProgressSink();
+        _liveAccumulator = sink.Accumulator;
+        IProgress<string> progress = sink;
 
         try
         {
@@ -248,6 +251,7 @@ public partial class MainWindow : Window
             var updates = _liveAccumulator?.FlushCount ?? 0;
             PiConnectionState.Text = "Idle";
             PiActivityText.Text = string.Empty;
+            _feed.SetActivity(null);
             PiRunStatus.Text = $"Last run: {receipt.Display} ({receipt.AssistantChars:N0} chars in {updates:N0} UI updates, {_feed.Count} feed entries.)";
             StatusText.Text = receipt.RunHealthy
                 ? $"Pi replied with {text.Length:N0} characters — healthy run (correctness needs separate acceptance checks)."
@@ -261,8 +265,10 @@ public partial class MainWindow : Window
             var noticeSeq = _feed.AddSystemNotice("Run cancelled — partial streamed text above is kept as-is. History refreshes on next connect.");
             _conversationItems.Add(ToViewItem(LookupEntry(noticeSeq)));
             UpdateStreamingItem();
+            _feed.SetActivity(null);
             RebuildSessionMap();
             PiConnectionState.Text = "Cancelled";
+            PiActivityText.Text = string.Empty;
             PiRunStatus.Text = "Last run: cancelled — run did not complete and earned no health signal. History refreshes on next connect.";
             if (_conversation is not null)
             {
@@ -283,19 +289,32 @@ public partial class MainWindow : Window
             var noticeSeq = _feed.AddSystemNotice($"Pi rejected the prompt: {ex.Error} — partial streamed text above is kept as-is.");
             _conversationItems.Add(ToViewItem(LookupEntry(noticeSeq)));
             UpdateStreamingItem();
+            _feed.SetActivity(null);
+            PiActivityText.Text = string.Empty;
             RebuildSessionMap();
             PiConnectionState.Text = "Idle";
         }
         catch (PiRpcTransportException ex)
         {
             _flushTimer.Stop();
+            // Recorded as an error EVENT, never a synthetic receipt: the run
+            // did not settle and earns no health signal either way.
+            var errorSeq = _feed.AddError($"Connection to Pi lost: {ex.Message}");
+            _conversationItems.Add(ToViewItem(LookupEntry(errorSeq)));
+            _feed.SetActivity(null);
+            RebuildSessionMap();
             PiRunStatus.Text = $"Connection to Pi lost: {ex.Message} — session is persisted, reconnect to restore.";
             await DisconnectPiAsync();
         }
         finally
         {
+            sink.Close(); // Retire this run: late callbacks drop, never reroute.
+            if (ReferenceEquals(_liveAccumulator, sink.Accumulator))
+            {
+                _liveAccumulator = null;
+            }
+
             _piBusy = false;
-            _liveAccumulator = null;
             _liveSeq = -1;
             PiSendButton.IsEnabled = true;
             PiCancelButton.IsEnabled = false;
@@ -384,6 +403,9 @@ public partial class MainWindow : Window
 
         item.DisplayText = FeedEntry.TruncateForDisplay(
             entry.Text.Length == 0 ? "Working…" : entry.Text, LiveDisplayCap);
+        // Keep the copy source in lockstep with the display: copy actions
+        // additionally resolve the authoritative feed text by Seq.
+        item.FullText = entry.Text;
         MaybeAutoScroll();
     }
 
@@ -449,12 +471,15 @@ public partial class MainWindow : Window
             return;
         }
 
-        // Full text, not the truncated display — copying never loses information.
+        // Authoritative Core text by Seq — never the possibly stale view
+        // snapshot: live rows are constructed empty and only the feed sees
+        // every chunk, the completion reconcile and cancellation partials.
+        var text = _feed.GetEntryText(item.Seq) ?? item.FullText;
         var transfer = new DataTransfer();
-        transfer.Add(DataTransferItem.CreateText(item.FullText));
+        transfer.Add(DataTransferItem.CreateText(text));
         await clipboard.SetDataAsync(transfer);
         await clipboard.FlushAsync();
-        StatusText.Text = $"Copied message #{item.Seq} ({item.FullText.Length:N0} chars) byte-for-byte.";
+        StatusText.Text = $"Copied message #{item.Seq} ({text.Length:N0} chars) byte-for-byte.";
     }
 
     private async void CopyFullConversation_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -499,7 +524,13 @@ public partial class MainWindow : Window
     private void Conversation_ActivityChanged(object? sender, string activity)
     {
         // Compact tool/error/processing signal; streamed text flows via the accumulator.
-        Dispatcher.UIThread.Post(() => PiActivityText.Text = activity);
+        Dispatcher.UIThread.Post(() =>
+        {
+            PiActivityText.Text = activity;
+            // The session map shows real observed activity, never stale idle.
+            _feed.SetActivity(string.IsNullOrWhiteSpace(activity) ? null : activity);
+            RebuildSessionMap();
+        });
     }
 
     private void Conversation_ToolActivityChanged(object? sender, PiToolActivity activity)
@@ -539,6 +570,8 @@ public partial class MainWindow : Window
             PiConnectionState.Text = "Disconnected";
             PiModelText.Text = "Pi engine not connected.";
             PiActivityText.Text = string.Empty;
+            _feed.SetActivity(null);
+            RebuildSessionMap();
             PiRunStatus.Text = "Session is persisted — reconnect to restore the conversation.";
         });
     }

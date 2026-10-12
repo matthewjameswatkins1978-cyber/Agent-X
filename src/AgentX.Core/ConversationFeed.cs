@@ -42,8 +42,8 @@ public sealed record SessionMapSnapshot(
         var output = new StringBuilder();
         output.AppendLine($"Current activity: {CurrentActivity ?? "idle"}");
         output.AppendLine(ErrorCount == 0
-            ? "Errors observed: none"
-            : $"Errors observed: {ErrorCount} — review before trusting this answer.");
+            ? "Error events observed: none"
+            : $"Error events observed: {ErrorCount} — review before trusting this answer.");
         if (!string.IsNullOrEmpty(LastReceipt))
         {
             output.AppendLine($"Last run: {LastReceipt}");
@@ -219,6 +219,21 @@ public sealed class ConversationFeed
     }
 
     /// <summary>
+    /// Full text of one entry by Seq, or null when unknown. Copy actions must
+    /// use this (the authoritative Core text), never a possibly stale view
+    /// snapshot: live rows are created empty and only the feed sees every
+    /// chunk, reconcile and cancellation partials.
+    /// </summary>
+    public string? GetEntryText(long seq)
+    {
+        lock (_gate)
+        {
+            var index = _entries.FindIndex(e => e.Seq == seq);
+            return index < 0 ? null : _entries[index].Text;
+        }
+    }
+
+    /// <summary>
     /// Full conversation text with role labels. Message bodies are
     /// byte-preserved; only the labels and newlines are added.
     /// </summary>
@@ -266,7 +281,12 @@ public sealed class ConversationFeed
 
         foreach (var entry in entries)
         {
-            if (entry.IsError)
+            // Error EVENTS count (tool failures, error notices). Receipt rows
+            // only summarize the run (their Display already says "Settled
+            // with N problems"); counting them too would inflate one failure
+            // into two. Transport loss is recorded as an error entry by the
+            // host, never as a synthetic receipt.
+            if (entry.IsError && entry.Role != "receipt")
             {
                 errors++;
             }
