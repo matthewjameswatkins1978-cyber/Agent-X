@@ -10,7 +10,7 @@ namespace AgentX.App;
 public partial class MainWindow : Window
 {
     private TranscriptImportResult? _current;
-    private PiRpcClient? _piClient;
+    private PiConversation? _conversation;
     private CancellationTokenSource? _promptLifetime;
     private readonly StringBuilder _streamedResponse = new();
     private bool _piBusy;
@@ -143,26 +143,33 @@ public partial class MainWindow : Window
 
     private async void ConnectPi_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (_piClient?.IsRunning == true)
+        if (_conversation?.IsConnected == true)
         {
             return;
         }
 
         PiConnectionState.Text = "Connecting…";
-        var client = new PiRpcClient(PiRpcOptions.Default());
-        client.EventReceived += PiClient_EventReceived;
+        var conversation = new PiConversation(new PiRpcClient(PiRpcOptions.Persistent(PiSessionOptions.Default())));
+        conversation.ActivityChanged += Conversation_ActivityChanged;
         try
         {
-            await client.ConnectAsync();
-            _piClient = client;
-            var state = await client.GetStateAsync();
+            // Same persistent Pi-native session on every launch: history is restored below.
+            var state = await conversation.ConnectAsync();
+            _conversation = conversation;
             PiConnectionState.Text = "Connected";
             PiModelText.Text = DescribeState(state);
+            var history = conversation.History;
+            _streamedResponse.Clear();
+            PiResponseBox.Text = PiConversation.FormatHistoryForDisplay(history);
+            PiResponseBox.CaretIndex = 0;
+            PiRunStatus.Text = history.Count == 0
+                ? "New persistent session — no previous conversation."
+                : $"Restored session with {history.Count} message(s). Send a prompt to continue.";
         }
         catch (Exception ex)
         {
-            client.EventReceived -= PiClient_EventReceived;
-            await client.DisposeAsync();
+            conversation.ActivityChanged -= Conversation_ActivityChanged;
+            await conversation.DisposeAsync();
             PiConnectionState.Text = "Connection failed";
             PiModelText.Text = ex.Message;
         }
@@ -180,7 +187,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_piClient?.IsRunning != true)
+        if (_conversation?.IsConnected != true)
         {
             PiResponseBox.Text = "Connect to Pi first.";
             return;
@@ -209,20 +216,34 @@ public partial class MainWindow : Window
 
         try
         {
-            var (text, aborted) = await _piClient.PromptAndWaitAsync(message, progress, _promptLifetime.Token);
+            var (text, receipt) = await _conversation.SendAsync(message, progress, _promptLifetime.Token);
             // Reconcile with the authoritative accumulated text on completion.
             _streamedResponse.Clear();
             _streamedResponse.Append(text);
             PiResponseBox.Text = _streamedResponse.ToString();
             PiResponseBox.CaretIndex = PiResponseBox.Text.Length;
-            PiConnectionState.Text = aborted ? "Finished (aborted)" : "Idle";
-            StatusText.Text = aborted
-                ? "Pi run aborted."
-                : $"Pi replied with {_streamedResponse.Length:N0} characters.";
+            PiConnectionState.Text = "Idle";
+            PiActivityText.Text = string.Empty;
+            PiRunStatus.Text = $"Last run: {receipt.Display} ({receipt.AssistantChars:N0} chars, {receipt.MessageCount} session messages.)";
+            StatusText.Text = receipt.Verified
+                ? $"Pi replied with {_streamedResponse.Length:N0} characters — verified."
+                : $"Pi run finished — {receipt.Display}";
         }
         catch (OperationCanceledException)
         {
             PiConnectionState.Text = "Cancelled";
+            PiRunStatus.Text = "Last run: cancelled — no verification. Reconnect state is unchanged; history refreshes on next connect.";
+            if (_conversation is not null)
+            {
+                try
+                {
+                    await _conversation.RefreshHistoryAsync();
+                }
+                catch (Exception)
+                {
+                    // Best effort: the next connect restores history regardless.
+                }
+            }
         }
         catch (PiRpcCommandException ex)
         {
@@ -233,6 +254,7 @@ public partial class MainWindow : Window
         {
             PiResponseBox.Text = $"Connection to Pi lost: {ex.Message}";
             PiConnectionState.Text = "Disconnected";
+            PiRunStatus.Text = "Session is persisted — reconnect to restore the conversation.";
             await DisconnectPiAsync();
         }
         finally
@@ -254,11 +276,11 @@ public partial class MainWindow : Window
 
         PiConnectionState.Text = "Cancelling…";
         await (_promptLifetime?.CancelAsync() ?? Task.CompletedTask);
-        if (_piClient?.IsRunning == true)
+        if (_conversation?.IsConnected == true)
         {
             try
             {
-                await _piClient.AbortAsync();
+                await _conversation.AbortAsync();
             }
             catch (Exception)
             {
@@ -267,13 +289,10 @@ public partial class MainWindow : Window
         }
     }
 
-    private void PiClient_EventReceived(object? sender, PiRpcEventArgs args)
+    private void Conversation_ActivityChanged(object? sender, string activity)
     {
-        // Lightweight activity signal; streamed text flows via IProgress.
-        if (args.EventType is "agent_start")
-        {
-            Dispatcher.UIThread.Post(() => PiConnectionState.Text = "Working…");
-        }
+        // Compact tool/error/processing signal; streamed text flows via IProgress.
+        Dispatcher.UIThread.Post(() => PiActivityText.Text = activity);
     }
 
     private static string DescribeState(PiEngineState state)
@@ -286,28 +305,30 @@ public partial class MainWindow : Window
             await _promptLifetime.CancelAsync();
         }
 
-        if (_piClient is not null)
+        if (_conversation is not null)
         {
-            _piClient.EventReceived -= PiClient_EventReceived;
-            await _piClient.DisposeAsync();
-            _piClient = null;
+            _conversation.ActivityChanged -= Conversation_ActivityChanged;
+            await _conversation.DisposeAsync();
+            _conversation = null;
         }
 
         Dispatcher.UIThread.Post(() =>
         {
             PiConnectionState.Text = "Disconnected";
             PiModelText.Text = "Pi engine not connected.";
+            PiActivityText.Text = string.Empty;
+            PiRunStatus.Text = "Session is persisted — reconnect to restore the conversation.";
         });
     }
 
     protected override async void OnClosed(EventArgs e)
     {
         base.OnClosed(e);
-        if (_piClient is not null)
+        if (_conversation is not null)
         {
-            _piClient.EventReceived -= PiClient_EventReceived;
-            await _piClient.DisposeAsync();
-            _piClient = null;
+            _conversation.ActivityChanged -= Conversation_ActivityChanged;
+            await _conversation.DisposeAsync();
+            _conversation = null;
         }
 
         _promptLifetime?.Dispose();
