@@ -15,7 +15,11 @@ public partial class MainWindow : Window
     private const int LiveDisplayCap = 32_000;
 
     private TranscriptImportResult? _current;
-    private PiConversation? _conversation;
+    // Volatile: event-reader threads take a guarded snapshot for the
+    // stale-callback check, so tool/activity events never need a UI post
+    // just to ask which conversation is current. All writes stay on the
+    // UI thread (connect assigns, disconnect nulls).
+    private volatile PiConversation? _conversation;
     private CancellationTokenSource? _promptLifetime;
     private bool _piBusy;
 
@@ -55,6 +59,15 @@ public partial class MainWindow : Window
     // rebuilding the full text per character.
     private readonly ConversationFeed _feed = new();
     private readonly ObservableCollection<ConversationViewItem> _conversationItems = new();
+    // Bounded dispatch: feed Changed may fire thousands of times per second
+    // (streaming chunks, tool/detail bursts); at most one sync is ever
+    // queued and each run observes the latest state. No unbounded queue,
+    // no per-event full-history pass.
+    private readonly FeedEventCoalescer _syncCoalescer;
+    // Latest activity text from any thread; the coalesced tick applies it.
+    private volatile string? _pendingActivityText;
+    // Sync ticks executed (evidence for burst behaviour in Overview facts).
+    private long _syncRuns;
     private StreamingTextAccumulator? _liveAccumulator;
     private long _liveSeq = -1;
     private readonly DispatcherTimer _flushTimer;
@@ -74,6 +87,7 @@ public partial class MainWindow : Window
         // thread updates it, on every page, with no scattered call sites.
         _conversationItems.CollectionChanged += (_, _) => UpdateEmptyState();
         _feed.Changed += FeedChanged;
+        _syncCoalescer = new FeedEventCoalescer(work => Dispatcher.UIThread.Post(work));
         _bridge = new FeedBridge(_feed);
         _flushTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _flushTimer.Tick += (_, _) => FlushLive();
@@ -731,6 +745,7 @@ public partial class MainWindow : Window
             // activity in Core as a backstop).
             PiConnectionState.Text = "Idle";
             PiActivityText.Text = string.Empty;
+            _pendingActivityText = null; // Tick applies the stash: clear it too.
             _feed.SetActivity(null);
             RebuildSessionMap();
             RefreshOverviewAndSettings();
@@ -751,6 +766,7 @@ public partial class MainWindow : Window
             RefreshOverviewAndSettings();
             PiConnectionState.Text = "Cancelled";
             PiActivityText.Text = string.Empty;
+            _pendingActivityText = null;
             PiRunStatus.Text = "Last run: cancelled — run did not complete and earned no health signal. History refreshes on next connect.";
             if (_conversation is not null)
             {
@@ -771,6 +787,7 @@ public partial class MainWindow : Window
             _feed.AddSystemNotice($"Pi rejected the prompt: {ex.Error} — partial streamed text above is kept as-is.");
             _feed.SetActivity(null);
             PiActivityText.Text = string.Empty;
+            _pendingActivityText = null;
             RebuildSessionMap();
             RefreshOverviewAndSettings();
             PiConnectionState.Text = "Idle";
@@ -782,6 +799,8 @@ public partial class MainWindow : Window
             // did not settle and earns no health signal either way.
             _feed.AddError($"Connection to Pi lost: {ex.Message}");
             _feed.SetActivity(null);
+            PiActivityText.Text = string.Empty;
+            _pendingActivityText = null;
             RebuildSessionMap();
             RefreshOverviewAndSettings();
             // The conversation is kept (dead process inside) for ReconnectAsync;
@@ -851,6 +870,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void SyncFeedView()
     {
+        _syncRuns++;
         var snapshot = _feed.Snapshot();
         var bySeq = new Dictionary<long, ConversationViewItem>(_conversationItems.Count);
         foreach (var existing in _conversationItems)
@@ -859,6 +879,10 @@ public partial class MainWindow : Window
         }
 
         var follow = false;
+        // Structural = anything derived views must re-read (new rows, tool
+        // closes, reconciles). Pure streaming growth skips the map/overview
+        // rebuild: the tick already shows the text and the live activity.
+        var structural = false;
         foreach (var entry in snapshot)
         {
             if (!bySeq.TryGetValue(entry.Seq, out var item))
@@ -873,6 +897,7 @@ public partial class MainWindow : Window
                 bySeq[entry.Seq] = item;
                 _shownSeq = Math.Max(_shownSeq, entry.Seq);
                 follow = true;
+                structural = true;
             }
             else if (!ReferenceEquals(entry.Text, item.FullText))
             {
@@ -883,7 +908,19 @@ public partial class MainWindow : Window
                 {
                     follow = true;
                 }
+
+                if (!entry.IsStreaming)
+                {
+                    structural = true;
+                }
             }
+        }
+
+        PiActivityText.Text = _pendingActivityText ?? string.Empty;
+        if (structural)
+        {
+            // RefreshOverviewAndSettings rebuilds the map text itself.
+            RefreshOverviewAndSettings();
         }
 
         if (follow)
@@ -902,7 +939,7 @@ public partial class MainWindow : Window
             item.StateBrush = ToolStateBrush(entry);
         }
         var body = entry.IsStreaming && entry.Text.Length == 0 ? "Working…" : entry.Text;
-        item.DisplayText = item.IsExpanded ? entry.Text : FeedEntry.TruncateForDisplay(body, cap);
+        item.DisplayText = item.IsExpanded ? FeedEntry.TruncateExpanded(entry.Text) : FeedEntry.TruncateForDisplay(body, cap);
         if (item.Kind == FeedBlockKind.Assistant && !entry.IsStreaming && entry.Text.Length > 0 && item.Markdown is null)
         {
             item.Markdown = MarkdownLite.Parse(entry.Text);
@@ -920,7 +957,9 @@ public partial class MainWindow : Window
         };
     }
 
-    private void FeedChanged() => Dispatcher.UIThread.Post(SyncFeedView);
+    /// Single bounded entry from feed Changed (any thread): at most one
+    /// sync is ever queued; the run observes the latest snapshot.
+    private void FeedChanged() => _syncCoalescer.Signal(SyncFeedView);
 
     private static readonly Avalonia.Media.IBrush UserBlockBrush =
         new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse(PiPalette.UserBg));
@@ -1074,8 +1113,10 @@ public partial class MainWindow : Window
 
     private void ToolExpand_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        // Explicit user action reveals the full retained text (or folds it
-        // back to the bounded preview). Copy always uses FullText regardless.
+        // Explicit user action reveals the retained text (or folds it back
+        // to the bounded preview). Inline expansion itself is bounded
+        // (100k-line outputs would otherwise freeze rendering); the notice
+        // carries exact totals and copy always uses FullText regardless.
         if ((sender as Button)?.DataContext is not ConversationViewItem item)
         {
             return;
@@ -1084,7 +1125,7 @@ public partial class MainWindow : Window
         item.IsExpanded = !item.IsExpanded;
         if (item.IsExpanded)
         {
-            item.DisplayText = item.FullText;
+            item.DisplayText = FeedEntry.TruncateExpanded(item.FullText);
         }
         else if (_feed.GetEntryText(item.Seq) is { } current)
         {
@@ -1178,7 +1219,7 @@ public partial class MainWindow : Window
         OverviewFactsText.Text =
             $"Entries: {_feed.Count} · error events: {map.ErrorCount} · " +
             $"changed files: {changed} · test commands (heuristic): {tests} · " +
-            $"last run: {map.LastReceipt ?? "none"}.";
+            $"last run: {map.LastReceipt ?? "none"} · view syncs: {_syncRuns:N0}.";
         OverviewMilestones.Children.Clear();
         if (map.Milestones.Count == 0)
         {
@@ -1472,49 +1513,43 @@ public partial class MainWindow : Window
     private void Conversation_ActivityChanged(object? sender, string activity)
     {
         // Stale-callback guard: only the CURRENT conversation may touch the
-        // feed or the map. A queued post from a previous workspace (or a
+        // feed or the map. A queued event from a previous workspace (or a
         // disposed conversation) is dropped, never mixed into the new one.
-        var source = sender as PiConversation;
-        Dispatcher.UIThread.Post(() =>
+        // Runs on the event thread: only lock-protected feed state is
+        // touched here; the coalesced tick applies text and derived views.
+        // No per-event UI post — event bursts collapse into pending syncs.
+        if (!ReferenceEquals(sender, _conversation))
         {
-            if (!ReferenceEquals(source, _conversation))
-            {
-                return;
-            }
+            return;
+        }
 
-            PiActivityText.Text = activity;
-            // The session map shows real observed activity, never stale idle.
-            _feed.SetActivity(string.IsNullOrWhiteSpace(activity) ? null : activity);
-            RebuildSessionMap();
-            RefreshOverviewAndSettings();
-        });
+        _pendingActivityText = activity;
+        // The session map shows real observed activity, never stale idle.
+        _feed.SetActivity(string.IsNullOrWhiteSpace(activity) ? null : activity);
     }
 
     private void Conversation_ToolActivityChanged(object? sender, PiToolActivity activity)
     {
-        var source = sender as PiConversation;
-        Dispatcher.UIThread.Post(() =>
+        // Same stale-callback guard, same thread: feed pairing is
+        // lock-protected and order-safe on the event thread, so tool bursts
+        // need no per-event post either. Derived views (map, milestones)
+        // refresh once in the coalesced tick, not once per tool event.
+        if (!ReferenceEquals(sender, _conversation))
         {
-            if (!ReferenceEquals(source, _conversation))
-            {
-                return;
-            }
+            return;
+        }
 
-            // Feed rows (grouped start/end, detail rows) arrive via the
-            // single SyncFeedView path on feed Changed; this handler only
-            // refreshes derived views.
-            if (activity.IsStart)
-            {
-                _feed.AddToolStart(activity.ToolName, activity.Summary, activity.Path, activity.IsMutating);
-            }
-            else
-            {
-                _feed.AddToolEnd(activity.ToolName, activity.IsError);
-            }
-
-            RebuildSessionMap();
-            RefreshOverviewAndSettings();
-        });
+        // Feed rows (grouped start/end, detail rows) arrive via the
+        // single SyncFeedView path on feed Changed; this handler only
+        // records the pairing-relevant mutation.
+        if (activity.IsStart)
+        {
+            _feed.AddToolStart(activity.ToolName, activity.Summary, activity.Path, activity.IsMutating, activity.CallId);
+        }
+        else
+        {
+            _feed.AddToolEnd(activity.ToolName, activity.IsError, activity.CallId);
+        }
     }
 
     private void Conversation_ConnectionLost(object? sender, Exception error)
@@ -1536,6 +1571,7 @@ public partial class MainWindow : Window
 
             _feed.SetActivity(null);
             PiActivityText.Text = string.Empty;
+            _pendingActivityText = null;
             PiConnectionState.Text = "Connection lost";
             PiRunStatus.Text = "Connection to Pi lost — session is persisted. Press Reconnect to restore.";
             RebuildSessionMap();
@@ -1568,6 +1604,11 @@ public partial class MainWindow : Window
         _connectedLabel = null;
         _connectedWorkspace = null;
         _coordinator.NoteDisconnected();
+        // Session boundary: drop in-flight tool pairing (never rows). A
+        // later reconnect resumes the same session with fresh call IDs;
+        // stale indexes must not pair across the boundary.
+        _feed.AbandonOpenTools();
+        _pendingActivityText = null;
 
         Dispatcher.UIThread.Post(() =>
         {

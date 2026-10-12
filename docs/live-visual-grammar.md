@@ -34,13 +34,25 @@ lightness intent, not claimed bit-exact terminal output.
   violet code spans, green fenced code, violet bullets / numbered lists,
   blue underlined links (no navigation), muted italic quotes, muted rules.
   Parsed once when the turn settles; streaming shows plain text.
-- **Tool operation:** ONE coherent block per call (LIFO start/end match in
-  `ConversationFeed`; orphan ends fall back to separate rows, never lost).
-  Grey while open, green on success, red on failure. Body is monospace with
-  diff tinting (`+` green, `-` red, `@@` yellow; `+++`/`---` headers exempt).
-  Post-run, bodies reconcile to full persisted history text. Over-cap
-  output shows an explicit `Show full output (N chars)` action (never
-  claims availability it lacks); `Show less` folds back.
+- **Tool operation:** ONE coherent block per call, paired by Pi's observed
+  tool-call ID (order-independent, so interleaved same-name calls cannot
+  swap outcomes). Ends without a proven start — unknown ID, ambiguous
+  no-ID close, or a start dropped at a session boundary — stay as separate
+  outcome rows marked "(unverified)", never merged into an unproven
+  invocation. Grey while open, green on success, red on failure. Body is
+  monospace with diff tinting (`+` green, `-` red, `@@` yellow; `+++`/`---`
+  headers exempt). Post-run, bodies reconcile to full persisted history
+  text ONLY under an identity contract (positional name + error agreement
+  per pair; identical texts need no proof). Refusal records one explicit
+  marker row instead of silently skipping. Over-cap output shows an
+  explicit `Show full output (N chars)` action; inline expansion itself is
+  bounded (2000 lines / 100k chars) with exact totals in the notice — copy
+  always uses the full text, so nothing is silently lost.
+- **Dispatch:** feed notifications collapse through a coalescer (at most
+  one sync ever queued; each run observes the latest state). Tool/activity
+  events mutate lock-protected feed state on the event thread with no
+  per-event UI post; derived views (map, milestones) rebuild only on
+  structural ticks, never per keystroke or per tool event.
 - **Bridge detail rows:** muted mono system rows (`[detail shortid]`,
   `[result shortid]` with duration/exit per the observability contract).
 - **Receipts/errors:** one compact muted (receipt) or red-tinted (error)
@@ -51,6 +63,11 @@ lightness intent, not claimed bit-exact terminal output.
 - Copy always uses the authoritative full text (markdown source for
   assistant rows), never the rendered subset.
 - Truncation always carries an explicit preserved notice + char count.
+- Through real Pi 1.1.0, the largest single persisted tool body observed
+  is ~51KB (~1.1k lines — Pi caps persisted output well below 100k
+  lines); it expands inline fully and responsively. The expansion bound
+  guards larger restored/hand-made histories and any future cap change.
+  A true 100k-line input bounds in unit tests with exact totals.
 - `Failed`/`Settled with N problems` wording preserved; no green success
   is ever shown for an unsettled, aborted or errored run.
 - `GetRetainedText` stays unwired at UI level: full-output inspection

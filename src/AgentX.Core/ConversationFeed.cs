@@ -20,6 +20,69 @@ public sealed record FeedEntry(
         => text.Length <= maxChars
             ? text
             : text[..maxChars] + $"… [truncated for display; all {text.Length:N0} chars preserved — copy the message for the full text]";
+
+    /// Explicitly bounded inline expansion for large tool output. Rendering
+    /// one inline per line freezes the UI on 100k-line outputs, so expanded
+    /// display stops at the first bound (lines or chars) with a notice
+    /// carrying the EXACT totals. The source text is never altered — copy
+    /// actions keep using the full text, so nothing is silently lost.
+    public static string TruncateExpanded(string text, int maxLines = 2000, int maxChars = 100_000)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        if (text.Length == 0)
+        {
+            return text;
+        }
+
+        var lines = 0;
+        var cut = -1;
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] == '\n' && ++lines == maxLines)
+            {
+                cut = i + 1;
+                break;
+            }
+        }
+
+        var lineBounded = cut >= 0 && cut < text.Length;
+        var charBounded = text.Length > maxChars;
+        if (!lineBounded && !charBounded)
+        {
+            return text;
+        }
+
+        var shown = lineBounded && cut < maxChars ? text[..cut] : text[..Math.Min(maxChars, text.Length)];
+        var (shownLines, totalLines) = CountLines(shown, text);
+        return shown + $"… [expanded display bounded: showing {shownLines:N0} of {totalLines:N0} lines " +
+            $"({shown.Length:N0} of {text.Length:N0} chars) — copy the message for the full text]";
+    }
+
+    private static (int Shown, int Total) CountLines(string shown, string full)
+    {
+        return (CountContentLines(shown), CountContentLines(full));
+    }
+
+    private static int CountContentLines(string text)
+    {
+        var lines = 0;
+        foreach (var c in text)
+        {
+            if (c == '\n')
+            {
+                lines++;
+            }
+        }
+
+        // A trailing newline terminates the last line rather than starting
+        // an empty one: "a\nb\n" is two lines, not three.
+        if (text.Length > 0 && !text.EndsWith('\n'))
+        {
+            lines++;
+        }
+
+        return lines;
+    }
 }
 
 /// <summary>One session-map row. <see cref="Seq"/> is the evidence link: the feed entry number.</summary>
@@ -69,6 +132,18 @@ public sealed record SessionMapSnapshot(
     }
 }
 
+/// Result of a history-reconcile attempt. Only Applied and InSync leave
+/// rows touched; both skips leave the existing safe output alone
+/// (SkippedAmbiguous additionally records one explicit marker row so the
+/// refusal is visible, not silent).
+public enum ReconcileOutcome
+{
+    Applied,
+    InSync,
+    SkippedCountMismatch,
+    SkippedAmbiguous,
+}
+
 /// <summary>
 /// UI-free ordered conversation feed: restored history plus the live turn,
 /// tool activity, errors and run receipts. The GUI binds a snapshot of this
@@ -81,7 +156,16 @@ public sealed class ConversationFeed
 {
     private readonly Lock _gate = new();
     private readonly List<FeedEntry> _entries = new();
-    private readonly Dictionary<string, Stack<long>> _openTools = new(StringComparer.OrdinalIgnoreCase);
+    // Open starts by Pi's observed call ID (exact identity). Starts whose
+    // wire record carried no ID fall back to per-name stacks, paired only
+    // when unambiguous (see AddToolEnd). Both are pairing indexes only:
+    // rows are the record and are never rewritten by pairing.
+    private readonly Dictionary<string, long> _openByCallId = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Stack<long>> _openByName = new(StringComparer.OrdinalIgnoreCase);
+    // Seqs of end rows written WITHOUT a proven start (orphan, unmatched
+    // ID, or ambiguous no-ID close). They stay as separate outcome rows and
+    // permanently opt out of history reconciliation.
+    private readonly HashSet<long> _unverifiedEnds = new();
     private long _nextSeq = 1;
     private string? _activity;
 
@@ -112,6 +196,7 @@ public sealed class ConversationFeed
         lock (_gate)
         {
             _entries.Clear();
+            AbandonOpenToolsLocked();
             foreach (var message in history)
             {
                 _entries.Add(new FeedEntry(_nextSeq++, message.Role, message.Text));
@@ -133,6 +218,11 @@ public sealed class ConversationFeed
         lock (_gate)
         {
             _entries.Clear();
+            // Feed replacement is a new evidence context: any in-flight
+            // pairing from the previous context is dropped. Restored rows
+            // keep their observed text/notes untouched; a later orphan end
+            // becomes a separate row, never a rewrite of restored history.
+            AbandonOpenToolsLocked();
             _entries.AddRange(entries);
             if (entries.Count > 0)
             {
@@ -208,6 +298,12 @@ public sealed class ConversationFeed
             // its call order — can show a stale "working" state once idle.
             _activity = null;
 
+            // The turn is over: no more ends can arrive for its calls. Drop
+            // any orphan starts so a LATER run's ends can never pop them.
+            // (Ends already processed paired before this ran; a genuinely
+            // late end becomes a separate unverified row, outcome preserved.)
+            AbandonOpenToolsLocked();
+
             if (receipt is not null)
             {
                 _entries.Add(new FeedEntry(
@@ -222,7 +318,7 @@ public sealed class ConversationFeed
         Changed?.Invoke();
     }
 
-    public long AddToolStart(string toolName, string? summary, string? path, bool isMutating)
+    public long AddToolStart(string toolName, string? summary, string? path, bool isMutating, string? callId = null)
     {
         long seq;
         lock (_gate)
@@ -230,13 +326,20 @@ public sealed class ConversationFeed
             seq = _nextSeq++;
             _entries.Add(new FeedEntry(seq, "tool", summary ?? string.Empty,
                 Note: $"started: {toolName}", Path: path, IsMutating: isMutating));
-            if (!_openTools.TryGetValue(toolName, out var stack))
+            if (!string.IsNullOrEmpty(callId))
             {
-                stack = new Stack<long>();
-                _openTools[toolName] = stack;
+                _openByCallId[callId] = seq;
             }
+            else
+            {
+                if (!_openByName.TryGetValue(toolName, out var stack))
+                {
+                    stack = new Stack<long>();
+                    _openByName[toolName] = stack;
+                }
 
-            stack.Push(seq);
+                stack.Push(seq);
+            }
         }
 
         Changed?.Invoke();
@@ -244,20 +347,29 @@ public sealed class ConversationFeed
     }
 
     /// <summary>
-    /// Close one tool operation IN its start row (LIFO per tool name, so
-    /// nested same-name calls still match). The row keeps its summary and
-    /// gains the outcome — one coherent block per operation instead of
-    /// scattered start/finish rows. When no open start exists (missed start,
-    /// late duplicate, restored-then-live mix), falls back to a separate
-    /// end row so the outcome is never lost. Never fabricates: matching is
-    /// by exact tool name only.
+    /// Close one tool operation IN its start row — but ONLY with proven
+    /// identity. Pairing order: (1) Pi's observed call ID against the open
+    /// call-ID index (exact match, order-independent); (2) when the wire
+    /// carried no ID, the per-name stack ONLY if exactly one start of that
+    /// name is open (a single candidate is unambiguous). Anything else —
+    /// unknown ID, several same-name opens with no ID, no open start —
+    /// becomes a separate outcome row marked "(unverified)" so the outcome
+    /// is preserved without attributing it to an unproven invocation.
+    /// Never fabricates, never swaps concurrent same-name outcomes.
     /// </summary>
-    public long AddToolEnd(string toolName, bool isError)
+    public long AddToolEnd(string toolName, bool isError, string? callId = null)
     {
         long? openSeq = null;
         lock (_gate)
         {
-            if (_openTools.TryGetValue(toolName, out var stack) && stack.Count > 0)
+            if (!string.IsNullOrEmpty(callId))
+            {
+                if (_openByCallId.Remove(callId, out var startSeq))
+                {
+                    openSeq = startSeq;
+                }
+            }
+            else if (_openByName.TryGetValue(toolName, out var stack) && stack.Count == 1)
             {
                 openSeq = stack.Pop();
             }
@@ -269,8 +381,48 @@ public sealed class ConversationFeed
             return seq;
         }
 
-        return Add(new FeedEntry(NextSeq(), "tool", isError ? $"Tool {toolName} failed." : $"Tool {toolName} finished.",
-            Note: isError ? $"failed: {toolName}" : $"finished: {toolName}", IsError: isError));
+        return AddUnverifiedEnd(toolName, isError);
+    }
+
+    private long AddUnverifiedEnd(string toolName, bool isError)
+    {
+        var note = isError ? $"failed: {toolName} (unverified)" : $"finished: {toolName} (unverified)";
+        var text = isError
+            ? $"Tool {toolName} failed (outcome not paired to an observed start)."
+            : $"Tool {toolName} finished (outcome not paired to an observed start).";
+        long seq;
+        lock (_gate)
+        {
+            seq = _nextSeq++;
+            _entries.Add(new FeedEntry(seq, "tool", text, Note: note, IsError: isError));
+            _unverifiedEnds.Add(seq);
+        }
+
+        Changed?.Invoke();
+        return seq;
+    }
+
+    /// <summary>
+    /// Drop all in-flight tool pairing state WITHOUT touching rows (session
+    /// boundary: disconnect, workspace switch, feed replacement). Rows keep
+    /// their observed text; later ends become separate unverified rows.
+    /// Same-session ends (cancel, reconnect resume) keep pairing because
+    /// their call IDs are still indexed — abandon only at real boundaries.
+    /// </summary>
+    public void AbandonOpenTools()
+    {
+        lock (_gate)
+        {
+            AbandonOpenToolsLocked();
+        }
+        // No Changed: rows are untouched (pairing indexes only), so no
+        // view refresh is owed. The next real mutation drives the tick.
+    }
+
+    private void AbandonOpenToolsLocked()
+    {
+        _openByCallId.Clear();
+        _openByName.Clear();
     }
 
     private void CloseToolCall(long seq, string toolName, bool isError)
@@ -299,16 +451,15 @@ public sealed class ConversationFeed
 
     /// <summary>
     /// Replace live tool placeholder texts with the full persisted bodies
-    /// from post-run history (same session, same order). Applies ONLY when
-    /// every feed tool entry has exactly one history counterpart — a
-    /// cancelled mid-call run leaves an orphan start, and then nothing is
-    /// touched rather than risk misaligned replacement. History-loaded rows
-    /// already carry full text, so the common case is a silent no-op.
+    /// from post-run history (same session) — ONLY under a demonstrable
+    /// identity contract (see ReconcileOutcome). Equal counts never suffice.
     /// </summary>
-    public void ReconcileToolResults(IReadOnlyList<ConversationMessage> history)
+    public ReconcileOutcome ReconcileToolResults(IReadOnlyList<ConversationMessage> history)
     {
         ArgumentNullException.ThrowIfNull(history);
         List<(int Index, string Text)>? replacements = null;
+        var ambiguous = false;
+        var changed = false;
         lock (_gate)
         {
             var indices = new List<int>();
@@ -331,31 +482,135 @@ public sealed class ConversationFeed
 
             if (indices.Count == 0 || indices.Count != bodies.Count)
             {
-                return;
+                return indices.Count == 0 ? ReconcileOutcome.InSync : ReconcileOutcome.SkippedCountMismatch;
             }
 
-            for (var k = 0; k < indices.Count; k++)
+            // A still-open start can never be proven to match a persisted
+            // result (its end was never observed): refuse outright.
+            foreach (var i in indices)
             {
-                if (_entries[indices[k]].Text != bodies[k])
+                var note = _entries[i].Note;
+                if (note is not null && note.StartsWith("started:", StringComparison.Ordinal))
                 {
-                    replacements ??= new List<(int, string)>();
-                    replacements.Add((indices[k], bodies[k]));
+                    ambiguous = true;
+                    break;
                 }
             }
 
-            if (replacements is not null)
+            // Per positional pair: identical texts need no proof (nothing
+            // changes); any pair needing replacement must agree on tool
+            // name (feed note vs history body header) AND error state.
+            for (var k = 0; k < indices.Count; k++)
+            {
+                var row = _entries[indices[k]];
+                if (row.Text == bodies[k])
+                {
+                    continue;
+                }
+
+                if (!ToolPairAgrees(row, bodies[k]))
+                {
+                    ambiguous = true;
+                    break;
+                }
+
+                replacements ??= new List<(int, string)>();
+                replacements.Add((indices[k], bodies[k]));
+            }
+
+            if (ambiguous)
+            {
+                MarkAmbiguousLocked();
+                changed = true;
+            }
+            else if (replacements is not null)
             {
                 foreach (var (index, text) in replacements)
                 {
                     _entries[index] = _entries[index] with { Text = text };
                 }
+
+                changed = true;
             }
         }
 
-        if (replacements is not null)
+        if (changed)
         {
             Changed?.Invoke();
         }
+
+        return ambiguous ? ReconcileOutcome.SkippedAmbiguous
+            : replacements is not null ? ReconcileOutcome.Applied
+            : ReconcileOutcome.InSync;
+    }
+
+    /// One pair agrees when the feed row's lifecycle note names the same
+    /// tool as the history body's own header with the same error state.
+    /// Restored history rows (no note) can never agree — they only pass via
+    /// the identical-text short-circuit above. Unverified rows carry an
+    /// "(unverified)" name suffix, so they never agree either.
+    private static bool ToolPairAgrees(FeedEntry row, string body)
+    {
+        var feedName = ToolNoteName(row.Note);
+        var identity = ParseHistoryToolIdentity(body);
+        if (feedName is null || identity is null)
+        {
+            return false;
+        }
+
+        return feedName.Equals(identity.Value.Name, StringComparison.OrdinalIgnoreCase)
+            && row.IsError == identity.Value.IsError;
+    }
+
+    /// Identity of a persisted history tool body from its own header:
+    /// "[tool result: NAME]" / "[tool NAME failed]" (FormatToolResult).
+    /// "Ran ..." bash-execution bodies and anything else carry no provable
+    /// name and return null.
+    internal static (string Name, bool IsError)? ParseHistoryToolIdentity(string text)
+    {
+        const string prefix = "[tool ";
+        if (string.IsNullOrEmpty(text) || !text.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var header = text;
+        var newline = header.IndexOfAny(['\r', '\n']);
+        if (newline >= 0)
+        {
+            header = header[..newline];
+        }
+
+        const string resultPrefix = "[tool result: ";
+        if (header.StartsWith(resultPrefix, StringComparison.Ordinal) && header.EndsWith("]", StringComparison.Ordinal))
+        {
+            var name = header[resultPrefix.Length..^1].Trim();
+            return name.Length == 0 ? null : (name, false);
+        }
+
+        const string failedSuffix = " failed]";
+        if (header.EndsWith(failedSuffix, StringComparison.Ordinal))
+        {
+            var name = header[prefix.Length..^failedSuffix.Length].Trim();
+            return name.Length == 0 ? null : (name, true);
+        }
+
+        return null;
+    }
+
+    private const string AmbiguousMarker =
+        "Tool results not paired by identity — kept existing rows unchanged; copy individual tool messages for the full text.";
+
+    private void MarkAmbiguousLocked()
+    {
+        // One marker per ambiguous stretch: repeat post-run reconciles while
+        // the rows stay ambiguous must not stack notices.
+        if (_entries.Count > 0 && _entries[^1].Text == AmbiguousMarker)
+        {
+            return;
+        }
+
+        _entries.Add(new FeedEntry(_nextSeq++, "system", AmbiguousMarker, Note: "reconcile-skipped"));
     }
 
     public long AddError(string text)

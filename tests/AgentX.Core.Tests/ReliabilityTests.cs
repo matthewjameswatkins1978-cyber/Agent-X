@@ -118,11 +118,15 @@ public sealed class ReliabilityTests
             else feed.AddToolEnd("powershell", false);
         }
 
+        // B2 grouping: ends close INTO their start row (one coherent block
+        // per operation), so 5000 ops yield 1667 user + 1667 tool rows (the
+        // final start has no end yet). Map milestones follow rows, not ops.
         var watch = Stopwatch.StartNew();
         var map = feed.BuildMap();
         watch.Stop();
         _output.WriteLine($"MAP-BUILD entries={feed.Count} milestones={map.Milestones.Count} elapsedMs={watch.ElapsedMilliseconds}");
-        Assert.Equal(5000, map.Milestones.Count);
+        Assert.Equal(3334, feed.Count);
+        Assert.Equal(3334, map.Milestones.Count);
         Assert.True(watch.ElapsedMilliseconds < 5000, $"elapsed={watch.ElapsedMilliseconds}ms");
     }
 

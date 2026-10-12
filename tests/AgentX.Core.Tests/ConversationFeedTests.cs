@@ -299,14 +299,93 @@ public sealed class ConversationFeedTests
         Assert.Contains("finished", single.Text, StringComparison.OrdinalIgnoreCase);
         Assert.False(single.IsError);
 
-        // Nested same-name calls match LIFO.
+        // Nested same-name calls WITHOUT observed IDs cannot be paired by
+        // order (ends may arrive in start order): each end stays a separate
+        // unverified outcome row — never a swapped attribution.
         var outer = feed.AddToolStart("bash", "outer", path: null, isMutating: false);
         var inner = feed.AddToolStart("bash", "inner", path: null, isMutating: false);
-        Assert.Equal(inner, feed.AddToolEnd("bash", isError: true));
-        var innerEntry = feed.Snapshot().First(e => e.Seq == inner);
-        Assert.True(innerEntry.IsError);
-        Assert.Equal(outer, feed.AddToolEnd("bash", isError: false));
-        Assert.False(feed.Snapshot().First(e => e.Seq == outer).IsError);
+        var endA = feed.AddToolEnd("bash", isError: true);
+        var endB = feed.AddToolEnd("bash", isError: false);
+        Assert.NotEqual(inner, endA);
+        Assert.NotEqual(outer, endB);
+        var rows = feed.Snapshot();
+        Assert.Equal(5, rows.Count); // read block + outer + inner starts, two separate ends.
+        Assert.Contains(rows, e => e.Seq == endA && e.IsError && e.Note != null && e.Note.Contains("(unverified)", StringComparison.Ordinal));
+        Assert.Contains(rows, e => e.Seq == endB && !e.IsError && e.Note != null && e.Note.Contains("(unverified)", StringComparison.Ordinal));
+        // The starts keep their summaries, unmodified by the ends.
+        Assert.Equal("outer", rows.First(e => e.Seq == outer).Text);
+        Assert.Equal("inner", rows.First(e => e.Seq == inner).Text);
+    }
+
+    [Fact]
+    public void ToolGrouping_CallIds_PairInterleavedSameName_RegardlessOfOrder()
+    {
+        // Two overlapping bash calls whose ends arrive in START order (the
+        // swap case): identity pairing puts each outcome on its own row.
+        var feed = new ConversationFeed();
+        var first = feed.AddToolStart("bash", "first command", path: null, isMutating: false, callId: "call-A");
+        var second = feed.AddToolStart("bash", "second command", path: null, isMutating: false, callId: "call-B");
+        Assert.Equal(first, feed.AddToolEnd("bash", isError: true, callId: "call-A"));
+        Assert.Equal(second, feed.AddToolEnd("bash", isError: false, callId: "call-B"));
+        var rows = feed.Snapshot();
+        Assert.Equal(2, rows.Count);
+        var firstRow = rows.First(e => e.Seq == first);
+        Assert.True(firstRow.IsError);
+        Assert.Contains("first command", firstRow.Text, StringComparison.Ordinal);
+        var secondRow = rows.First(e => e.Seq == second);
+        Assert.False(secondRow.IsError);
+        Assert.Contains("second command", secondRow.Text, StringComparison.Ordinal);
+
+        // Reverse arrival order pairs just as exactly.
+        var feed2 = new ConversationFeed();
+        var a = feed2.AddToolStart("bash", "cmd-a", path: null, isMutating: false, callId: "id-1");
+        var b = feed2.AddToolStart("bash", "cmd-b", path: null, isMutating: false, callId: "id-2");
+        Assert.Equal(b, feed2.AddToolEnd("bash", isError: false, callId: "id-2"));
+        Assert.Equal(a, feed2.AddToolEnd("bash", isError: true, callId: "id-1"));
+        Assert.True(feed2.Snapshot().First(e => e.Seq == a).IsError);
+        Assert.False(feed2.Snapshot().First(e => e.Seq == b).IsError);
+    }
+
+    [Fact]
+    public void ToolGrouping_UnknownCallId_StaysSeparateWithoutLoss()
+    {
+        var feed = new ConversationFeed();
+        feed.AddToolStart("bash", "real", path: null, isMutating: false, callId: "call-real");
+        var seq = feed.AddToolEnd("bash", isError: true, callId: "call-ghost");
+        var rows = feed.Snapshot();
+        Assert.Equal(2, rows.Count);
+        var orphan = rows.First(e => e.Seq == seq);
+        Assert.True(orphan.IsError);
+        Assert.Contains("(unverified)", orphan.Note ?? string.Empty, StringComparison.Ordinal);
+        // The proven start is untouched and still pairable by its own ID.
+        var start = rows.First(e => e.Note == "started: bash");
+        Assert.Equal("real", start.Text);
+    }
+
+    [Fact]
+    public void ToolGrouping_LoadHistory_ClearsPairingAcrossContexts()
+    {
+        var feed = new ConversationFeed();
+        feed.AddToolStart("bash", "workspace A command", path: null, isMutating: false, callId: "call-A");
+        // Workspace switch replaces the feed: A's in-flight pairing is gone.
+        feed.LoadHistory([new ConversationMessage("user", "hello B")]);
+        var seq = feed.AddToolEnd("bash", isError: false, callId: "call-A");
+        var rows = feed.Snapshot();
+        Assert.Equal(2, rows.Count); // Restored user row + separate end row.
+        Assert.Equal("hello B", rows[0].Text);
+        Assert.Contains("(unverified)", rows[1].Note ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ToolGrouping_SettledTurn_AbandonsOrphans()
+    {
+        var feed = new ConversationFeed();
+        feed.AddToolStart("bash", "killed", path: null, isMutating: false, callId: "call-1");
+        feed.EndAssistantTurn(1, receipt: null); // Cancel path settles with no receipt.
+        var seq = feed.AddToolEnd("bash", isError: false, callId: "call-1");
+        var rows = feed.Snapshot();
+        Assert.Equal(2, rows.Count); // Orphan start + separate end, never merged.
+        Assert.Contains("(unverified)", rows.First(e => e.Seq == seq).Note ?? string.Empty, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -318,6 +397,7 @@ public sealed class ConversationFeedTests
         Assert.Equal(seq, entry.Seq);
         Assert.True(entry.IsError);
         Assert.Contains("failed", entry.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("(unverified)", entry.Note ?? string.Empty, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -344,7 +424,7 @@ public sealed class ConversationFeedTests
             new("assistant", "reading"),
             new("tool", "[tool result: read]\nline one\nline two"),
         };
-        feed.ReconcileToolResults(history);
+        Assert.Equal(ReconcileOutcome.Applied, feed.ReconcileToolResults(history));
         Assert.Contains("line one\nline two", feed.Snapshot().Single().Text, StringComparison.Ordinal);
     }
 
@@ -361,11 +441,79 @@ public sealed class ConversationFeedTests
         {
             new("tool", "[tool result: read]\nfull body"),
         };
-        feed.ReconcileToolResults(history);
+        Assert.Equal(ReconcileOutcome.SkippedCountMismatch, feed.ReconcileToolResults(history));
         Assert.Equal(2, feed.Snapshot().Count);
         Assert.DoesNotContain("full body", feed.Snapshot()[0].Text, StringComparison.Ordinal);
-        feed.ReconcileToolResults([]);
+        Assert.DoesNotContain("not paired by identity", string.Join("\n", feed.Snapshot().Select(e => e.Text)), StringComparison.Ordinal);
+        Assert.Equal(ReconcileOutcome.SkippedCountMismatch, feed.ReconcileToolResults([]));
         Assert.Equal(2, feed.Snapshot().Count);
+    }
+
+    [Fact]
+    public void ReconcileTools_RefusesEqualCountMisordered_WithOneMarker()
+    {
+        // Same count, swapped order: names disagree positionally, so nothing
+        // is replaced and one explicit marker records the refusal.
+        var feed = new ConversationFeed();
+        feed.AddToolStart("read", "read it", path: null, isMutating: false);
+        feed.AddToolEnd("read", isError: false);
+        feed.AddToolStart("bash", "run it", path: null, isMutating: false);
+        feed.AddToolEnd("bash", isError: true);
+        var history = new List<ConversationMessage>
+        {
+            new("tool", "[tool bash failed]\nbash body"),
+            new("tool", "[tool result: read]\nread body"),
+        };
+        Assert.Equal(ReconcileOutcome.SkippedAmbiguous, feed.ReconcileToolResults(history));
+        var rows = feed.Snapshot();
+        Assert.Equal(3, rows.Count); // Two tool rows untouched + one marker.
+        Assert.DoesNotContain("bash body", rows[0].Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("read body", rows[1].Text, StringComparison.Ordinal);
+        Assert.Contains("not paired by identity", rows[2].Text, StringComparison.Ordinal);
+        // A repeat refusal while ambiguous must not stack markers.
+        Assert.Equal(ReconcileOutcome.SkippedAmbiguous, feed.ReconcileToolResults(history));
+        Assert.Equal(3, feed.Snapshot().Count);
+    }
+
+    [Fact]
+    public void ReconcileTools_RefusesUnverifiableBodies()
+    {
+        // "Ran ..." bash-execution bodies carry no tool name: unprovable.
+        var feed = new ConversationFeed();
+        feed.AddToolStart("bash", "run it", path: null, isMutating: false);
+        feed.AddToolEnd("bash", isError: false);
+        var history = new List<ConversationMessage>
+        {
+            new("tool", "Ran `run it`\noutput here"),
+        };
+        Assert.Equal(ReconcileOutcome.SkippedAmbiguous, feed.ReconcileToolResults(history));
+        Assert.Equal(2, feed.Snapshot().Count);
+        Assert.DoesNotContain("output here", feed.Snapshot()[0].Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReconcileTools_RefusesOpenStart()
+    {
+        // A still-open start can never match a persisted result, even when
+        // the counts line up.
+        var feed = new ConversationFeed();
+        feed.AddToolStart("bash", "run it", path: null, isMutating: false);
+        var history = new List<ConversationMessage>
+        {
+            new("tool", "[tool result: bash]\nbody"),
+        };
+        Assert.Equal(ReconcileOutcome.SkippedAmbiguous, feed.ReconcileToolResults(history));
+        Assert.Equal(2, feed.Snapshot().Count); // Start row + marker.
+    }
+
+    [Fact]
+    public void ParseHistoryToolIdentity_ReadsPersistedHeaders()
+    {
+        Assert.Equal(("read", false), ConversationFeed.ParseHistoryToolIdentity("[tool result: read]\nbody"));
+        Assert.Equal(("bash", true), ConversationFeed.ParseHistoryToolIdentity("[tool bash failed]\nbody"));
+        Assert.Null(ConversationFeed.ParseHistoryToolIdentity("Ran `cmd`\noutput"));
+        Assert.Null(ConversationFeed.ParseHistoryToolIdentity("plain text"));
+        Assert.Null(ConversationFeed.ParseHistoryToolIdentity("[tool result: ]\nbody"));
     }
 
     [Fact]
@@ -431,6 +579,91 @@ public sealed class ConversationFeedTests
         _output.WriteLine($"BATCHED accumulator flush (strings only, no UI): {batchedWatch.ElapsedMilliseconds} ms for {deltas:N0} deltas in {accumulator.FlushCount} flushes.");
     }
 
+    [Fact]
+    public void FeedBurst_HighRateToolEvents_StayCoherentAndFast()
+    {
+        // 8k mixed mutations incl. 100 interleaved same-name calls closed in
+        // reverse order: identity pairing keeps every outcome on its row.
+        var feed = new ConversationFeed();
+        var watch = Stopwatch.StartNew();
+        const int pairs = 100;
+        for (var i = 0; i < pairs; i++)
+        {
+            feed.AddToolStart("bash", $"command {i}", path: null, isMutating: false, callId: $"call-{i}");
+        }
+
+        for (var i = pairs - 1; i >= 0; i--)
+        {
+            var isError = i % 2 == 0;
+            Assert.Equal(feed.Snapshot().First(e => e.Text == $"command {i}").Seq,
+                feed.AddToolEnd("bash", isError, callId: $"call-{i}"));
+        }
+
+        for (var i = 0; i < 7700; i++)
+        {
+            feed.AddSystemNotice($"detail row {i}");
+        }
+
+        watch.Stop();
+        var rows = feed.Snapshot();
+        Assert.Equal(pairs + 7700, rows.Count);
+        Assert.Equal(50, rows.Count(e => e.Role == "tool" && e.IsError));
+        Assert.Equal(50, rows.Count(e => e.Role == "tool" && !e.IsError));
+        Assert.DoesNotContain(rows, e => (e.Note ?? string.Empty).Contains("(unverified)", StringComparison.Ordinal));
+        _output.WriteLine($"BURST feed mutations: {pairs * 2 + 7700:N0} ops in {watch.ElapsedMilliseconds} ms.");
+    }
+
+    [Fact]
+    public void Expansion_BoundsHundredThousandLines_PreservesSource()
+    {
+        var builder = new StringBuilder(100_000 * 62);
+        for (var i = 0; i < 100_000; i++)
+        {
+            builder.Append("output line ").Append(i.ToString("D6")).Append(" — padding to reach sixty-two chars.\n");
+        }
+
+        var source = builder.ToString();
+        var watch = Stopwatch.StartNew();
+        var display = FeedEntry.TruncateExpanded(source);
+        watch.Stop();
+        Assert.True(display.Length <= 100_000 + 256, $"display={display.Length}");
+        Assert.Contains("of 100,000 lines", display, StringComparison.Ordinal);
+        Assert.Contains(source.Length.ToString("N0"), display, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("copy the message", display, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(100_000, source.Count(c => c == '\n')); // Source untouched.
+        _output.WriteLine($"EXPAND 100k-line bound: source {source.Length:N0} chars -> display {display.Length:N0} chars in {watch.ElapsedMilliseconds} ms.");
+    }
+
+    [Fact]
+    public void Expansion_ShortText_PassesThrough()
+    {
+        Assert.Equal("small", FeedEntry.TruncateExpanded("small"));
+        Assert.Equal(string.Empty, FeedEntry.TruncateExpanded(string.Empty));
+    }
+
+    [Fact]
+    public void Coalescer_BoundsPendingWork_LatestWins()
+    {
+        var queued = new List<Action>();
+        var coalescer = new FeedEventCoalescer(a => queued.Add(a));
+        var runs = new List<int>();
+        for (var i = 0; i < 8000; i++)
+        {
+            var capture = i;
+            coalescer.Signal(() => runs.Add(capture));
+        }
+
+        Assert.Single(queued); // 8k signals collapse to one pending post.
+        queued[0]();
+        Assert.Single(runs);
+        Assert.Equal(7999, runs[0]); // Latest state wins, none lost in transit.
+        queued.Clear();
+        coalescer.Signal(() => runs.Add(-1));
+        Assert.Single(queued);
+        queued[0]();
+        Assert.Equal(2, runs.Count);
+    }
+
     private readonly Xunit.Abstractions.ITestOutputHelper _output;
 
     public ConversationFeedTests(Xunit.Abstractions.ITestOutputHelper output)
@@ -440,7 +673,7 @@ public sealed class ConversationFeedTests
 
     private static void AssertActivity(
         string line, string toolName, string? Path, bool IsMutating, bool IsStart,
-        bool IsError = false, string? SummaryContains = null)
+        bool IsError = false, string? SummaryContains = null, string? CallId = "UNCHECKED")
     {
         using var record = JsonDocument.Parse(line);
         var activity = PiConversation.ParseToolActivity(record);
@@ -450,9 +683,30 @@ public sealed class ConversationFeedTests
         Assert.Equal(IsMutating, activity.IsMutating);
         Assert.Equal(IsStart, activity.IsStart);
         Assert.Equal(IsError, activity.IsError);
+        if (CallId != "UNCHECKED")
+        {
+            Assert.Equal(CallId, activity.CallId);
+        }
         if (SummaryContains is not null)
         {
             Assert.Contains(SummaryContains, activity.Summary ?? string.Empty, StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public void ToolActivity_ParsesCallIds_WithoutFabrication()
+    {
+        AssertActivity("""{"type":"tool_execution_start","toolCallId":"call-abc-123","toolName":"bash","args":{}}""",
+            "bash", Path: null, IsMutating: false, IsStart: true, CallId: "call-abc-123");
+        AssertActivity("""{"type":"tool_execution_end","toolCallId":"call-abc-123","toolName":"bash","isError":false}""",
+            "bash", Path: null, IsMutating: false, IsStart: false, CallId: "call-abc-123");
+        // Absent, empty and oversized IDs all read as null: no pairing key.
+        AssertActivity("""{"type":"tool_execution_start","toolName":"bash","args":{}}""",
+            "bash", Path: null, IsMutating: false, IsStart: true, CallId: null);
+        AssertActivity("""{"type":"tool_execution_end","toolCallId":"","toolName":"bash"}""",
+            "bash", Path: null, IsMutating: false, IsStart: false, CallId: null);
+        var oversized = "{\"type\":\"tool_execution_start\",\"toolCallId\":\"" + new string('x', 200) + "\",\"toolName\":\"bash\",\"args\":{}}";
+        AssertActivity(oversized,
+            "bash", Path: null, IsMutating: false, IsStart: true, CallId: null);
     }
 }
