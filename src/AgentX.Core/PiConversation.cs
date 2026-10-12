@@ -63,15 +63,38 @@ public sealed record PiRunReceipt(
 /// </summary>
 public sealed class PiConversation : IAsyncDisposable
 {
-    private readonly PiRpcClient _client;
+    private readonly Func<PiRpcClient> _clientFactory;
+    private PiRpcClient _client;
     private readonly List<ConversationMessage> _history = new();
     private readonly Lock _historyGate = new();
+    private readonly Lock _clientGate = new();
     private bool _disposed;
+    private int _reconnectCount;
 
+    [Obsolete("Pass a client factory (Func<PiRpcClient>) so ReconnectAsync can replace the process. Single-client reconnect is unsupported.")]
     public PiConversation(PiRpcClient? client = null)
+        : this(RequireFactory(client))
     {
-        _client = client ?? new PiRpcClient(PiRpcOptions.Persistent(PiSessionOptions.Default()));
-        _client.EventReceived += OnClientEvent;
+    }
+
+    private static Func<PiRpcClient> RequireFactory(PiRpcClient? client)
+        => client is null
+            ? () => new PiRpcClient(PiRpcOptions.Persistent(PiSessionOptions.Default()))
+            : throw new ArgumentException(
+                "A fixed client cannot be replaced on reconnect; pass a factory that builds an equivalent client.",
+                nameof(client));
+
+    /// <summary>
+    /// Conversation whose Pi process can be replaced on reconnect: the
+    /// factory must build an equivalent client (same session options) on
+    /// every call. Reconnecting swaps the process while the session —
+    /// Pi-native and persisted — stays put.
+    /// </summary>
+    public PiConversation(Func<PiRpcClient> clientFactory)
+    {
+        _clientFactory = clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
+        _client = _clientFactory();
+        Attach(_client);
     }
 
     /// <summary>Latest compact activity (tool runs, errors, retries). Null when quiet.</summary>
@@ -86,7 +109,113 @@ public sealed class PiConversation : IAsyncDisposable
     /// </summary>
     public event EventHandler<PiToolActivity>? ToolActivityChanged;
 
-    public bool IsConnected => _client.IsRunning;
+    /// <summary>
+    /// Forwarded when the RPC transport dies (stdout EOF or stream error).
+    /// The conversation keeps its restored history; call
+    /// <see cref=\"ReconnectAsync\"/> to attach a fresh process to the same
+    /// persisted session. Raised on the transport thread.
+    /// </summary>
+    public event EventHandler<Exception>? ConnectionLost;
+
+    public bool IsConnected
+    {
+        get
+        {
+            lock (_clientGate)
+            {
+                return !_disposed && _client.IsRunning;
+            }
+        }
+    }
+
+    /// <summary>Successful reconnects since construction. Diagnostic only.</summary>
+    public int ReconnectCount
+    {
+        get
+        {
+            lock (_clientGate)
+            {
+                return _reconnectCount;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Attach a fresh Pi process to the same persisted session after a
+    /// transport failure (or a GUI close). Disposes the old client, builds
+    /// an equivalent one via the factory, reconnects and restores history.
+    /// The old client's restored history is kept until the refresh lands,
+    /// so a failed reconnect never wipes what was already known. Throws
+    /// (leaving the conversation disconnected) when the new process cannot
+    /// start; the host may retry. Never reports interruption as success:
+    /// no receipt is issued here — the interrupted run keeps whatever the
+    /// host recorded, and restored history speaks for itself.
+    /// </summary>
+    public async Task<PiEngineState> ReconnectAsync(CancellationToken cancellationToken = default)
+    {
+        PiRpcClient replacement;
+        lock (_clientGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            replacement = _clientFactory();
+        }
+
+        try
+        {
+            await replacement.ConnectAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            await replacement.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+
+        PiRpcClient previous;
+        lock (_clientGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            previous = _client;
+            _client = replacement;
+            Attach(replacement);
+        }
+
+        Detach(previous);
+        await previous.DisposeAsync().ConfigureAwait(false);
+        await RefreshHistoryAsync(cancellationToken).ConfigureAwait(false);
+        var state = await Client.GetStateAsync(cancellationToken).ConfigureAwait(false);
+        lock (_clientGate)
+        {
+            _reconnectCount++;
+        }
+
+        return state;
+    }
+
+    private PiRpcClient Client
+    {
+        get
+        {
+            lock (_clientGate)
+            {
+                return _client;
+            }
+        }
+    }
+
+    private void Attach(PiRpcClient client)
+    {
+        client.EventReceived += OnClientEvent;
+        client.TransportFailed += OnTransportFailed;
+    }
+
+    private void Detach(PiRpcClient client)
+    {
+        client.EventReceived -= OnClientEvent;
+        client.TransportFailed -= OnTransportFailed;
+    }
+
+    private void OnTransportFailed(object? sender, Exception error)
+        => ConnectionLost?.Invoke(this, error);
 
     public PiRunReceipt? LastReceipt { get; private set; }
 
@@ -103,15 +232,16 @@ public sealed class PiConversation : IAsyncDisposable
 
     public async Task<PiEngineState> ConnectAsync(CancellationToken cancellationToken = default)
     {
+        var client = Client;
         ObjectDisposedException.ThrowIf(_disposed, this);
-        await _client.ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await client.ConnectAsync(cancellationToken).ConfigureAwait(false);
         await RefreshHistoryAsync(cancellationToken).ConfigureAwait(false);
-        return await _client.GetStateAsync(cancellationToken).ConfigureAwait(false);
+        return await client.GetStateAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task RefreshHistoryAsync(CancellationToken cancellationToken = default)
     {
-        using var response = await _client.GetMessagesAsync(cancellationToken).ConfigureAwait(false);
+        using var response = await Client.GetMessagesAsync(cancellationToken).ConfigureAwait(false);
         var parsed = ParseHistory(response);
         lock (_historyGate)
         {
@@ -132,13 +262,14 @@ public sealed class PiConversation : IAsyncDisposable
     {
         ArgumentException.ThrowIfNullOrEmpty(message);
         var errors = 0;
+        var client = Client;
 
         void Counter(object? sender, PiRpcEventArgs args) => CountRunError(args, ref errors);
-        _client.EventReceived += Counter;
+        client.EventReceived += Counter;
         try
         {
-            var (text, aborted) = await _client.PromptAndWaitAsync(message, textProgress, cancellationToken).ConfigureAwait(false);
-            var state = await _client.GetStateAsync(cancellationToken).ConfigureAwait(false);
+            var (text, aborted) = await client.PromptAndWaitAsync(message, textProgress, cancellationToken).ConfigureAwait(false);
+            var state = await client.GetStateAsync(cancellationToken).ConfigureAwait(false);
             var receipt = new PiRunReceipt(
                 Settled: true,
                 Aborted: aborted,
@@ -151,12 +282,12 @@ public sealed class PiConversation : IAsyncDisposable
         }
         finally
         {
-            _client.EventReceived -= Counter;
+            client.EventReceived -= Counter;
         }
     }
 
     public Task AbortAsync(CancellationToken cancellationToken = default)
-        => _client.AbortAsync(cancellationToken);
+        => Client.AbortAsync(cancellationToken);
 
     private void OnClientEvent(object? sender, PiRpcEventArgs args)
     {
@@ -529,13 +660,19 @@ public sealed class PiConversation : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (_disposed)
+        PiRpcClient? client;
+        lock (_clientGate)
         {
-            return;
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            client = _client;
         }
 
-        _disposed = true;
-        _client.EventReceived -= OnClientEvent;
-        await _client.DisposeAsync().ConfigureAwait(false);
+        Detach(client);
+        await client.DisposeAsync().ConfigureAwait(false);
     }
 }

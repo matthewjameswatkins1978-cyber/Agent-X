@@ -18,6 +18,27 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _promptLifetime;
     private bool _piBusy;
 
+    // Workspace identity: one project root, one Pi session, one managed
+    // working directory. Switching requires disconnect first, so histories,
+    // working directories and tool paths can never mix across projects.
+    private WorkspaceRegistry _registry = null!;
+    private readonly List<WorkspaceChoice> _workspaceChoices = new();
+    private string? _connectedKey;
+    private string? _connectedLabel;
+
+    private static string ManagedRoot => PiSessionOptions.Default().ManagedRoot;
+
+    private sealed record WorkspaceChoice(
+        string Key, string Label, string Detail, bool IsLegacy, WorkspaceRegistration? Registration)
+    {
+        public override string ToString() => Label;
+
+        public AgentXWorkspace ToWorkspace(string managedRoot)
+            => IsLegacy || Registration is null
+                ? AgentXWorkspace.Legacy(managedRoot)
+                : new AgentXWorkspace(managedRoot, Registration.Slug, Registration.ProjectRoot, Registration.SessionId);
+    }
+
     // Conversation feed: the Core feed owns the exact text; the observable
     // collection is only the bounded display view. Streamed deltas buffer in
     // the accumulator and reach the screen on a 100 ms flush tick instead of
@@ -34,6 +55,95 @@ public partial class MainWindow : Window
         ConversationList.ItemsSource = _conversationItems;
         _flushTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _flushTimer.Tick += (_, _) => FlushLive();
+        LoadWorkspaceChoices(selectKey: "legacy");
+    }
+
+    // --- Workspace selector: project-aware session identity. ---
+
+    private void LoadWorkspaceChoices(string? selectKey = null)
+    {
+        _workspaceChoices.Clear();
+        var legacy = AgentXWorkspace.Legacy(ManagedRoot);
+        _workspaceChoices.Add(new WorkspaceChoice(
+            "legacy",
+            "Legacy session (agent-x-main)",
+            $"Pre-workspace global session — preserved as-is. Session {legacy.SessionId} in {legacy.WorkingDirectory}.",
+            IsLegacy: true,
+            Registration: null));
+        try
+        {
+            _registry = WorkspaceRegistry.Load(ManagedRoot);
+        }
+        catch (InvalidDataException ex)
+        {
+            _registry = new WorkspaceRegistry(ManagedRoot);
+            StatusText.Text = $"Workspace registry unreadable — legacy session only. File preserved at {WorkspaceRegistry.RegistryPath(ManagedRoot)}: {ex.Message}";
+            WorkspaceCombo.ItemsSource = _workspaceChoices.ToArray();
+            WorkspaceCombo.SelectedIndex = 0;
+            return;
+        }
+
+        foreach (var registration in _registry.List())
+        {
+            var name = Path.GetFileName(registration.ProjectRoot.TrimEnd(Path.DirectorySeparatorChar));
+            if (string.IsNullOrEmpty(name))
+            {
+                name = registration.Slug;
+            }
+
+            _workspaceChoices.Add(new WorkspaceChoice(
+                registration.Slug,
+                $"{name} ({registration.Slug})",
+                $"{registration.ProjectRoot} — session {registration.SessionId}.",
+                IsLegacy: false,
+                Registration: registration));
+        }
+
+        WorkspaceCombo.ItemsSource = _workspaceChoices.ToArray();
+        var index = _workspaceChoices.FindIndex(c => c.Key == selectKey);
+        WorkspaceCombo.SelectedIndex = index >= 0 ? index : 0;
+    }
+
+    private WorkspaceChoice? SelectedChoice => WorkspaceCombo.SelectedItem as WorkspaceChoice;
+
+    private void WorkspaceCombo_OnChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (SelectedChoice is { } choice)
+        {
+            WorkspaceDetailText.Text = choice.Detail;
+        }
+    }
+
+    private async void AddWorkspace_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        var folders = await StorageProvider.OpenFolderPickerAsync(new Avalonia.Platform.Storage.FolderPickerOpenOptions
+        {
+            Title = "Select project folder",
+            AllowMultiple = false,
+        });
+        if (folders.Count == 0)
+        {
+            return;
+        }
+
+        var path = folders[0].TryGetLocalPath();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            StatusText.Text = "Could not resolve a local path for the selected folder.";
+            return;
+        }
+
+        try
+        {
+            var workspace = _registry.GetOrRegister(path);
+            _registry.Save();
+            LoadWorkspaceChoices(selectKey: workspace.Slug);
+            StatusText.Text = $"Workspace '{workspace.Slug}' ready — session {workspace.SessionId}. Press Connect.";
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            StatusText.Text = $"Cannot add workspace: {ex.Message}";
+        }
     }
 
     private async void PastePacket_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -161,18 +271,33 @@ public partial class MainWindow : Window
     {
         if (_conversation?.IsConnected == true)
         {
+            if (SelectedChoice?.Key != _connectedKey)
+            {
+                StatusText.Text = "Disconnect before switching workspaces — histories never mix.";
+            }
+
             return;
         }
 
+        if (SelectedChoice is not { } choice)
+        {
+            StatusText.Text = "Select a workspace first.";
+            return;
+        }
+
+        var workspace = choice.ToWorkspace(ManagedRoot);
         PiConnectionState.Text = "Connecting…";
-        var conversation = new PiConversation(new PiRpcClient(PiRpcOptions.Persistent(PiSessionOptions.Default())));
+        var conversation = new PiConversation(() => new PiRpcClient(workspace.ToPiRpcOptions()));
         conversation.ActivityChanged += Conversation_ActivityChanged;
         conversation.ToolActivityChanged += Conversation_ToolActivityChanged;
+        conversation.ConnectionLost += Conversation_ConnectionLost;
         try
         {
-            // Same persistent Pi-native session on every launch: history is restored below.
+            // This workspace's Pi-native session, resumed by stable session id.
             var state = await conversation.ConnectAsync();
             _conversation = conversation;
+            _connectedKey = choice.Key;
+            _connectedLabel = choice.Label;
             PiConnectionState.Text = "Connected";
             PiModelText.Text = DescribeState(state);
             var history = conversation.History;
@@ -181,13 +306,14 @@ public partial class MainWindow : Window
             RebuildConversationList();
             RebuildSessionMap();
             PiRunStatus.Text = history.Count == 0
-                ? "New persistent session — no previous conversation."
-                : $"Restored session with {history.Count} message(s). Send a prompt to continue.";
+                ? $"New session for '{choice.Label}' — no previous conversation."
+                : $"Restored '{choice.Label}' with {history.Count} message(s). Send a prompt to continue.";
         }
         catch (Exception ex)
         {
             conversation.ActivityChanged -= Conversation_ActivityChanged;
             conversation.ToolActivityChanged -= Conversation_ToolActivityChanged;
+            conversation.ConnectionLost -= Conversation_ConnectionLost;
             await conversation.DisposeAsync();
             PiConnectionState.Text = "Connection failed";
             PiModelText.Text = ex.Message;
@@ -197,6 +323,50 @@ public partial class MainWindow : Window
     private async void DisconnectPi_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         await DisconnectPiAsync();
+    }
+
+    private async void ReconnectPi_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        var conversation = _conversation;
+        if (conversation is null)
+        {
+            StatusText.Text = "Connect to Pi first — nothing to reconnect.";
+            return;
+        }
+
+        if (_piBusy)
+        {
+            StatusText.Text = "A run is in progress — cancel it before reconnecting.";
+            return;
+        }
+
+        if (conversation.IsConnected)
+        {
+            StatusText.Text = "Already connected — nothing to reconnect.";
+            return;
+        }
+
+        PiConnectionState.Text = "Reconnecting…";
+        try
+        {
+            var state = await conversation.ReconnectAsync();
+            PiConnectionState.Text = "Connected";
+            PiModelText.Text = DescribeState(state);
+            // The feed keeps whatever it already holds (including any
+            // preserved partial text); the notice records the restore truth.
+            var noticeSeq = _feed.AddSystemNotice(
+                $"Reconnected — restored {conversation.History.Count} session message(s) (reconnect #{conversation.ReconnectCount}). Partial streamed text above is preserved as-is.");
+            _conversationItems.Add(ToViewItem(LookupEntry(noticeSeq)));
+            _feed.SetActivity(null);
+            RebuildSessionMap();
+            MaybeAutoScroll();
+            PiRunStatus.Text = $"Reconnected to '{_connectedLabel ?? "Pi"}' — session intact.";
+        }
+        catch (Exception ex)
+        {
+            PiConnectionState.Text = "Reconnect failed";
+            PiRunStatus.Text = $"Reconnect failed: {ex.Message} — session is persisted; press Reconnect to retry.";
+        }
     }
 
     private async void SendPrompt_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -306,8 +476,11 @@ public partial class MainWindow : Window
             _conversationItems.Add(ToViewItem(LookupEntry(errorSeq)));
             _feed.SetActivity(null);
             RebuildSessionMap();
-            PiRunStatus.Text = $"Connection to Pi lost: {ex.Message} — session is persisted, reconnect to restore.";
-            await DisconnectPiAsync();
+            // The conversation is kept (dead process inside) for ReconnectAsync;
+            // explicit Disconnect tears it down. The loss event below dedupes
+            // against this entry, so one failure stays one entry.
+            PiConnectionState.Text = "Connection lost";
+            PiRunStatus.Text = $"Connection to Pi lost: {ex.Message} — session is persisted. Press Reconnect to restore.";
         }
         finally
         {
@@ -549,6 +722,32 @@ public partial class MainWindow : Window
         });
     }
 
+    private void Conversation_ConnectionLost(object? sender, Exception error)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!ReferenceEquals(sender, _conversation))
+            {
+                return;
+            }
+
+            // Dedupe against the active run's catch, which records the same
+            // loss: one failure stays one feed entry regardless of order.
+            var last = _feed.Snapshot().LastOrDefault();
+            if (last?.Role != "system" || !last.IsError || !last.Text.StartsWith("Connection to Pi lost", StringComparison.Ordinal))
+            {
+                var seq = _feed.AddError($"Connection to Pi lost: {error.Message}");
+                _conversationItems.Add(ToViewItem(LookupEntry(seq)));
+            }
+
+            _feed.SetActivity(null);
+            PiActivityText.Text = string.Empty;
+            PiConnectionState.Text = "Connection lost";
+            PiRunStatus.Text = "Connection to Pi lost — session is persisted. Press Reconnect to restore.";
+            RebuildSessionMap();
+        });
+    }
+
     private static string DescribeState(PiEngineState state)
         => $"Model: {state.ModelName ?? state.ModelId ?? "none"} ({state.Provider ?? "?"}) · thinking {state.ThinkingLevel} · messages {state.MessageCount}";
 
@@ -564,9 +763,13 @@ public partial class MainWindow : Window
         {
             _conversation.ActivityChanged -= Conversation_ActivityChanged;
             _conversation.ToolActivityChanged -= Conversation_ToolActivityChanged;
+            _conversation.ConnectionLost -= Conversation_ConnectionLost;
             await _conversation.DisposeAsync();
             _conversation = null;
         }
+
+        _connectedKey = null;
+        _connectedLabel = null;
 
         Dispatcher.UIThread.Post(() =>
         {
@@ -587,6 +790,7 @@ public partial class MainWindow : Window
         {
             _conversation.ActivityChanged -= Conversation_ActivityChanged;
             _conversation.ToolActivityChanged -= Conversation_ToolActivityChanged;
+            _conversation.ConnectionLost -= Conversation_ConnectionLost;
             await _conversation.DisposeAsync();
             _conversation = null;
         }

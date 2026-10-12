@@ -66,6 +66,17 @@ public sealed record PiEngineState(
     }
 }
 
+/// <summary>
+/// Outcome of one direct <c>bash</c> RPC command (no LLM run). The command
+/// output is persisted as a BashExecutionMessage in the session regardless
+/// of truncation; <see cref=\"Truncated\"/> only reports the response copy.
+/// </summary>
+public sealed record PiBashResult(
+    string Output,
+    int? ExitCode,
+    bool Cancelled,
+    bool Truncated);
+
 /// <summary>One session event or extension record received outside command correlation.</summary>
 public sealed class PiRpcEventArgs(JsonDocument record, string rawLine) : EventArgs
 {
