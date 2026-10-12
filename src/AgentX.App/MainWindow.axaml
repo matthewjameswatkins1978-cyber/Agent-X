@@ -4,18 +4,21 @@
         xmlns:core="using:AgentX.Core"
         x:Class="AgentX.App.MainWindow"
         Title="Agent X"
-        Width="1200" Height="800" MinWidth="900" MinHeight="560"
+        Width="1200" Height="800" MinWidth="720" MinHeight="480"
         Background="#101318">
-  <Grid ColumnDefinitions="Auto,Auto,*" Margin="16" ColumnSpacing="8">
+  <Grid Margin="16" ColumnSpacing="8">
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="Auto" MinWidth="0" />
+      <ColumnDefinition Width="Auto" />
+      <ColumnDefinition Width="*" MinWidth="0" />
+    </Grid.ColumnDefinitions>
     <!-- Left: project navigation (collapsible, resizable). No file explorer yet. -->
-    <Border x:Name="NavPanel" Grid.Column="0" Width="264" BorderBrush="#343B47" BorderThickness="1"
+    <Border x:Name="NavPanel" Grid.Column="0" MinWidth="200" MaxWidth="300" BorderBrush="#343B47" BorderThickness="1"
             CornerRadius="8" Padding="12" VerticalAlignment="Stretch">
-      <ScrollViewer VerticalScrollBarVisibility="Auto">
+      <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
         <StackPanel Spacing="8">
           <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
             <TextBlock x:Name="NavTitle" Text="Agent X" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" />
-            <Button Grid.Column="1" x:Name="NavCollapseButton" Content="«" Click="NavCollapse_OnClick"
-                    ToolTip.Tip="Collapse panel" />
           </Grid>
           <StackPanel x:Name="NavContent" Spacing="8">
           <TextBlock Text="Workspace" FontWeight="SemiBold" />
@@ -24,6 +27,14 @@
           <WrapPanel Orientation="Horizontal" ItemSpacing="8">
             <Button x:Name="AddWorkspaceButton" Content="Add project…" Click="AddWorkspace_OnClick" />
           </WrapPanel>
+          <StackPanel x:Name="PendingConfirmPanel" Spacing="6" IsVisible="False">
+            <TextBlock x:Name="PendingConfirmText" Text="" Foreground="#E5C07B" FontSize="12"
+                       TextWrapping="Wrap" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="Confirm registration" Click="ConfirmWorkspace_OnClick" />
+              <Button Content="Cancel" Click="CancelWorkspace_OnClick" />
+            </StackPanel>
+          </StackPanel>
           <TextBlock x:Name="WorkspaceDetailText" Text="Select a workspace, then Connect."
                      Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" />
           <TextBlock Text="Session" FontWeight="SemiBold" />
@@ -83,17 +94,19 @@
         </StackPanel>
       </ScrollViewer>
     </Border>
-    <GridSplitter Grid.Column="1" Width="4" ResizeDirection="Columns"
+    <GridSplitter x:Name="NavSplitter" Grid.Column="1" Width="4" ResizeDirection="Columns"
                   Background="Transparent" />
 
     <!-- Centre: conversation (dominant) + anchored composer. -->
     <Grid Grid.Column="2" RowDefinitions="Auto,*,Auto" RowSpacing="8">
-      <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8">
-        <TextBlock Text="Conversation" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
-        <CheckBox Grid.Column="1" x:Name="AutoScrollCheck" Content="Auto-scroll" IsChecked="True" />
-        <Button Grid.Column="2" Content="Copy selected message" Click="CopySelectedMessage_OnClick"
+      <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,*,Auto" ColumnSpacing="8">
+        <Button x:Name="NavCollapseButton" Content="«" Click="NavCollapse_OnClick"
+                ToolTip.Tip="Hide navigation panel" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="1" Text="Conversation" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+        <CheckBox Grid.Column="2" x:Name="AutoScrollCheck" Content="Auto-scroll" IsChecked="True" />
+        <Button Grid.Column="3" Content="Copy selected message" Click="CopySelectedMessage_OnClick"
                 HorizontalAlignment="Left" />
-        <Button Grid.Column="3" Content="Copy full conversation" Click="CopyFullConversation_OnClick" />
+        <Button Grid.Column="4" Content="Copy full conversation" Click="CopyFullConversation_OnClick" />
       </Grid>
 
       <Border Grid.Row="1" BorderBrush="#343B47" BorderThickness="1" CornerRadius="8" Padding="4">
@@ -125,7 +138,10 @@
           <TextBlock x:Name="PiRunStatus" Text="" Foreground="#AAB2BF" FontSize="12"
                      TextWrapping="Wrap" />
           <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
-            <TextBox x:Name="PiPromptBox" PlaceholderText="Ask Pi anything…" />
+            <TextBox x:Name="PiPromptBox" PlaceholderText="Ask Pi anything… (Ctrl+Enter to send)"
+                     AcceptsReturn="True" TextWrapping="Wrap" MinHeight="64" MaxHeight="220"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                     KeyDown="PiPromptBox_OnKeyDown" />
             <Button Grid.Column="1" x:Name="PiSendButton" Content="Send" Click="SendPrompt_OnClick" />
             <Button Grid.Column="2" x:Name="PiCancelButton" Content="Cancel" Click="CancelPrompt_OnClick" IsEnabled="False" />
           </Grid>

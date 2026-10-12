@@ -58,6 +58,29 @@ screenshots. Disposable temp project + disposable sessions only; the real
 - **ListItem accessible names were class names** — fixed in this shell
   (`AutomationProperties.Name` = role header).
 
+## Manual test: native folder-picker Add flow (NOT VERIFIED — for Matthew)
+
+Automation cannot submit the native dialog in this environment (UIA
+provider exposure comes and goes with shell load state; no input queue;
+HWND enumeration finds no useful children). Run once by hand (~5 min):
+
+Pre: close Agent X. Back up workspaces.json if present.
+1. Launch. Confirm expected entries; Add enabled (unless recovery).
+2. Click Add project — native Select project folder dialog opens.
+3. Press Escape (no choice): status reads picker-cancelled, nothing
+   registered; workspaces.json byte-identical (fc /b before/after).
+4. Click Add — pick NEW disposable folder (create %TEMP%\ax-manual-proj
+   first) — Select Folder: status asks to Confirm (NOT registered yet);
+   workspaces.json still unchanged.
+5. Click in-app Cancel: status registration-cancelled; file unchanged.
+6. Click Add — same folder — Select Folder — Confirm registration:
+   combo lists it, status names the ax- session; file gains exactly one
+   valid entry. Documents must NEVER appear unless explicitly chosen.
+7. Select it, Connect (detail names the folder as execution root),
+   Disconnect. Cleanup: remove test entry/file, temp folder, session jsonl.
+PASS iff no registration without the Confirm click and cancel paths
+change nothing.
+
 ## Cost
 
 6 live prompts total across both shells (disposable sessions), plus

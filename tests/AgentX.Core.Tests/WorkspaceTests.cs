@@ -448,6 +448,19 @@ public sealed class WorkspaceTests
     }
 
     [Fact]
+    public void PromptInput_PreservesExactText_RejectsBlank()
+    {
+        Assert.Null(PromptInput.Prepare(null));
+        Assert.Null(PromptInput.Prepare(string.Empty));
+        Assert.Null(PromptInput.Prepare("   \t  \n  "));
+        const string fixture = "  indented line\n\tTabbed line  \n\nblank above, trailing newline\n";
+        Assert.Equal(fixture, PromptInput.Prepare(fixture));
+        const string crlf = "line1\r\nline2\r\n";
+        Assert.Equal(crlf, PromptInput.Prepare(crlf));
+        Assert.Equal("x", PromptInput.Prepare("x"));
+    }
+
+    [Fact]
     public void SingleClientConversation_Throws_OnExplicitClient()
     {
         // Documents the reconnect requirement: a fixed client cannot be
