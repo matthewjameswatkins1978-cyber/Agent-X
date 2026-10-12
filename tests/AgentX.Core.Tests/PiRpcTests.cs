@@ -1,4 +1,5 @@
 using System.IO.Pipelines;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using AgentX.Core;
@@ -54,8 +55,9 @@ public sealed class PiRpcTests
     [Fact]
     public async Task Correlation_MatchesResponseById_AcrossInterleavedEvents()
     {
-        await using var connection = ConnectedLoopback(out var written);
-        connection.Start();
+        await using var loop = new Loopback();
+        var connection = loop.Connection;
+        var written = loop.Written;
 
         var commandTask = connection.SendCommandAsync("get_state");
         var sentId = await WaitForSentIdAsync(written);
@@ -92,8 +94,9 @@ public sealed class PiRpcTests
     [Fact]
     public async Task MalformedOutput_DoesNotBreakSubsequentResponses()
     {
-        await using var connection = ConnectedLoopback(out var written);
-        connection.Start();
+        await using var loop = new Loopback();
+        var connection = loop.Connection;
+        var written = loop.Written;
 
         var commandTask = connection.SendCommandAsync("get_state");
         var sentId = await WaitForSentIdAsync(written);
@@ -143,8 +146,8 @@ public sealed class PiRpcTests
     [Fact]
     public async Task ProcessFailure_FailsPendingCommands()
     {
-        await using var connection = ConnectedLoopback(out _);
-        connection.Start();
+        await using var loop = new Loopback();
+        var connection = loop.Connection;
 
         var commandTask = connection.SendCommandAsync("get_state");
         await Task.Delay(100); // Let the send register.
@@ -157,8 +160,9 @@ public sealed class PiRpcTests
     [Fact]
     public async Task Cancellation_DoesNotLeavePendingCommands_AndAbortIsSent()
     {
-        await using var connection = ConnectedLoopback(out var written);
-        connection.Start();
+        await using var loop = new Loopback();
+        var connection = loop.Connection;
+        var written = loop.Written;
 
         using var cts = new CancellationTokenSource();
         var settledTask = connection.WaitForSettledAsync(cts.Token);
@@ -182,6 +186,85 @@ public sealed class PiRpcTests
     }
 
     [Fact]
+    public async Task SettledWait_CancelAfterReturn_CancelsPromptly_AndReleasesSubscriptions()
+    {
+        // Regression: the cancellation registration must live until the wait
+        // finishes. Cancelling after WaitForSettledAsync has returned must
+        // still cancel the task within a strict timeout, and the orphaned
+        // handler must be released instead of leaking.
+        await using var loop = new Loopback();
+        var connection = loop.Connection;
+        Assert.Equal(0, SubscriberCount(connection));
+
+        using var cts = new CancellationTokenSource();
+        var wait = connection.WaitForSettledAsync(cts.Token);
+        await Task.Delay(100); // Ensure the wait is outstanding after return.
+        Assert.False(wait.IsCompleted);
+
+        await cts.CancelAsync();
+        await Assert.ThrowsAsync<TaskCanceledException>(() => wait.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, SubscriberCount(connection));
+
+        // The connection still works: a later wait resolves on agent_settled.
+        var second = connection.WaitForSettledAsync();
+        connection.HandleProtocolLine("""{"type":"agent_settled","aborted":true}""");
+        Assert.True(await second.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, SubscriberCount(connection));
+    }
+
+    [Fact]
+    public async Task SettledWait_PreCanceledToken_ReturnsCanceled()
+    {
+        await using var loop = new Loopback();
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        await Assert.ThrowsAsync<TaskCanceledException>(
+            () => loop.Connection.WaitForSettledAsync(cts.Token).WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, SubscriberCount(loop.Connection));
+    }
+
+    [Fact]
+    public async Task StdoutEof_FaultsPendingCommand_AndSettledWaiter_WithoutProcess()
+    {
+        // No process is involved anywhere here: completing the stdout pipe
+        // must fault everyone waiting on records that will never arrive.
+        var pipe = new Pipe();
+        var written = new InspectableWriteStream();
+        await using var connection = new PiRpcConnection(pipe.Reader.AsStream(), written, leaveOpen: true);
+        connection.Start();
+
+        var failures = new List<Exception>();
+        connection.TransportFailed += (_, error) =>
+        {
+            lock (failures)
+            {
+                failures.Add(error);
+            }
+        };
+
+        var command = connection.SendCommandAsync("get_state");
+        var settled = connection.WaitForSettledAsync();
+        await Task.Delay(100); // Both outstanding.
+        Assert.False(command.IsCompleted);
+        Assert.False(settled.IsCompleted);
+
+        await pipe.Writer.CompleteAsync(); // Unexpected stdout EOF.
+
+        var commandError = await Assert.ThrowsAsync<PiRpcTransportException>(
+            () => command.WaitAsync(TimeSpan.FromSeconds(5)));
+        var settledError = await Assert.ThrowsAsync<PiRpcTransportException>(
+            () => settled.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Contains("closed", commandError.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("closed", settledError.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(failures);
+
+        // After EOF the connection refuses new work instead of hanging it.
+        await Assert.ThrowsAsync<PiRpcTransportException>(() => connection.SendCommandAsync("get_state"));
+        await Assert.ThrowsAsync<PiRpcTransportException>(
+            () => connection.WaitForSettledAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
     public void FailedCommand_SurfacesCommandAndError()
     {
         const string line = """{"id":"r3","type":"response","command":"set_model","success":false,"error":"Model not found: invalid/model"}""";
@@ -194,13 +277,42 @@ public sealed class PiRpcTests
 
     // --- Helpers: loopback connection with inspectable written commands. ---
 
-    private static PiRpcConnection ConnectedLoopback(out MemoryStream written)
+    private sealed class Loopback : IAsyncDisposable
     {
-        // Input stream is never read from in these tests; lines are injected
-        // directly via HandleProtocolLine, which exercises the same dispatch
-        // path as the background reader.
-        written = new InspectableWriteStream();
-        return new PiRpcConnection(Stream.Null, written, leaveOpen: true);
+        private readonly Pipe _input = new();
+
+        public InspectableWriteStream Written { get; } = new();
+
+        public PiRpcConnection Connection { get; }
+
+        public Loopback()
+        {
+            // The pipe stays open for the test lifetime: unlike Stream.Null it
+            // does not signal EOF, so the reader loop stays alive and only
+            // injected lines drive dispatch.
+            Connection = new PiRpcConnection(_input.Reader.AsStream(), Written, leaveOpen: true);
+            Connection.Start();
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await Connection.DisposeAsync();
+            await _input.Writer.CompleteAsync();
+            Written.Dispose();
+        }
+    }
+
+    private static int SubscriberCount(PiRpcConnection connection)
+    {
+        var count = 0;
+        foreach (var name in new[] { "EventReceived", "TransportFailed" })
+        {
+            var field = typeof(PiRpcConnection).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic);
+            var handler = (Delegate?)field?.GetValue(connection);
+            count += handler?.GetInvocationList().Length ?? 0;
+        }
+
+        return count;
     }
 
     private static async Task<string> WaitForSentIdAsync(MemoryStream written)
