@@ -17,6 +17,19 @@ The core owns the exact imported string, UTF-8 byte count, and compact line star
 3. **Protect Pi behind an Agent X boundary.** Do not patch Pi or make plugins depend on its private internals. Kernel integration remains a later decision after Pi behavior and license/provenance are reviewed.
 4. **Treat rendered rows as a view.** The immutable original text is authoritative; line entries are lazy slices and the UI must not become the data store.
 
+## Pi RPC integration (feature/pi-rpc-integration)
+
+First live connection to the Pi 1.1.0 engine over its documented JSONL RPC protocol.
+`AgentX.Core` owns a small client (`PiRpcClient`), a framing/correlation layer
+(`PiRpcConnection`, `PiRpcFraming`) and typed models (`PiEngineState`). Pi runs as a
+separate process launched with `--mode rpc --no-session --no-extensions --no-skills`;
+provider authentication flows from the existing environment — Agent X never copies
+credentials and never modifies Pi's installation. Prompt acceptance (`started`/`queued`/
+`handled`) is never treated as completion; completion is only `agent_settled`. The
+Avalonia shell adds a minimal conversation panel (prompt box, streamed output,
+connection state) and stays independent of the agent process: all I/O is async and
+cancellation (client CTS + `abort`) never blocks the UI.
+
 ## Explicitly deferred
 
 Garden lifecycle and isolation, resident AI/provider routing, plugin manifests and test admission, durable transcript persistence, streaming log append, cancellation/backpressure, operation authorization, and the client protocol. Do not infer their details from this demo.
