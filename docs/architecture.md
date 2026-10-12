@@ -27,8 +27,8 @@ opens the exact session or creates it; `--no-session` remains available via
 restores history with `get_messages` on connect, streams prompts, keeps tool/error
 activity on a compact status line, and issues a `PiRunReceipt` per run so idle
 (no automatic work left) is never confused with healthy (settled, not aborted,
-no observed errors) — and healthy is never presented as external verification
-of task output. Large messages are preserved byte-for-byte in the session;
+no observed errors) — and healthy is never presented as passing acceptance
+checks. Large messages are preserved byte-for-byte in the session;
 only display truncates, with an explicit notice.
 
 ## Pi RPC integration (feature/pi-rpc-integration)
