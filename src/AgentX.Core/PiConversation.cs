@@ -13,6 +13,24 @@ public sealed record ConversationMessage(string Role, string Text)
 }
 
 /// <summary>
+/// Structured tool lifecycle for the conversation feed. <see cref="Path"/>
+/// is only set for edit/write calls with an explicit path argument (a read
+/// path is not a change); for bash/powershell <see cref="Summary"/> holds
+/// the shell command. Never fabricated: unknown shapes yield nulls.
+/// </summary>
+public sealed record PiToolActivity(
+    string ToolName,
+    string? Summary,
+    string? Path,
+    bool IsError,
+    bool IsStart)
+{
+    public bool IsMutating =>
+        ToolName.Equals("edit", StringComparison.OrdinalIgnoreCase)
+        || ToolName.Equals("write", StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>
 /// Outcome of one prompt run. Idle (Pi has no automatic work left) is not the
 /// same as healthy, and healthy is not the same as externally verified: only
 /// a settled, non-aborted run with no observed errors counts as healthy.
@@ -58,6 +76,15 @@ public sealed class PiConversation : IAsyncDisposable
 
     /// <summary>Latest compact activity (tool runs, errors, retries). Null when quiet.</summary>
     public event EventHandler<string>? ActivityChanged;
+
+    /// <summary>
+    /// Structured tool activity for the conversation feed: tool name, a short
+    /// human summary, an observed file path for edit/write calls (null
+    /// otherwise), and the full shell command for bash/powershell (in
+    /// <see cref="PiToolActivity.Summary"/>). Raised on the RPC reader
+    /// thread; the subscriber must marshal to its own thread.
+    /// </summary>
+    public event EventHandler<PiToolActivity>? ToolActivityChanged;
 
     public bool IsConnected => _client.IsRunning;
 
@@ -138,6 +165,104 @@ public sealed class PiConversation : IAsyncDisposable
         {
             ActivityChanged?.Invoke(this, activity);
         }
+
+        var toolActivity = ParseToolActivity(args.Record);
+        if (toolActivity is not null)
+        {
+            ToolActivityChanged?.Invoke(this, toolActivity);
+        }
+    }
+
+    /// <summary>
+    /// Structured tool lifecycle for the feed. Start events carry the observed
+    /// file path (edit/write) or shell command (bash/powershell); end events
+    /// carry only the outcome. Unknown tools and malformed records yield a
+    /// name-only activity or null — never a fabricated path.
+    /// </summary>
+    internal static PiToolActivity? ParseToolActivity(JsonDocument record)
+    {
+        try
+        {
+            var root = record.RootElement;
+            var type = PiRpcFraming.GetEventType(record);
+            if (type == "tool_execution_start" && root.TryGetProperty("toolName", out var startName))
+            {
+                var toolName = startName.GetString() ?? "?";
+                var args = root.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object ? a : (JsonElement?)null;
+                return new PiToolActivity(toolName, SummarizeToolArgs(toolName, args), ExtractToolPath(toolName, args), IsError: false, IsStart: true);
+            }
+
+            if (type == "tool_execution_end" && root.TryGetProperty("toolName", out var endName))
+            {
+                var failed = root.TryGetProperty("isError", out var isError) && isError.ValueKind == JsonValueKind.True;
+                return new PiToolActivity(endName.GetString() ?? "?", null, null, IsError: failed, IsStart: false);
+            }
+
+            return null;
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? SummarizeToolArgs(string toolName, JsonElement? args)
+    {
+        if (args is null)
+        {
+            return null;
+        }
+
+        if ((toolName.Equals("bash", StringComparison.OrdinalIgnoreCase)
+                || toolName.Equals("powershell", StringComparison.OrdinalIgnoreCase))
+            && args.Value.TryGetProperty("command", out var command)
+            && command.ValueKind == JsonValueKind.String)
+        {
+            return TruncateSingleLine(command.GetString() ?? string.Empty, 300);
+        }
+
+        var path = ExtractToolPath(toolName, args);
+        return path;
+    }
+
+    private static string? ExtractToolPath(string toolName, JsonElement? args)
+    {
+        // Only edit/write paths are reported: a read/grep path is not a change.
+        if (!toolName.Equals("edit", StringComparison.OrdinalIgnoreCase)
+            && !toolName.Equals("write", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (args is null)
+        {
+            return null;
+        }
+
+        foreach (var name in new[] { "path", "file", "filePath", "filename" })
+        {
+            if (args.Value.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String)
+            {
+                var path = value.GetString();
+                if (!string.IsNullOrWhiteSpace(path))
+                {
+                    return path;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static string? TruncateSingleLine(string text, int maxChars)
+    {
+        var line = text.Trim();
+        if (line.Length == 0)
+        {
+            return null;
+        }
+
+        return line.Length <= maxChars ? line : line[..maxChars] + "…";
     }
 
     internal static void CountRunError(PiRpcEventArgs args, ref int errors)
