@@ -22,6 +22,8 @@ public sealed class PiRpcConnection : IAsyncDisposable
     private long _malformedLines;
     private bool _disposed;
     private int _eofSignaled;
+    private long _subscriberErrors;
+    private Exception? _lastSubscriberError;
 
     public PiRpcConnection(Stream input, Stream output, bool leaveOpen = true)
     {
@@ -38,6 +40,17 @@ public sealed class PiRpcConnection : IAsyncDisposable
     /// to avoid hanging on records that will never arrive.
     /// </summary>
     public event EventHandler<Exception>? TransportFailed;
+
+    /// <summary>
+    /// Raised when an event subscriber throws. The reader isolates the fault,
+    /// still notifies the remaining subscribers, and keeps running — a
+    /// throwing observer must never strand outstanding requests.
+    /// </summary>
+    public event EventHandler<Exception>? SubscriberError;
+
+    public long SubscriberErrorCount => Interlocked.Read(ref _subscriberErrors);
+
+    public Exception? LastSubscriberError => Volatile.Read(ref _lastSubscriberError);
 
     public long MalformedLineCount => Interlocked.Read(ref _malformedLines);
 
@@ -193,18 +206,83 @@ public sealed class PiRpcConnection : IAsyncDisposable
         if (Interlocked.Exchange(ref _eofSignaled, 1) == 0)
         {
             FailPendingCommands(error);
-            try
-            {
-                TransportFailed?.Invoke(this, error);
-            }
-            catch (Exception)
-            {
-                // Subscriber faults must not take down the reader.
-            }
+            NotifyTransportFailed(error);
         }
         else
         {
             FailPendingCommands(error);
+        }
+    }
+
+    private void NotifyTransportFailed(Exception error)
+    {
+        var handlers = TransportFailed?.GetInvocationList();
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (var handler in handlers)
+        {
+            try
+            {
+                ((EventHandler<Exception>)handler).Invoke(this, error);
+            }
+            catch (Exception subscriberError)
+            {
+                // A throwing transport observer is reported, never hidden and
+                // never allowed to break fault propagation for the rest.
+                RaiseSubscriberError(subscriberError);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Deliver one event to every subscriber without letting a throwing
+    /// observer kill the protocol reader or starve the remaining observers.
+    /// Faults are counted and reported via SubscriberError, never swallowed.
+    /// </summary>
+    private void RaiseEventReceived(PiRpcEventArgs args)
+    {
+        var handlers = EventReceived?.GetInvocationList();
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (var handler in handlers)
+        {
+            try
+            {
+                ((EventHandler<PiRpcEventArgs>)handler).Invoke(this, args);
+            }
+            catch (Exception ex)
+            {
+                Interlocked.Increment(ref _subscriberErrors);
+                Volatile.Write(ref _lastSubscriberError, ex);
+                RaiseSubscriberError(ex);
+            }
+        }
+    }
+
+    private void RaiseSubscriberError(Exception error)
+    {
+        var handlers = SubscriberError?.GetInvocationList();
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (var handler in handlers)
+        {
+            try
+            {
+                ((EventHandler<Exception>)handler).Invoke(this, error);
+            }
+            catch (Exception)
+            {
+                // Already counted; never recurse and never break dispatch.
+            }
         }
     }
 
@@ -216,7 +294,7 @@ public sealed class PiRpcConnection : IAsyncDisposable
             return;
         }
 
-        JsonDocument record;
+        JsonDocument? record;
         try
         {
             record = JsonDocument.Parse(stripped);
@@ -227,24 +305,38 @@ public sealed class PiRpcConnection : IAsyncDisposable
             return;
         }
 
-        if (PiRpcFraming.IsResponseRecord(record, out var id, out _))
+        // The connection owns every parsed record: correlated responses
+        // transfer ownership to the awaiting command, while dispatched events
+        // are disposed right after synchronous dispatch to return rented pool
+        // buffers (critical for large-message streams). Subscribers must copy
+        // what they need during the event: after dispatch the buffers may be
+        // reused, so a retained document can observe corrupted data.
+        try
         {
-            if (id is not null && _pending.TryRemove(id, out var completion))
+            if (PiRpcFraming.IsResponseRecord(record, out var id, out _))
             {
-                completion.TrySetResult(record);
-            }
-            else
-            {
-                // Response without a known id (e.g. parse errors from Pi itself):
-                // surface as an event so diagnostics are visible, then release.
-                EventReceived?.Invoke(this, new PiRpcEventArgs(record, stripped));
-                record.Dispose();
+                if (id is not null && _pending.TryRemove(id, out var completion))
+                {
+                    var owned = record;
+                    record = null;
+                    completion.TrySetResult(owned);
+                }
+                else
+                {
+                    // Response without a known id (e.g. parse errors from Pi itself):
+                    // surface as an event so diagnostics stay visible.
+                    RaiseEventReceived(new PiRpcEventArgs(record, stripped));
+                }
+
+                return;
             }
 
-            return;
+            RaiseEventReceived(new PiRpcEventArgs(record, stripped));
         }
-
-        EventReceived?.Invoke(this, new PiRpcEventArgs(record, stripped));
+        finally
+        {
+            record?.Dispose();
+        }
     }
 
     private async Task ReadLoopAsync(CancellationToken cancellationToken)
@@ -339,7 +431,15 @@ public sealed class PiRpcConnection : IAsyncDisposable
         FailPendingCommands(new PiRpcTransportException("Pi RPC connection was disposed."));
         foreach (var pending in _pending.Values)
         {
-            _ = pending.Task.ContinueWith(t => t.Result?.Dispose(), TaskScheduler.Default);
+            _ = pending.Task.ContinueWith(
+                static t =>
+                {
+                    if (t.IsCompletedSuccessfully)
+                    {
+                        t.Result?.Dispose();
+                    }
+                },
+                TaskScheduler.Default);
         }
 
         _readerLifetime.Dispose();
