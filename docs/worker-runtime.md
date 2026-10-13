@@ -37,7 +37,7 @@ worker.Version; worker.Capabilities;                        // after connect
 
 Errors are loud and typed: missing project → `DirectoryNotFoundException`
 (never recreated); foreign session → `PiRpcTransportException`; duplicate
-session owner → `InvalidOperationException`; cross-process session owner → `SessionLockedException` (refused before any Pi launch); unsupported operation →
+session owner → `InvalidOperationException`; cross-process session owner → `SessionLockedException` (refused before any Pi launch); stale or contended registry save → `WorkerRegistryConflictException` (Busy = retry, StaleRevision = reopen); unsupported operation →
 `NotSupportedException` (probed); accepted-but-not-applied state →
 `InvalidOperationException`. Nothing silently falls back.
 
@@ -92,6 +92,12 @@ retry).
   corrupt file throws and is preserved). Completely separate from
   `workspaces.json`; workers never read/write/migrate workspace or legacy
   registrations.
+  Registry writes are serialized across processes: `workers.json.lock`
+  (the same OS file-lock facility as session locks) brackets re-read +
+  revision check + atomic write, so a stale manager's save throws
+  `WorkerRegistryConflictException` instead of overwriting. Busy means
+  retry; StaleRevision means reopen (see "Registry concurrency and
+  recovery").
 - Session ids are `axw-<8hex>`, disjoint from workspace (`ax-<slug>`) and
   legacy (`agent-x-main`) sessions by construction (tested).
 - Project directory ↔ session is fixed at creation. Changing directories =
@@ -109,7 +115,10 @@ retry).
   root converge on one lock. Scope note: session locks do NOT serialize
   `workers.json` writes — two instances sharing one managed root can still
   race registry saves (last writer wins). That is a separate, pre-existing
-  registry risk, reported here and not addressed by this mechanism.
+  registry risk — addressed separately in C5: every registry save takes
+  `workers.json.lock` and re-checks the disk revision, so a stale save
+  fails with `WorkerRegistryConflictException` instead of overwriting
+  (see "Registry concurrency and recovery").
 
 ## Model / thinking operations — verified semantics (Pi 1.1.0 and 1.2.0)
 
@@ -196,6 +205,34 @@ transport fault + ConnectionLost, B continues healthy, A reconnects to the
 same session with history and prompts again. Duplicate-session impostor
 refused. Manager disposal kills every worker process (PIDs verified gone).
 
+## Registry concurrency and recovery
+
+`workers.json` mutations are serialized across Agent X processes by an
+OS-held lock file (`workers.json.lock`, the same `FileShare.None` facility
+as session locks; never deleted when unlocked; kernel-released if a writer
+crashes). Every save brackets **re-read → revision check → atomic write**
+under that lock:
+
+- The revision is a SHA-256 of the exact bytes the manager loaded (or
+  last wrote). Any other instance's add/remove changes it, so a stale save
+  is refused with `WorkerRegistryConflictException` (`Kind =
+  StaleRevision`) BEFORE anything is written — explicit conflict, never an
+  automatic merge of stale in-memory state.
+- A save colliding with another instance's write lock fails with the same
+  type (`Kind = Busy`), which is transient and safe to retry as-is.
+- Conflict handling reuses the existing save-failure rollback paths:
+  `CreateWorker` drops the just-added registration and `RemoveWorkerAsync`
+  restores the removed one plus its index entry (the Pi process was
+  already retired first), so in-memory state stays coherent with its
+  loaded view and disk stays exactly as the other instance left it.
+- **Recovery for `StaleRevision`: reopen the registry** — recreate
+  `PiWorkerManager` after confirming which live worker references need
+  migrating. There is deliberately no automatic reload: it would
+  invalidate live `PiWorker` references the host still holds.
+- Revisions hash raw bytes without parsing, so corrupt registry data is
+  detected and preserved — a stale save can never overwrite a corrupt
+  file either, and load still fails closed with the bytes untouched.
+
 ## Limitations (unchanged or by design)
 
 - Launcher path still hardcoded `D:\AgentTools\bin\pi.cmd` (documented; no
@@ -207,8 +244,9 @@ refused. Manager disposal kills every worker process (PIDs verified gone).
   hold one session concurrently. A crashed instance's orphaned Pi child
   is not covered by the lock its death released (no supervisor, by
   design) — a pre-existing hazard, unchanged. Concurrent `workers.json`
-  saves across instances remain unprotected (registry risk, reported
-  separately).
+  saves are serialized and revision-checked since C5: a stale save fails
+  with `WorkerRegistryConflictException` (recovery: reopen the registry;
+  no automatic reload exists — it would invalidate live references).
 - Workers do not disconnect explicitly (dispose or process death).
 - No GUI yet: the contract above is what Agent TWO consumes; interactive
   click-through and live status polling remain NOT VERIFIED until the GUI

@@ -24,7 +24,10 @@ public sealed record WorkerRegistration(
 /// and legacy (<c>agent-x-main</c>) sessions by construction. Rules, all
 /// tested: fail-closed validation (corrupt file throws InvalidDataException
 /// and is left in place), duplicate ids rejected, session ids must equal
-/// <c>axw-</c> + id, saves are atomic (temp file + move).
+/// <c>axw-</c> + id, saves are atomic (temp file + move) AND serialized
+/// cross-process: workers.json.lock brackets re-read + revision check +
+/// write, so a stale or busy save throws WorkerRegistryConflictException
+/// instead of silently overwriting another instance's changes.
 /// </summary>
 public sealed class WorkerStore
 {
@@ -33,6 +36,14 @@ public sealed class WorkerStore
 
     private readonly string _managedRoot;
     private readonly Dictionary<string, WorkerRegistration> _byId = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// SHA-256 of the exact registry bytes this store loaded or last wrote
+    /// (null = no file yet). Compared under the cross-process registry lock
+    /// on every save, so a stale in-memory copy can never silently
+    /// overwrite another instance's changes.
+    /// </summary>
+    private string? _revision;
 
     public WorkerStore(string managedRoot)
     {
@@ -93,9 +104,17 @@ public sealed class WorkerStore
         }
 
         WorkerRegistration[] entries;
+        byte[] bytes;
         try
         {
-            var json = File.ReadAllText(path);
+            // One read serves BOTH parsing and the revision baseline: the
+            // hash and the entries always describe the same bytes, even if
+            // another instance writes mid-load (the move is atomic, so the
+            // read sees whole-file state either way).
+            bytes = File.ReadAllBytes(path);
+            using var reader = new StreamReader(
+                new MemoryStream(bytes), System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            var json = reader.ReadToEnd();
             entries = JsonSerializer.Deserialize<WorkerRegistration[]>(json)
                 ?? throw new InvalidDataException($"Worker store '{path}' deserialized to null.");
         }
@@ -104,6 +123,8 @@ public sealed class WorkerStore
             throw new InvalidDataException(
                 $"Worker store '{path}' is unreadable; left in place for inspection, nothing was deleted or reset.", ex);
         }
+
+        store._revision = WorkerRegistryLock.ComputeRevision(bytes);
 
         foreach (var entry in entries)
         {
@@ -176,6 +197,25 @@ public sealed class WorkerStore
         Directory.CreateDirectory(_managedRoot);
         var path = StorePath(_managedRoot);
         var json = JsonSerializer.Serialize(List(), new JsonSerializerOptions { WriteIndented = true });
+
+        // Cross-process serialization: the registry lock brackets
+        // [re-read → revision check → atomic write], so a stale in-memory
+        // copy fails loudly instead of overwriting changes another
+        // instance persisted. Lock files are never deleted just because
+        // they are unlocked.
+        using var registryLock = WorkerRegistryLock.Acquire(path);
+        var currentRevision = WorkerRegistryLock.ReadRevision(path);
+        if (currentRevision != _revision)
+        {
+            throw new WorkerRegistryConflictException(
+                WorkerRegistryConflictKind.StaleRevision,
+                path,
+                $"workers.json changed on disk since this manager loaded it (another Agent X instance added or removed workers). " +
+                "Nothing was written and the in-memory registry stays at its loaded state (the caller's change is rolled back). " +
+                "Recovery: reopen the worker registry — recreate PiWorkerManager after confirming which live worker " +
+                "references need migrating — then retry the operation.");
+        }
+
         var temp = path + $".tmp-{Guid.NewGuid():N}";
         try
         {
@@ -189,6 +229,8 @@ public sealed class WorkerStore
             try { File.Delete(temp); } catch { /* best effort */ }
             throw;
         }
+
+        _revision = WorkerRegistryLock.ComputeRevision(System.Text.Encoding.UTF8.GetBytes(json));
     }
 
     /// <summary>
