@@ -81,7 +81,9 @@ public sealed class MarkdownView : SelectableTextBlock
             switch (block.Kind)
             {
                 case MdBlockKind.Heading:
-                    var size = block.Level switch { 1 => 17.0, 2 => 15.0, _ => 13.5 };
+                    // Pi headings sit near body size (bold + yellow carry the
+                    // hierarchy, not large type): body 14 → H1 16, H2 15, H3+ 14.5.
+                    var size = block.Level switch { 1 => 16.0, 2 => 15.0, _ => 14.5 };
                     foreach (var inline in block.Inlines)
                     {
                         inlines.Add(StyledRun(inline.Text, size, FontWeight.Bold, YellowBrush, null));

@@ -7,9 +7,10 @@
         Title="Agent X"
         Width="1200" Height="800" MinWidth="720" MinHeight="480"
         Background="#101318">
-  <Grid Margin="12" RowSpacing="8" RowDefinitions="Auto,Auto,*,Auto">
-    <!-- Top row: workspace tabs + add. Scrolls on overflow; arrow keys work. -->
-    <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+  <Grid Margin="12" RowSpacing="8" ColumnDefinitions="Auto,*" RowDefinitions="Auto,*,Auto">
+    <!-- Top row: worker tabs + add. One tab per Pi worker: stable identity
+         tint, connection dot, quick switching. Spans the full width. -->
+    <Grid Grid.Row="0" Grid.ColumnSpan="2" ColumnDefinitions="*,Auto" ColumnSpacing="8">
       <ScrollViewer Grid.Column="0" HorizontalScrollBarVisibility="Auto"
                     VerticalScrollBarVisibility="Disabled">
         <TabStrip x:Name="WorkspaceTabs" SelectionChanged="WorkspaceTabs_OnChanged" />
@@ -18,16 +19,67 @@
               ToolTip.Tip="Add project" VerticalAlignment="Center" />
     </Grid>
 
-    <!-- Second row: pages. Live is default. -->
-    <TabStrip Grid.Row="1" x:Name="PageTabs" SelectionChanged="PageTabs_OnChanged">
-      <TabStripItem Content="Overview" />
-      <TabStripItem Content="Live" IsSelected="True" />
-      <TabStripItem Content="Settings" />
-    </TabStrip>
+    <!-- Left rail: compact icon-led navigation (Live default, Overview,
+         Settings anchored at the bottom). Collapsed 56px, expanded 180px.
+         A fourth destination (Stats) plugs in as one more item later. -->
+    <Border Grid.Row="1" Grid.Column="0" BorderBrush="#343B47" BorderThickness="0,0,1,0"
+            Padding="0,4,4,4" Margin="0,0,8,0">
+      <DockPanel x:Name="NavRail" Width="56" LastChildFill="False">
+        <StackPanel DockPanel.Dock="Top" Spacing="4">
+          <ToggleButton x:Name="NavLive" Click="Nav_OnClick" ToolTip.Tip="Live conversation"
+                        AutomationProperties.Name="Live"
+                        Background="Transparent" BorderThickness="0" Padding="8,6"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left">
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="&#x25C9;" FontSize="16" Width="24" TextAlignment="Center"
+                         VerticalAlignment="Center" />
+              <TextBlock x:Name="NavLiveLabel" Text="Live" FontSize="13"
+                         VerticalAlignment="Center" />
+            </StackPanel>
+          </ToggleButton>
+          <ToggleButton x:Name="NavOverview" Click="Nav_OnClick" ToolTip.Tip="Overview"
+                        AutomationProperties.Name="Overview"
+                        Background="Transparent" BorderThickness="0" Padding="8,6"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left">
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="&#x2630;" FontSize="16" Width="24" TextAlignment="Center"
+                         VerticalAlignment="Center" />
+              <TextBlock x:Name="NavOverviewLabel" Text="Overview" FontSize="13"
+                         VerticalAlignment="Center" />
+            </StackPanel>
+          </ToggleButton>
+        </StackPanel>
+        <StackPanel DockPanel.Dock="Bottom" Spacing="4">
+          <ToggleButton x:Name="NavSettings" Click="Nav_OnClick" ToolTip.Tip="Settings"
+                        AutomationProperties.Name="Settings"
+                        Background="Transparent" BorderThickness="0" Padding="8,6"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Left">
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock Text="&#x2699;" FontSize="16" Width="24" TextAlignment="Center"
+                         VerticalAlignment="Center" />
+              <TextBlock x:Name="NavSettingsLabel" Text="Settings" FontSize="13"
+                         VerticalAlignment="Center" />
+            </StackPanel>
+          </ToggleButton>
+          <Button x:Name="NavCollapse" Click="NavCollapse_OnClick" ToolTip.Tip="Expand navigation"
+                  AutomationProperties.Name="Expand navigation"
+                  Background="Transparent" BorderThickness="0" Padding="8,6"
+                  HorizontalAlignment="Stretch" HorizontalContentAlignment="Left">
+            <StackPanel Orientation="Horizontal" Spacing="10">
+              <TextBlock x:Name="NavCollapseGlyph" Text="&#xBB;" FontSize="16" Width="24"
+                         TextAlignment="Center" VerticalAlignment="Center" />
+              <TextBlock x:Name="NavCollapseLabel" Text="Expand" FontSize="13"
+                         VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+        </StackPanel>
+      </DockPanel>
+    </Border>
 
     <!-- Pages. Only one visible; controls persist so scroll, selection,
          composer input and feed survive page switches. -->
-    <Grid Grid.Row="2">
+    <!-- Centre: the Pi conversation takes the remaining room. -->
+    <Grid Grid.Row="1" Grid.Column="1">
       <!-- Overview: real workspace state, activity, evidence. No invented cards. -->
       <ScrollViewer x:Name="OverviewPanel" IsVisible="False"
                     VerticalScrollBarVisibility="Auto"
@@ -87,19 +139,16 @@
 
       <!-- Live: dominant conversation + anchored composer. -->
       <Grid x:Name="LivePanel" RowDefinitions="Auto,*,Auto" RowSpacing="8">
-        <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,*,Auto" ColumnSpacing="8">
-          <WrapPanel Orientation="Horizontal" ItemSpacing="8">
-            <Button Content="Connect" Click="ConnectPi_OnClick" />
-            <Button Content="Disconnect" Click="DisconnectPi_OnClick" />
-            <Button Content="Reconnect" Click="ReconnectPi_OnClick" />
-          </WrapPanel>
-          <CheckBox Grid.Column="1" x:Name="AutoScrollCheck" Content="Auto-scroll"
+        <WrapPanel Grid.Row="0" Orientation="Horizontal" ItemSpacing="8">
+          <Button Content="Connect" Click="ConnectPi_OnClick" />
+          <Button Content="Disconnect" Click="DisconnectPi_OnClick" />
+          <Button Content="Reconnect" Click="ReconnectPi_OnClick" />
+          <CheckBox x:Name="AutoScrollCheck" Content="Auto-scroll"
                     IsChecked="True" IsCheckedChanged="AutoScrollCheck_OnChanged"
                     VerticalAlignment="Center" />
-          <Button Grid.Column="3" Content="Copy selected message" Click="CopySelectedMessage_OnClick"
-                  HorizontalAlignment="Left" />
-          <Button Grid.Column="4" Content="Copy full conversation" Click="CopyFullConversation_OnClick" />
-        </Grid>
+          <Button Content="Copy selected message" Click="CopySelectedMessage_OnClick" />
+          <Button Content="Copy full conversation" Click="CopyFullConversation_OnClick" />
+        </WrapPanel>
 
         <Grid Grid.Row="1">
           <Border BorderBrush="#343B47" BorderThickness="1" CornerRadius="8" Padding="4">
@@ -112,43 +161,49 @@
               </ListBox.ItemsPanel>
               <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="app:ConversationViewItem">
-                  <!-- Pi visual grammar: blue user blocks, unboxed assistant
-                       Markdown, tinted coherent tool blocks, quiet rows. -->
-                  <StackPanel Spacing="2" Margin="8,6"
+                  <!-- Pi visual grammar: square user blocks (no header),
+                       unboxed assistant Markdown (no header), tinted
+                       coherent tool blocks with Pi-style name headers,
+                       quiet rows, violet compaction box. -->
+                  <StackPanel Spacing="2" Margin="8,8"
                               AutomationProperties.Name="{Binding Header}">
                     <Border IsVisible="{Binding IsUser}" Background="{Binding StateBrush}"
-                            CornerRadius="6" Padding="10,8">
-                      <StackPanel Spacing="4">
-                        <TextBlock Text="{Binding Header}" Foreground="#AAB2BF" FontSize="10" />
-                        <SelectableTextBlock Text="{Binding DisplayText}" TextWrapping="Wrap"
-                                                 FontSize="13" />
-                      </StackPanel>
+                            CornerRadius="0" Padding="10,8">
+                      <SelectableTextBlock Text="{Binding DisplayText}" TextWrapping="Wrap"
+                                                 FontSize="14" />
                     </Border>
                     <StackPanel IsVisible="{Binding IsAssistant}" Spacing="2">
-                      <TextBlock Text="{Binding Header}" Foreground="#AAB2BF" FontSize="10" />
                       <app:MarkdownView Markdown="{Binding Markdown}" TextWrapping="Wrap"
-                                            FontSize="13" />
+                                            FontSize="14" />
                       <SelectableTextBlock IsVisible="{Binding Markdown, Converter={x:Static conv:ObjectConverters.IsNull}}"
                                                  Text="{Binding DisplayText}" TextWrapping="Wrap"
-                                                 FontSize="13" />
+                                                 FontSize="14" />
                     </StackPanel>
                     <Border IsVisible="{Binding IsTool}" Background="{Binding StateBrush}"
-                            CornerRadius="6" Padding="10,8">
+                            CornerRadius="0" Padding="10,8">
                       <StackPanel Spacing="4">
-                        <TextBlock Text="{Binding Header}" Foreground="{Binding RoleBrush}"
-                                   FontSize="11" FontWeight="SemiBold" />
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                          <TextBlock Text="{Binding ToolName}" Foreground="#E4E7EE"
+                                     FontSize="12" FontWeight="Bold" />
+                          <TextBlock Text="{Binding ToolSuffix}" Foreground="#82889A"
+                                     FontSize="11" VerticalAlignment="Center" />
+                        </StackPanel>
                         <app:MarkdownView MonoText="{Binding DisplayText}" DiffTint="True"
-                                            TextWrapping="Wrap" FontSize="13" />
+                                            TextWrapping="Wrap" FontSize="14" />
                         <Button Content="{Binding ExpandLabel}" IsVisible="{Binding CanExpand}"
                                 Click="ToolExpand_OnClick" HorizontalAlignment="Left"
                                 FontSize="11" Foreground="#82AAFF" Background="Transparent"
                                 BorderThickness="0" Padding="0" />
                       </StackPanel>
                     </Border>
-                    <StackPanel IsVisible="{Binding IsSystemRow}" Spacing="2">
-                      <TextBlock Text="{Binding Header}" Foreground="#AAB2BF" FontSize="10" />
+                    <Border IsVisible="{Binding IsCompaction}" Background="#37294D"
+                            CornerRadius="0" Padding="10,8">
                       <app:MarkdownView MonoText="{Binding DisplayText}" TextWrapping="Wrap"
-                                            FontSize="12" />
+                                            FontSize="13" />
+                    </Border>
+                    <StackPanel IsVisible="{Binding IsPlainSystemRow}" Spacing="2">
+                      <app:MarkdownView MonoText="{Binding DisplayText}" TextWrapping="Wrap"
+                                            FontSize="13" />
                     </StackPanel>
                   </StackPanel>
                 </DataTemplate>
@@ -179,15 +234,13 @@
 
         <Border Grid.Row="2" BorderBrush="#343B47" BorderThickness="1" CornerRadius="8" Padding="8">
           <StackPanel Spacing="6">
-            <TextBlock x:Name="PiActivityText" Text="" Foreground="#7DD3A8" FontSize="12"
-                       TextWrapping="Wrap" />
             <TextBlock x:Name="PiRunStatus" Text="" Foreground="#AAB2BF" FontSize="12"
                        TextWrapping="Wrap" />
             <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+              <!-- Chord handled in code (PreviewKeyDown tunnel): XAML cannot attach tunnel events. -->
               <TextBox x:Name="PiPromptBox" PlaceholderText="Ask Pi anything… (Ctrl+Enter to send)"
                        AcceptsReturn="True" TextWrapping="Wrap" MinHeight="64" MaxHeight="220"
-                       ScrollViewer.VerticalScrollBarVisibility="Auto"
-                       KeyDown="PiPromptBox_OnKeyDown" />
+                       ScrollViewer.VerticalScrollBarVisibility="Auto" />
               <Button Grid.Column="1" x:Name="PiSendButton" Content="Send" Click="SendPrompt_OnClick" />
               <Button Grid.Column="2" x:Name="PiCancelButton" Content="Cancel" Click="CancelPrompt_OnClick" IsEnabled="False" />
             </Grid>
@@ -241,18 +294,52 @@
       </ScrollViewer>
     </Grid>
 
-    <!-- Shared quiet status: connection, model, action feedback. All pages. -->
-    <Border Grid.Row="3" BorderBrush="#343B47" BorderThickness="1" CornerRadius="8" Padding="8">
-      <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8">
-        <Ellipse x:Name="ConnectionDot" Width="10" Height="10" Fill="#6B7280"
-                 VerticalAlignment="Center" ToolTip.Tip="Connection state" />
-        <TextBlock x:Name="PiConnectionState" Grid.Column="1" Text="Disconnected"
-                   Foreground="#AAB2BF" FontSize="12" VerticalAlignment="Center" />
-        <TextBlock x:Name="StatusText" Grid.Column="2" Text="Select a workspace, then Connect."
-                   Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" />
-        <TextBlock x:Name="PiModelText" Grid.Column="3" Text="Pi engine not connected."
-                   Foreground="#AAB2BF" FontSize="12" VerticalAlignment="Center" />
-      </Grid>
+    <!-- Pi-style footer: working indicator, clickable directory, genuine
+         status, usage, and engine segments. Full width, all pages. -->
+    <Border Grid.Row="2" Grid.ColumnSpan="2" BorderBrush="#343B47" BorderThickness="1"
+            CornerRadius="8" Padding="8,6">
+      <StackPanel Spacing="2">
+        <StackPanel x:Name="WorkingRow" IsVisible="False" Orientation="Horizontal" Spacing="8">
+          <TextBlock Text="Working" Foreground="#82AAFF" FontSize="12" FontWeight="SemiBold" />
+          <TextBlock x:Name="PiActivityText" Text="" Foreground="#7DD3A8" FontSize="12"
+                     TextWrapping="Wrap" VerticalAlignment="Center" />
+        </StackPanel>
+        <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
+          <Button x:Name="DirectoryButton" Grid.Column="0" Content="Select a workspace…"
+                  Click="DirectoryButton_OnClick"
+                  ToolTip.Tip="Working directory — opens the folder picker (guarded while connected)"
+                  AutomationProperties.Name="Working directory"
+                  Foreground="#6FC3DF" Background="Transparent" BorderThickness="0"
+                  Padding="4,0" FontSize="12" VerticalAlignment="Center" />
+          <TextBlock x:Name="StatusText" Grid.Column="1" Text="Select a workspace, then Connect."
+                     Foreground="#AAB2BF" FontSize="12" TextWrapping="Wrap"
+                     VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+          <Ellipse x:Name="ConnectionDot" Grid.Column="2" Width="10" Height="10" Fill="#6B7280"
+                   VerticalAlignment="Center" ToolTip.Tip="Connection state" />
+          <TextBlock x:Name="PiConnectionState" Grid.Column="3" Text="Disconnected"
+                     Foreground="#AAB2BF" FontSize="12" VerticalAlignment="Center" />
+        </Grid>
+        <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
+          <TextBlock x:Name="UsageText" Grid.Column="0" Text="messages —"
+                     Foreground="#AAB2BF" FontSize="12" VerticalAlignment="Center"
+                     ToolTip.Tip="Genuine engine message count. Token/cost context is unavailable." />
+          <Border Grid.Column="1" />
+          <Button x:Name="ModelButton" Grid.Column="2" Content="Model: —"
+                  Click="ModelButton_OnClick"
+                  ToolTip.Tip="Engine model (selection pending the Core operation)"
+                  AutomationProperties.Name="Engine model"
+                  Foreground="#AAB2BF" Background="Transparent" BorderThickness="0"
+                  Padding="4,0" FontSize="12" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="3" Text="•" Foreground="#6B7280" FontSize="12"
+                     VerticalAlignment="Center" />
+          <Button x:Name="ThinkingButton" Grid.Column="4" Content="Thinking: —"
+                  Click="ThinkingButton_OnClick"
+                  ToolTip.Tip="Thinking level (selection pending the Core operation)"
+                  AutomationProperties.Name="Thinking level"
+                  Foreground="#AAB2BF" Background="Transparent" BorderThickness="0"
+                  Padding="4,0" FontSize="12" VerticalAlignment="Center" />
+        </Grid>
+      </StackPanel>
     </Border>
   </Grid>
 </Window>

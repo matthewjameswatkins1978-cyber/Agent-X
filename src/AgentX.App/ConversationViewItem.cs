@@ -29,6 +29,8 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
     private MdDocument? _markdown;
     private bool _isExpanded;
     private string _header;
+    private string _toolName = "tool";
+    private string _toolSuffix = string.Empty;
     private readonly int _displayCap;
 
     public ConversationViewItem(
@@ -52,6 +54,10 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
         StateBrush = stateBrush;
         _displayCap = displayCap;
         RoleBrush = RoleBrushes.GetValueOrDefault(role, RoleBrushes["system"]);
+        IsCompaction = role == "system" && fullText.StartsWith("[context summary]", StringComparison.Ordinal);
+        var (toolName, toolSuffix) = ToolDisplay(header, seq);
+        _toolName = toolName;
+        _toolSuffix = toolSuffix;
         RefreshExpansion();
     }
 
@@ -74,7 +80,84 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
 
     public FeedBlockKind Kind { get; }
 
+    /// True for the persisted-compaction system row (Pi's purple box).
+    public bool IsCompaction { get; }
+
+    /// Pi-style tool header: bold white name ("read").
+    public string ToolName
+    {
+        get => _toolName;
+        private set
+        {
+            if (_toolName != value)
+            {
+                _toolName = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ToolName)));
+            }
+        }
+    }
+
     public bool IsStreaming { get; }
+
+    /// Pi-style tool header suffix: dim state + evidence seq ("· finished #4").
+    /// The state word keeps failure/success readable without colour.
+    public string ToolSuffix
+    {
+        get => _toolSuffix;
+        private set
+        {
+            if (_toolSuffix != value)
+            {
+                _toolSuffix = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ToolSuffix)));
+            }
+        }
+    }
+
+    /// Recompute the Pi-style tool display from the lifecycle header.
+    /// Called with Header whenever a row settles (start → finished/failed).
+    public void RefreshToolDisplay()
+    {
+        var (toolName, toolSuffix) = ToolDisplay(Header, Seq);
+        ToolName = toolName;
+        ToolSuffix = toolSuffix;
+    }
+
+    /// Split a lifecycle header ("[Tool #4] finished: read") into the Pi
+    /// header pair ("read", "· finished #4"). The state word is kept so
+    /// success/failure never depends on colour alone; the seq keeps the
+    /// evidence link. Unknown shapes fall back to the raw header text.
+    internal static (string Name, string Suffix) ToolDisplay(string? header, long seq)
+    {
+        const string tag = "(unverified)";
+        if (!string.IsNullOrEmpty(header))
+        {
+            var colon = header.IndexOf(':');
+            if (colon > 0)
+            {
+                var state = header[..colon].Trim();
+                var open = state.LastIndexOf(' ');
+                state = open >= 0 ? state[(open + 1)..].Trim() : state;
+                var rest = header[(colon + 1)..].Trim();
+                var unverified = false;
+                if (rest.EndsWith(tag, StringComparison.Ordinal))
+                {
+                    unverified = true;
+                    rest = rest[..^tag.Length].Trim();
+                }
+
+                if (state.Length > 0 && rest.Length > 0)
+                {
+                    var suffix = unverified
+                        ? $"· {state} (unverified) #{seq}"
+                        : $"· {state} #{seq}";
+                    return (rest, suffix);
+                }
+            }
+        }
+
+        return (header ?? "tool", $"#{seq}");
+    }
 
     public IBrush StateBrush
     {
@@ -96,6 +179,9 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
     public bool IsTool => Kind == FeedBlockKind.Tool;
 
     public bool IsSystemRow => Kind is FeedBlockKind.System or FeedBlockKind.Receipt;
+
+    /// Plain dim rows: system/bridge/receipt rows that are not compaction.
+    public bool IsPlainSystemRow => IsSystemRow && !IsCompaction;
 
     public string FullText
     {

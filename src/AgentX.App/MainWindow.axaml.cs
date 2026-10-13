@@ -5,9 +5,22 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using AgentX.Core;
 
 namespace AgentX.App;
+
+/// <summary>
+/// Left-rail pages (Live default). Indices match the page visibility
+/// switch; a future Stats page plugs in as index 3 with one more rail
+/// item — no placeholder, no dead destination in the meantime.
+/// </summary>
+public enum AppPage
+{
+    Overview = 0,
+    Live = 1,
+    Settings = 2,
+}
 
 public partial class MainWindow : Window
 {
@@ -23,10 +36,30 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _promptLifetime;
     private bool _piBusy;
 
-    // Workspace tabs + pages: one active workspace at a time, presentation-only
+    // Worker tabs + pages: one active workspace at a time, presentation-only
     // page switches. Tab selection never retargets a live Pi process (only
     // Disconnect/Reconnect change connection state); page switches never
     // touch the feed, so scroll, selection and composer input survive.
+    // Per-worker-tab view state (App-owned): composer draft, selection by
+    // feed Seq, scroll offset, status snapshots. Transcript memory lives in
+    // the Core coordinator; this dictionary covers only what the view owns.
+    private readonly Dictionary<string, WorkerViewState> _viewStates = new(StringComparer.Ordinal);
+    private ViewPrefs _viewPrefs = new();
+    // Engine settings boundary (Agent ONE owns the Core contract): model
+    // and thinking selection flow ONLY through this adapter. Pending until
+    // Core ships the verified operations; the footer says so explicitly.
+    private readonly IEngineSettingsRuntime _settingsRuntime = new PendingEngineSettingsRuntime();
+    // Last genuine engine values (from get_state on connect/reconnect).
+    // Usage shows messages only: token/cost context does not exist here.
+    private string? _knownProvider;
+    private string? _knownModelId;
+    private string? _knownModelDisplay;
+    private string? _knownThinking;
+    private int? _knownMessages;
+    // Left-rail pages. Live is default; a future Stats page plugs in as a
+    // fourth enum member + one rail item — no placeholders in the meantime.
+    private AppPage _page = AppPage.Live;
+    private bool _syncingRail;
     private WorkspaceCatalog _catalog = null!;
     private AgentXPreferences _prefs = new();
     private string? _connectedKey;
@@ -91,9 +124,19 @@ public partial class MainWindow : Window
         _bridge = new FeedBridge(_feed);
         _flushTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _flushTimer.Tick += (_, _) => FlushLive();
+        // Chord delivery: the TextBox consumes Enter in its own class
+        // handling, so a plain bubble subscription never reliably sees
+        // Ctrl+Enter. Subscribing with handledEventsToo reaches the chord
+        // after the control — same handler, one send (guarded by _piBusy).
+        PiPromptBox.AddHandler(
+            InputElement.KeyDownEvent,
+            new EventHandler<Avalonia.Input.KeyEventArgs>(PiPromptBox_OnKeyDown),
+            handledEventsToo: true);
         var (prefs, note) = AgentXPreferences.Load(ManagedRoot);
         _prefs = prefs;
         ApplyVisibility();
+        _viewPrefs = ViewPrefs.Load(ManagedRoot);
+        ApplyRailWidth();
         _coordinator = new WorkspaceSessionCoordinator(_feed, WorkspaceCatalog.LegacyKey);
         ApplyTheme();
         ThemeCombo.ItemsSource = AgentXPreferences.KnownThemes;
@@ -136,10 +179,12 @@ public partial class MainWindow : Window
             selectKey);
         var connectedLive = _conversation is not null && _connectedKey is not null;
         WorkspaceTabs.Items.Clear();
+        var tintIndex = 0;
         foreach (var entry in resolved.Entries)
         {
             WorkspaceTabs.Items.Add(MakeTab(entry,
-                isConnected: connectedLive && entry.Key == _connectedKey));
+                isConnected: connectedLive && entry.Key == _connectedKey,
+                tintIndex: tintIndex++));
         }
 
         // One authoritative transition for programmatic reselects too: a
@@ -157,6 +202,8 @@ public partial class MainWindow : Window
         }
 
         UpdateEmptyState();
+        RestoreWorkerViewState(_coordinator.ActiveKey);
+        RefreshDirectoryLabel();
         if (!result.Accepted)
         {
             StatusText.Text = $"Staying on '{_connectedLabel}' — {result.RefusalReason} Histories never mix.";
@@ -176,7 +223,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private static TabStripItem MakeTab(CatalogEntry entry, bool isConnected)
+    private static TabStripItem MakeTab(CatalogEntry entry, bool isConnected, int tintIndex)
     {
         var dot = new Avalonia.Controls.Shapes.Ellipse
         {
@@ -190,7 +237,15 @@ public partial class MainWindow : Window
         var header = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 6 };
         header.Children.Add(dot);
         header.Children.Add(label);
-        var tab = new TabStripItem { Content = header };
+        // Stable identity tint per tab position (terminal-tab idea): a
+        // translucent fill, brightened when selected (see UpdateTabDots).
+        // State is never colour-alone: dot + footer text + tooltip carry it.
+        var tint = Avalonia.Media.Color.Parse(WorkerTabColors.TintFor(tintIndex));
+        var tab = new TabStripItem
+        {
+            Content = header,
+            Background = new Avalonia.Media.SolidColorBrush(tint, 0.28),
+        };
         Avalonia.Controls.ToolTip.SetTip(tab, entry.Detail);
         tab.SetValue(Avalonia.Automation.AutomationProperties.NameProperty, entry.Label);
         tab.Tag = entry;
@@ -223,6 +278,7 @@ public partial class MainWindow : Window
 
     private void UpdateTabDots()
     {
+        var index = 0;
         foreach (var item in WorkspaceTabs.Items)
         {
             if (item is TabStripItem tab
@@ -232,10 +288,21 @@ public partial class MainWindow : Window
                 && tab.Tag is CatalogEntry entry)
             {
                 var on = entry.Key == _connectedKey && _conversation?.IsConnected == true;
-                dot.Fill = on
-                    ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#7DD3A8"))
-                    : new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#6B7280"));
+                var busy = on && _piBusy;
+                dot.Fill = busy
+                    ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#E5C07B"))
+                    : on
+                        ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#7DD3A8"))
+                        : new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#6B7280"));
+                // Identity tint follows tab position; selection brightens
+                // the fill so the active worker reads at a glance. State
+                // itself stays on the dot + footer text, never colour alone.
+                var selected = ReferenceEquals(WorkspaceTabs.SelectedItem, tab);
+                var tint = Avalonia.Media.Color.Parse(WorkerTabColors.TintFor(index));
+                tab.Background = new Avalonia.Media.SolidColorBrush(tint, selected ? 0.55 : 0.28);
             }
+
+            index++;
         }
     }
 
@@ -254,11 +321,16 @@ public partial class MainWindow : Window
 
         // Same authoritative path as programmatic reselects: the coordinator
         // refuses pinned workspaces and syncs feed memory atomically.
+        // Save this tab's view state FIRST: refusal keeps the same view, and
+        // saving is idempotent, so the current draft/selection/scroll/status
+        // always lands on the key that owns them.
+        SaveWorkerViewState(_coordinator.ActiveKey);
         var result = _coordinator.RequestTransition(entry.Key);
         if (!result.Accepted)
         {
             StatusText.Text = $"Disconnect from '{_connectedLabel}' before opening '{entry.Label}' — histories never mix.";
             SelectTab(_coordinator.ActiveKey);
+            RefreshDirectoryLabel();
             return;
         }
 
@@ -270,11 +342,100 @@ public partial class MainWindow : Window
         }
 
         UpdateEmptyState();
-        if (_conversation is null)
+        var restored = RestoreWorkerViewState(entry.Key);
+        UpdateTabDots();
+        RefreshDirectoryLabel();
+        if (_conversation is null && !restored)
         {
             StatusText.Text = entry.IsLegacy
                 ? "Legacy session selected — press Connect."
                 : $"Workspace '{entry.Label}' selected — press Connect.";
+        }
+    }
+
+    /// <summary>
+    /// Snapshot the view-owned state of one worker tab: composer draft,
+    /// selection (by feed Seq), scroll offset, and the status strings it
+    /// showed. Transcript stays in the Core coordinator. Connection and
+    /// engine identity stay global (one live worker max under today's
+    /// contract); only the per-view feedback is snapshotted.
+    /// </summary>
+    private void SaveWorkerViewState(string key)
+    {
+        var state = _viewStates.TryGetValue(key, out var existing)
+            ? existing
+            : _viewStates[key] = new WorkerViewState();
+        state.DraftText = PiPromptBox.Text ?? string.Empty;
+        state.SelectedSeq = (ConversationList.SelectedItem as ConversationViewItem)?.Seq;
+        state.ScrollOffset = ConversationScrollOffset();
+        state.StatusText = StatusText.Text ?? string.Empty;
+        state.RunStatusText = PiRunStatus.Text ?? string.Empty;
+        _viewPrefs.Drafts[key] = state.DraftText;
+        SaveViewPrefs();
+    }
+
+    /// <summary>
+    /// Restore one worker tab's view: draft (seeded from persisted prefs on
+    /// first visit), selection, scroll, and its status snapshot. Live
+    /// connection/engine strings stay global and are NOT overwritten here.
+    /// Returns true when a prior snapshot existed (so callers keep it over
+    /// generic hints).
+    /// </summary>
+    private bool RestoreWorkerViewState(string key)
+    {
+        var existed = _viewStates.TryGetValue(key, out var state);
+        state ??= _viewStates[key] = new WorkerViewState();
+        if (!existed)
+        {
+            if (_viewPrefs.Drafts.TryGetValue(key, out var draft))
+            {
+                state.DraftText = draft;
+                existed = true;
+            }
+        }
+
+        PiPromptBox.Text = state.DraftText;
+        ConversationList.SelectedItem = state.SelectedSeq is { } seq
+            ? _conversationItems.FirstOrDefault(i => i.Seq == seq)
+            : null;
+        var offset = state.ScrollOffset;
+        Dispatcher.UIThread.Post(() => SetConversationScrollOffset(offset));
+        StatusText.Text = state.StatusText;
+        PiRunStatus.Text = state.RunStatusText;
+        return existed;
+    }
+
+    private double ConversationScrollOffset()
+    {
+        try
+        {
+            return ConversationList
+                .GetVisualDescendants()
+                .OfType<Avalonia.Controls.ScrollViewer>()
+                .FirstOrDefault()?.Offset.Y ?? 0;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private void SetConversationScrollOffset(double offset)
+    {
+        try
+        {
+            var viewer = ConversationList
+                .GetVisualDescendants()
+                .OfType<Avalonia.Controls.ScrollViewer>()
+                .FirstOrDefault();
+            if (viewer is not null)
+            {
+                viewer.Offset = new Avalonia.Vector(0, Math.Max(0, offset));
+            }
+        }
+        catch
+        {
+            // Scroll restore is best-effort: a missed offset never loses data.
         }
     }
 
@@ -302,6 +463,12 @@ public partial class MainWindow : Window
         {
             _pickingWorkspace = false;
         }
+
+        // Surface the staged confirmation: it lives on the Settings page.
+        if (_pendingWorkspacePath is not null)
+        {
+            ShowPage("Settings");
+        }
     }
 
     // Pending explicit confirmation: the picker result is staged here and
@@ -311,6 +478,10 @@ public partial class MainWindow : Window
 
     private async Task AddWorkspaceCoreAsync()
     {
+        // Visible state while the native dialog is up: confirm/cancel/fail
+        // paths below all replace this. (A dialog that can never appear —
+        // e.g. no interactive shell — leaves this line up: honest.)
+        StatusText.Text = "Opening folder picker…";
         IReadOnlyList<Avalonia.Platform.Storage.IStorageFolder> folders;
         try
         {
@@ -592,7 +763,7 @@ public partial class MainWindow : Window
             _connectedWorkspace = workspace;
             _coordinator.NoteConnected(choice.Key);
             PiConnectionState.Text = "Connected";
-            PiModelText.Text = DescribeState(state);
+            NoteEngineState(state);
             var history = conversation.History;
             _feed.LoadHistory(history);
             _coordinator.RefreshMemory();
@@ -605,6 +776,7 @@ public partial class MainWindow : Window
                 ? $"New session for '{choice.Label}' — no previous conversation."
                 : $"Restored '{choice.Label}' with {history.Count} message(s). Send a prompt to continue.";
             StatusText.Text = $"Pi runs in {workspace.WorkingDirectory} with your user authority.";
+            RefreshDirectoryLabel();
         }
         catch (Exception ex)
         {
@@ -614,7 +786,8 @@ public partial class MainWindow : Window
             _bridge.Detach();
             await conversation.DisposeAsync();
             PiConnectionState.Text = "Connection failed";
-            PiModelText.Text = ex.Message;
+            StatusText.Text = $"Connection failed: {ex.Message} — nothing connected.";
+            ClearEngineState();
         }
         finally
         {
@@ -673,7 +846,7 @@ public partial class MainWindow : Window
             owner.ValidateSessionMatch(state.SessionId);
 
             PiConnectionState.Text = "Connected";
-            PiModelText.Text = DescribeState(state);
+            NoteEngineState(state);
             // The feed keeps whatever it already holds (including any
             // preserved partial text); the notice records the restore truth.
             _feed.AddSystemNotice(
@@ -719,6 +892,8 @@ public partial class MainWindow : Window
         PiSendButton.IsEnabled = false;
         PiCancelButton.IsEnabled = true;
         PiConnectionState.Text = "Working…";
+        WorkingRow.IsVisible = true;
+        UpdateTabDots();
 
         _feed.AddUser(message);
         _liveSeq = _feed.BeginAssistantTurn();
@@ -821,6 +996,8 @@ public partial class MainWindow : Window
             _liveSeq = -1;
             PiSendButton.IsEnabled = true;
             PiCancelButton.IsEnabled = false;
+            WorkingRow.IsVisible = false;
+            UpdateTabDots();
             _promptLifetime?.Dispose();
             _promptLifetime = null;
         }
@@ -830,6 +1007,9 @@ public partial class MainWindow : Window
     {
         // Predictable composer keys: Enter inserts a newline (multiline),
         // Ctrl+Enter sends exactly what is in the box. No other chords act.
+        // Wired to PreviewKeyDown (tunnel): the TextBox consumes Enter in
+        // its own class handling, so the bubble-phase KeyDown never sees
+        // the chord reliably.
         if (e.Key == Avalonia.Input.Key.Enter
             && e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control))
         {
@@ -937,6 +1117,7 @@ public partial class MainWindow : Window
         if (item.Kind == FeedBlockKind.Tool)
         {
             item.StateBrush = ToolStateBrush(entry);
+            item.RefreshToolDisplay();
         }
         var body = entry.IsStreaming && entry.Text.Length == 0 ? "Working…" : entry.Text;
         item.DisplayText = item.IsExpanded ? FeedEntry.TruncateExpanded(entry.Text) : FeedEntry.TruncateForDisplay(body, cap);
@@ -1139,31 +1320,93 @@ public partial class MainWindow : Window
 
     private void ShowPage(string name)
     {
-        var index = name switch
+        var page = name switch
         {
-            "Overview" => 0,
-            "Settings" => 2,
-            _ => 1,
+            "Overview" => AppPage.Overview,
+            "Settings" => AppPage.Settings,
+            _ => AppPage.Live,
         };
-        if (PageTabs.SelectedIndex != index)
+        _page = page;
+        _syncingRail = true;
+        try
         {
-            PageTabs.SelectedIndex = index;
-            return; // The change handler below does the work.
+            NavLive.IsChecked = page == AppPage.Live;
+            NavOverview.IsChecked = page == AppPage.Overview;
+            NavSettings.IsChecked = page == AppPage.Settings;
+        }
+        finally
+        {
+            _syncingRail = false;
         }
 
-        ApplyPageVisibility(index);
+        ApplyPageVisibility((int)page);
     }
 
-    private void PageTabs_OnChanged(object? sender, SelectionChangedEventArgs e)
+    private void Nav_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        // Fires during XAML init (IsSelected in markup) before named fields
-        // exist — ignore until construction completes.
-        if (OverviewPanel is null || LivePanel is null || SettingsPanel is null)
+        if (_syncingRail)
         {
             return;
         }
 
-        ApplyPageVisibility(PageTabs.SelectedIndex);
+        // ToggleButtons flip before the click lands; ShowPage re-syncs the
+        // group, so the active page can never be left unchecked. Page
+        // switches are presentation-only: feed, selection, draft and any
+        // background run are untouched.
+        if (sender == NavOverview)
+        {
+            ShowPage("Overview");
+        }
+        else if (sender == NavSettings)
+        {
+            ShowPage("Settings");
+        }
+        else
+        {
+            ShowPage("Live");
+        }
+    }
+
+    private void NavCollapse_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        _viewPrefs.RailExpanded = !_viewPrefs.RailExpanded;
+        ApplyRailWidth();
+        SaveViewPrefs();
+    }
+
+    /// <summary>
+    /// Rail geometry: 56px icon rail collapsed (the default — transcript
+    /// keeps the room), 180px with labels expanded. Instant switch, no
+    /// animation, never on hover. Expansion never touches the feed or any
+    /// live process; it only reclaims label space from the centre.
+    /// </summary>
+    private void ApplyRailWidth()
+    {
+        var expanded = _viewPrefs.RailExpanded;
+        NavRail.Width = expanded ? 180 : 56;
+        NavLiveLabel.IsVisible = expanded;
+        NavOverviewLabel.IsVisible = expanded;
+        NavSettingsLabel.IsVisible = expanded;
+        NavCollapseLabel.IsVisible = expanded;
+        NavCollapseLabel.Text = expanded ? "Collapse" : "Expand";
+        NavCollapseGlyph.Text = expanded ? "\u00AB" : "\u00BB";
+        Avalonia.Controls.ToolTip.SetTip(NavCollapse,
+            expanded ? "Collapse navigation" : "Expand navigation");
+        NavCollapse.SetValue(Avalonia.Automation.AutomationProperties.NameProperty,
+            expanded ? "Collapse navigation" : "Expand navigation");
+    }
+
+    private void SaveViewPrefs()
+    {
+        try
+        {
+            var keys = _catalog?.Entries.Select(e => e.Key);
+            _viewPrefs.Save(ManagedRoot, keys);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            StatusText.Text = $"Could not save view preferences: {ex.Message}";
+        }
     }
 
     private void ApplyPageVisibility(int index)
@@ -1197,7 +1440,7 @@ public partial class MainWindow : Window
         var viewingOwn = _conversation is null || entry.Key == _connectedKey;
         OverviewConnectionText.Text = _conversation?.IsConnected == true
             ? viewingOwn
-                ? $"Connected to '{_connectedLabel}'. {PiModelText.Text}"
+                ? $"Connected to '{_connectedLabel}'. {EngineSummary()}"
                 : $"Connected to '{_connectedLabel}' — viewing '{entry.Label}' (connect it to work here)."
             : $"Not connected. {(viewingOwn ? "Press Connect on the Live page." : "This is not the connected workspace.")}";
         try
@@ -1330,7 +1573,7 @@ public partial class MainWindow : Window
                 $"Preferences: {AgentXPreferences.PreferencesPath(ManagedRoot)}\n" +
                 (_catalog.IsRecovery ? "Registry state: RECOVERY (registration disabled)." : "Registry state: healthy.");
             PiInfoText.Text = _conversation?.IsConnected == true
-                ? $"{PiModelText.Text} Session: {_connectedWorkspace?.SessionId ?? _connectedKey}."
+                ? $"{EngineSummary()} Session: {_connectedWorkspace?.SessionId ?? _connectedKey}."
                 : "Pi engine not connected. Provider authentication lives in Pi itself; Agent X never copies credentials.";
             var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
             AppVersionText.Text = $"Agent X desktop (Avalonia UI) — app version {version?.ToString() ?? "dev"}. Pi engine 1.1.0 external, unmodified.";
@@ -1579,8 +1822,144 @@ public partial class MainWindow : Window
         });
     }
 
-    private static string DescribeState(PiEngineState state)
-        => $"Model: {state.ModelName ?? state.ModelId ?? "none"} ({state.Provider ?? "?"}) · thinking {state.ThinkingLevel} · messages {state.MessageCount}";
+    /// <summary>
+    /// Remember the genuine engine values from get_state (connect and
+    /// reconnect). The footer shows these verbatim; usage shows the message
+    /// count only, because token/cost context does not exist on this path.
+    /// </summary>
+    private void NoteEngineState(PiEngineState state)
+    {
+        _knownProvider = state.Provider;
+        _knownModelId = state.ModelId;
+        _knownModelDisplay = state.ModelName ?? state.ModelId ?? "none";
+        _knownThinking = state.ThinkingLevel;
+        _knownMessages = state.MessageCount;
+        RefreshEngineSegments();
+    }
+
+    private void ClearEngineState()
+    {
+        _knownProvider = null;
+        _knownModelId = null;
+        _knownModelDisplay = null;
+        _knownThinking = null;
+        _knownMessages = null;
+        RefreshEngineSegments();
+    }
+
+    /// <summary>One-line engine summary for Overview/Settings (genuine values only).</summary>
+    private string EngineSummary()
+        => _knownModelDisplay is null
+            ? "Pi engine not connected."
+            : $"Model: {_knownModelDisplay} ({_knownProvider ?? "?"}) · thinking {_knownThinking ?? "?"} · messages {_knownMessages?.ToString("N0") ?? "?"}";
+
+    /// <summary>Footer engine segments from the last known genuine values.</summary>
+    private void RefreshEngineSegments()
+    {
+        ModelButton.Content = _knownModelDisplay is null
+            ? "Model: —"
+            : $"({_knownProvider ?? "?"}) {_knownModelDisplay}";
+        ThinkingButton.Content = _knownThinking is null ? "Thinking: —" : _knownThinking;
+        UsageText.Text = _knownMessages is { } messages ? $"messages {messages:N0}" : "messages —";
+        var engineTip = _settingsRuntime.CanConfigure
+            ? "Click to change (verified Core operation)"
+            : $"Selection pending: {_settingsRuntime.UnavailableReason}";
+        Avalonia.Controls.ToolTip.SetTip(ModelButton, $"Engine model. {engineTip}");
+        Avalonia.Controls.ToolTip.SetTip(ThinkingButton, $"Thinking level. {engineTip}");
+    }
+
+    /// <summary>
+    /// Footer directory: the connected worker's cwd, else the selected
+    /// tab's. Never a branch (not tracked) and never invented.
+    /// </summary>
+    private void RefreshDirectoryLabel()
+    {
+        try
+        {
+            AgentXWorkspace? workspace = _connectedWorkspace;
+            if (workspace is null && SelectedEntry is { } entry)
+            {
+                workspace = entry.ToWorkspace(ManagedRoot);
+            }
+
+            DirectoryButton.Content = workspace?.WorkingDirectory ?? "Select a workspace…";
+        }
+        catch
+        {
+            DirectoryButton.Content = "Select a workspace…";
+        }
+    }
+
+    private void DirectoryButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        // Guard first: the picker must never move a running agent. Past the
+        // guard, the existing Add flow stages the folder and requires
+        // explicit confirmation — registration alone never retargets live
+        // work, and the staged confirm panel is surfaced on Settings.
+        if (_conversation is not null || _piBusy || _connecting)
+        {
+            StatusText.Text = $"Disconnect from '{_connectedLabel}' first — the folder picker never moves a running agent.";
+            return;
+        }
+
+        AddWorkspace_OnClick(sender, e);
+    }
+
+    private Avalonia.Controls.Flyout? _modelFlyout;
+    private Avalonia.Controls.Flyout? _thinkingFlyout;
+
+    /// <summary>
+    /// Honest engine flyout: today's values are real (get_state); selection
+    /// itself is pending the Core contract, stated plainly instead of
+    /// presented as functional. When CanConfigure flips true, the
+    /// adapter's real lists render in this same surface. One Flyout per
+    /// button, content refreshed on every open — repeated clicks never
+    /// stack popups (screen readers would hear each copy).
+    /// </summary>
+    private Avalonia.Controls.StackPanel BuildEngineFlyoutPanel(string title, string current)
+    {
+        var panel = new Avalonia.Controls.StackPanel { Spacing = 6 };
+        panel.Children.Add(new Avalonia.Controls.TextBlock
+        {
+            Text = title,
+            FontSize = 12,
+            FontWeight = Avalonia.Media.FontWeight.Bold,
+        });
+        panel.Children.Add(new Avalonia.Controls.TextBlock
+        {
+            Text = current,
+            FontSize = 12,
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+        });
+        panel.Children.Add(new Avalonia.Controls.TextBlock
+        {
+            Text = _settingsRuntime.CanConfigure
+                ? "Choose:"
+                : _settingsRuntime.UnavailableReason,
+            Foreground = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#82889A")),
+            FontSize = 12,
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+        });
+        return panel;
+    }
+
+    private void ModelButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        _modelFlyout ??= new Avalonia.Controls.Flyout();
+        _modelFlyout.Content = BuildEngineFlyoutPanel("Engine model",
+            _knownModelDisplay is null
+                ? "No engine connected."
+                : $"Current: ({_knownProvider ?? "?"}) {_knownModelDisplay}");
+        _modelFlyout.ShowAt(ModelButton);
+    }
+
+    private void ThinkingButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        _thinkingFlyout ??= new Avalonia.Controls.Flyout();
+        _thinkingFlyout.Content = BuildEngineFlyoutPanel("Thinking level",
+            _knownThinking is null ? "No engine connected." : $"Current: {_knownThinking}");
+        _thinkingFlyout.ShowAt(ThinkingButton);
+    }
 
     private async Task DisconnectPiAsync()
     {
@@ -1613,12 +1992,13 @@ public partial class MainWindow : Window
         Dispatcher.UIThread.Post(() =>
         {
             PiConnectionState.Text = "Disconnected";
-            PiModelText.Text = "Pi engine not connected.";
+            ClearEngineState();
             PiActivityText.Text = string.Empty;
             _feed.SetActivity(null);
             RebuildSessionMap();
             RefreshOverviewAndSettings();
             PiRunStatus.Text = "Session is persisted — reconnect to restore the conversation.";
+            RefreshDirectoryLabel();
         });
     }
 
@@ -1627,6 +2007,7 @@ public partial class MainWindow : Window
         base.OnClosed(e);
         _flushTimer.Stop();
         _bridge.Detach();
+        SaveWorkerViewState(_coordinator.ActiveKey);
         if (_conversation is not null)
         {
             _conversation.ActivityChanged -= Conversation_ActivityChanged;
