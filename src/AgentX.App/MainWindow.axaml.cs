@@ -124,13 +124,15 @@ public partial class MainWindow : Window
         _bridge = new FeedBridge(_feed);
         _flushTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
         _flushTimer.Tick += (_, _) => FlushLive();
-        // Chord delivery: the TextBox consumes Enter in its own class
-        // handling, so a plain bubble subscription never reliably sees
-        // Ctrl+Enter. Subscribing with handledEventsToo reaches the chord
-        // after the control — same handler, one send (guarded by _piBusy).
+        // Chord delivery: the TextBox inserts the newline in its own class
+        // handling on the bubble route, so a bubble subscription would send
+        // AND leak a newline into the draft. The tunnel runs first: marking
+        // the chord handled preempts the control, so Ctrl+Enter sends exactly
+        // what is in the box and plain Enter still inserts its newline.
         PiPromptBox.AddHandler(
             InputElement.KeyDownEvent,
             new EventHandler<Avalonia.Input.KeyEventArgs>(PiPromptBox_OnKeyDown),
+            Avalonia.Interactivity.RoutingStrategies.Tunnel,
             handledEventsToo: true);
         var (prefs, note) = AgentXPreferences.Load(ManagedRoot);
         _prefs = prefs;
@@ -941,8 +943,6 @@ public partial class MainWindow : Window
         }
 
         _piBusy = true;
-        PiSendButton.IsEnabled = false;
-        PiCancelButton.IsEnabled = true;
         PiConnectionState.Text = "Working…";
         WorkingRow.IsVisible = true;
         UpdateTabDots();
@@ -1046,8 +1046,6 @@ public partial class MainWindow : Window
 
             _piBusy = false;
             _liveSeq = -1;
-            PiSendButton.IsEnabled = true;
-            PiCancelButton.IsEnabled = false;
             WorkingRow.IsVisible = false;
             UpdateTabDots();
             _promptLifetime?.Dispose();
@@ -1067,6 +1065,16 @@ public partial class MainWindow : Window
         {
             e.Handled = true;
             SendPrompt_OnClick(sender, new Avalonia.Interactivity.RoutedEventArgs());
+        }
+
+        // Escape interrupts the active run only: an idle Escape must not
+        // touch the draft (no clear, no send). Cancellation stays truthful:
+        // "Cancelling…" now, "Cancelled" only once Pi confirms or the
+        // pending operation terminates in the existing handler below.
+        if (e.Key == Avalonia.Input.Key.Escape && _piBusy)
+        {
+            e.Handled = true;
+            CancelPrompt_OnClick(sender, new Avalonia.Interactivity.RoutedEventArgs());
         }
     }
 
@@ -1090,6 +1098,49 @@ public partial class MainWindow : Window
                 // Cancellation already requested; the pending wait observes it.
             }
         }
+    }
+
+    /// Composer context menu (mouse right-click or Shift+F10/Menu key): the
+    /// only visible Send/Stop surface. Both items reuse the single tested
+    /// execution path above — no second implementation. Standard edit items
+    /// are kept so the menu replaces nothing the mouse had. Focus returns to
+    /// the box so the editor stays predictable before/during/after a run.
+    /// Fires for mouse right-click AND keyboard menu keys. Computes Send/Stop
+    /// enablement once for both, then shows the flyout at the CONTROL (not
+    /// the pointer) so it flips above the composer with every item visible.
+    private void ComposerMenu_OnContextRequested(object? sender, Avalonia.Input.ContextRequestedEventArgs e)
+    {
+        ComposerSendItem.IsEnabled = ComposerActionPolicy.CanSend(
+            _conversation?.IsConnected == true, _piBusy, PiPromptBox.Text);
+        ComposerStopItem.IsEnabled = ComposerActionPolicy.CanStop(_piBusy);
+        // The flyout root is not in the XAML namescope: resolve it from the
+        // box it is attached to.
+        if (PiPromptBox.ContextFlyout is MenuFlyout menu)
+        {
+            menu.ShowAt(PiPromptBox);
+        }
+
+        e.Handled = true;
+    }
+
+    private void ComposerCut_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => PiPromptBox.Cut();
+
+    private void ComposerCopy_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => PiPromptBox.Copy();
+
+    private void ComposerPaste_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => PiPromptBox.Paste();
+
+    private void ComposerSelectAll_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => PiPromptBox.SelectAll();
+
+    private void ComposerSend_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        SendPrompt_OnClick(sender, e);
+        PiPromptBox.Focus();
+    }
+
+    private void ComposerStop_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        CancelPrompt_OnClick(sender, e);
+        PiPromptBox.Focus();
     }
 
     // --- Conversation feed view: bounded display over exact Core text. ---
