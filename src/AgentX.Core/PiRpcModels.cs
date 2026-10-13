@@ -2,6 +2,13 @@ using System.Text.Json;
 
 namespace AgentX.Core;
 
+/// <summary>One selectable model from get_available_models (pinned Pi 1.1.0: id/name/provider).</summary>
+public sealed record PiModelOption(string Provider, string Id, string Name)
+{
+    /// <summary>Stable selector key for SetModelAsync (provider + id as Pi reports them).</summary>
+    public string Key => $"{Provider}/{Id}";
+}
+
 /// <summary>Failure of one Pi RPC command (success: false response).</summary>
 public sealed class PiRpcCommandException(string command, string error)
     : Exception($"Pi command '{command}' failed: {error}")

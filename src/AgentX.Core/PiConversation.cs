@@ -353,6 +353,40 @@ public sealed class PiConversation : IAsyncDisposable
     public Task AbortAsync(CancellationToken cancellationToken = default)
         => Client.AbortAsync(cancellationToken);
 
+    /// <summary>Engine state of the CURRENT process (model, thinking, session, counts).</summary>
+    public Task<PiEngineState> GetStateAsync(CancellationToken cancellationToken = default)
+        => Client.GetStateAsync(cancellationToken);
+
+    /// <summary>Models this connection reports selectable. Query per connection; never cache across processes.</summary>
+    public Task<IReadOnlyList<PiModelOption>> GetAvailableModelsAsync(CancellationToken cancellationToken = default)
+        => Client.GetAvailableModelsAsync(cancellationToken);
+
+    /// <summary>Switch model (set_model). Accepted ≠ effective: confirm via get_state.</summary>
+    public Task SetModelAsync(string provider, string modelId, CancellationToken cancellationToken = default)
+        => Client.SetModelAsync(provider, modelId, cancellationToken);
+
+    /// <summary>Thinking levels the CURRENT model reports (model-dependent; re-query after model changes).</summary>
+    public Task<IReadOnlyList<string>> GetAvailableThinkingLevelsAsync(CancellationToken cancellationToken = default)
+        => Client.GetAvailableThinkingLevelsAsync(cancellationToken);
+
+    /// <summary>Set the thinking level (set_thinking_level). Accepted ≠ effective: confirm via get_state.</summary>
+    public Task SetThinkingLevelAsync(string level, CancellationToken cancellationToken = default)
+        => Client.SetThinkingLevelAsync(level, cancellationToken);
+
+    /// <summary>Executable this conversation launches (compat boundary uses it for version detection).</summary>
+    public string ExecutablePath => Client.ExecutablePath;
+
+    /// <summary>Live Pi process id, or null. Diagnostic seam (process-death scenarios, resource measurement).</summary>
+    public int? RunningProcessId => Client.RunningProcessId;
+
+    /// <summary>Reported Pi version (null when undeterminable — capabilities, not the number, are the authority).</summary>
+    public Task<PiVersionInfo?> DetectVersionAsync(CancellationToken cancellationToken = default)
+        => PiRpcCompat.DetectVersionAsync(Client.ExecutablePath, cancellationToken);
+
+    /// <summary>Probe this connection's supported RPC surface (side-effect free; see PiRpcCompat).</summary>
+    public Task<PiRpcCapabilities> ProbeCapabilitiesAsync(CancellationToken cancellationToken = default)
+        => PiRpcCompat.ProbeAsync(Client, cancellationToken);
+
     private void OnClientEvent(object? sender, PiRpcEventArgs args)
     {
         var activity = DescribeActivity(args.Record);

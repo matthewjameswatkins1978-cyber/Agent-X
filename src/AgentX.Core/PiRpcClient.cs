@@ -87,6 +87,12 @@ public sealed class PiRpcClient : IAsyncDisposable
 
     public bool IsRunning => _process is { HasExited: false };
 
+    /// <summary>Live Pi process id, or null. Internal test seam for process-death scenarios.</summary>
+    internal int? RunningProcessId => _process is { HasExited: false } ? _process.Id : null;
+
+    /// <summary>Executable this client launches (used by the compatibility boundary for version detection).</summary>
+    public string ExecutablePath => _options.ExecutablePath;
+
     public string? StderrTail
     {
         get
@@ -160,6 +166,103 @@ public sealed class PiRpcClient : IAsyncDisposable
         using var response = await connection.SendCommandAsync("get_state", null, cancellationToken).ConfigureAwait(false);
         ThrowOnCommandError(response);
         return PiEngineState.FromResponse(response);
+    }
+
+    /// <summary>
+    /// Every model Pi 1.1.0 reports as selectable (get_available_models).
+    /// Malformed entries are skipped, never guessed. The list reflects THIS
+    /// process's configured providers — query it per connection; do not cache
+    /// it across processes.
+    /// </summary>
+    public async Task<IReadOnlyList<PiModelOption>> GetAvailableModelsAsync(CancellationToken cancellationToken = default)
+    {
+        var connection = RequireConnection();
+        using var response = await connection.SendCommandAsync("get_available_models", null, cancellationToken).ConfigureAwait(false);
+        ThrowOnCommandError(response);
+        var models = new List<PiModelOption>();
+        if (response.RootElement.TryGetProperty("data", out var data)
+            && data.TryGetProperty("models", out var list)
+            && list.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in list.EnumerateArray())
+            {
+                if (entry.ValueKind != JsonValueKind.Object
+                    || !entry.TryGetProperty("id", out var id) || id.ValueKind != JsonValueKind.String
+                    || !entry.TryGetProperty("provider", out var prov) || prov.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+
+                var modelId = id.GetString();
+                var provider = prov.GetString();
+                if (string.IsNullOrWhiteSpace(modelId) || string.IsNullOrWhiteSpace(provider))
+                {
+                    continue;
+                }
+
+                var name = entry.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String
+                    ? n.GetString() ?? modelId
+                    : modelId;
+                models.Add(new PiModelOption(provider, modelId, name));
+            }
+        }
+
+        return models;
+    }
+
+    /// <summary>
+    /// Switch model (set_model). Returns only what Pi accepted — a caller
+    /// that needs PROOF must re-read get_state and compare: an accepted
+    /// request is not evidence the selection took effect.
+    /// </summary>
+    public async Task SetModelAsync(string provider, string modelId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(provider);
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+        var connection = RequireConnection();
+        using var response = await connection.SendCommandAsync(
+            "set_model",
+            new Dictionary<string, object?> { ["provider"] = provider, ["modelId"] = modelId },
+            cancellationToken).ConfigureAwait(false);
+        ThrowOnCommandError(response);
+    }
+
+    /// <summary>Thinking levels the CURRENT model reports (get_available_thinking_levels).</summary>
+    public async Task<IReadOnlyList<string>> GetAvailableThinkingLevelsAsync(CancellationToken cancellationToken = default)
+    {
+        var connection = RequireConnection();
+        using var response = await connection.SendCommandAsync("get_available_thinking_levels", null, cancellationToken).ConfigureAwait(false);
+        ThrowOnCommandError(response);
+        var levels = new List<string>();
+        if (response.RootElement.TryGetProperty("data", out var data)
+            && data.TryGetProperty("levels", out var list)
+            && list.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in list.EnumerateArray())
+            {
+                if (entry.ValueKind == JsonValueKind.String && entry.GetString() is { Length: > 0 } level)
+                {
+                    levels.Add(level);
+                }
+            }
+        }
+
+        return levels;
+    }
+
+    /// <summary>
+    /// Set the thinking level (set_thinking_level). Like SetModelAsync: the
+    /// acceptance response is not proof — confirm via get_state.
+    /// </summary>
+    public async Task SetThinkingLevelAsync(string level, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(level);
+        var connection = RequireConnection();
+        using var response = await connection.SendCommandAsync(
+            "set_thinking_level",
+            new Dictionary<string, object?> { ["level"] = level },
+            cancellationToken).ConfigureAwait(false);
+        ThrowOnCommandError(response);
     }
 
     /// <summary>
@@ -327,6 +430,14 @@ public sealed class PiRpcClient : IAsyncDisposable
 
         return _connection;
     }
+
+    /// <summary>Send an arbitrary RPC command and return the raw response (compat probes).</summary>
+    internal Task<JsonDocument> SendRawAsync(string command, Dictionary<string, object?>? payload, CancellationToken cancellationToken)
+        => RequireConnection().SendCommandAsync(command, payload, cancellationToken);
+
+    /// <summary>True when a response carries success != false (missing field counts as success, as with ThrowOnCommandError).</summary>
+    internal static bool IsCommandSuccess(JsonDocument response)
+        => !response.RootElement.TryGetProperty("success", out var success) || success.ValueKind != JsonValueKind.False;
 
     private static void ThrowOnCommandError(JsonDocument response)
     {
