@@ -10,7 +10,7 @@ namespace AgentX.App;
 /// process — the coordinator still refuses view changes while connected,
 /// so a background worker cannot be disturbed by looking at it.
 /// </summary>
-public sealed class WorkerViewState
+public sealed record WorkerViewState
 {
     public string DraftText { get; set; } = string.Empty;
 

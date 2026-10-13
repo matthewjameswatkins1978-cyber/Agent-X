@@ -43,7 +43,7 @@ public partial class MainWindow : Window
     // Per-worker-tab view state (App-owned): composer draft, selection by
     // feed Seq, scroll offset, status snapshots. Transcript memory lives in
     // the Core coordinator; this dictionary covers only what the view owns.
-    private readonly Dictionary<string, WorkerViewState> _viewStates = new(StringComparer.Ordinal);
+    private readonly WorkerViewStore _viewStore = new();
     private ViewPrefs _viewPrefs = new();
     // Engine settings boundary (Agent ONE owns the Core contract): model
     // and thinking selection flow ONLY through this adapter. Pending until
@@ -157,6 +157,11 @@ public partial class MainWindow : Window
         {
             StatusText.Text = note;
         }
+
+        if (_viewPrefs.IsRecovery)
+        {
+            StatusText.Text = _viewPrefs.RecoveryMessage;
+        }
     }
 
     // --- Workspace tabs: one active identity, guarded switching. ---
@@ -192,6 +197,13 @@ public partial class MainWindow : Window
         // the view), and a disconnected reselect snapshots/restores feeds
         // exactly like a user click. Suppressed selection alone would skip
         // all of that and can show the wrong project's history.
+        // Snapshot the outgoing VIEW first (draft, selection, scroll,
+        // status) under its owning key: the coordinator snapshots the feed
+        // below, but without this the rebuild would restore the target's
+        // (possibly stale) snapshot over unsent work. On refusal the same
+        // key is restored afterwards, round-tripping exactly; unchanged
+        // views skip the disk write inside. No feed work is added here.
+        SaveWorkerViewState(_coordinator.ActiveKey);
         var result = _coordinator.RequestTransition(resolved.TargetKey);
         SelectTab(_coordinator.ActiveKey);
         RebuildConversationList();
@@ -360,18 +372,38 @@ public partial class MainWindow : Window
     /// engine identity stay global (one live worker max under today's
     /// contract); only the per-view feedback is snapshotted.
     /// </summary>
-    private void SaveWorkerViewState(string key)
+    /// Snapshot the view-owned state of one worker tab and persist it when
+    /// anything changed. Returns true when a persist was attempted. Memory
+    /// always updates first; a failed disk write marks a retry instead of
+    /// destroying the in-memory copy.
+    private bool SaveWorkerViewState(string key)
     {
-        var state = _viewStates.TryGetValue(key, out var existing)
-            ? existing
-            : _viewStates[key] = new WorkerViewState();
-        state.DraftText = PiPromptBox.Text ?? string.Empty;
-        state.SelectedSeq = (ConversationList.SelectedItem as ConversationViewItem)?.Seq;
-        state.ScrollOffset = ConversationScrollOffset();
-        state.StatusText = StatusText.Text ?? string.Empty;
-        state.RunStatusText = PiRunStatus.Text ?? string.Empty;
-        _viewPrefs.Drafts[key] = state.DraftText;
-        SaveViewPrefs();
+        var snapshot = new WorkerViewState
+        {
+            DraftText = PiPromptBox.Text ?? string.Empty,
+            SelectedSeq = (ConversationList.SelectedItem as ConversationViewItem)?.Seq,
+            ScrollOffset = ConversationScrollOffset(),
+            StatusText = StatusText.Text ?? string.Empty,
+            RunStatusText = PiRunStatus.Text ?? string.Empty,
+        };
+        var changed = _viewStore.Save(key, snapshot);
+        if (!changed && !_viewStore.TakeDirty(key))
+        {
+            return false; // Nothing new; skip the disk write entirely.
+        }
+
+        _viewPrefs.Drafts[key] = snapshot.DraftText;
+        try
+        {
+            SaveViewPrefs();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _viewStore.MarkDirty(key);
+            StatusText.Text = $"Could not save view preferences: {ex.Message} — draft kept in memory.";
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -383,8 +415,8 @@ public partial class MainWindow : Window
     /// </summary>
     private bool RestoreWorkerViewState(string key)
     {
-        var existed = _viewStates.TryGetValue(key, out var state);
-        state ??= _viewStates[key] = new WorkerViewState();
+        var existed = _viewStore.Contains(key);
+        var state = _viewStore.GetOrCreate(key);
         if (!existed)
         {
             if (_viewPrefs.Drafts.TryGetValue(key, out var draft))
@@ -1371,7 +1403,14 @@ public partial class MainWindow : Window
     {
         _viewPrefs.RailExpanded = !_viewPrefs.RailExpanded;
         ApplyRailWidth();
-        SaveViewPrefs();
+        try
+        {
+            SaveViewPrefs();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            StatusText.Text = $"Could not save view preferences: {ex.Message}";
+        }
     }
 
     /// <summary>
@@ -1396,17 +1435,18 @@ public partial class MainWindow : Window
             expanded ? "Collapse navigation" : "Expand navigation");
     }
 
+    /// Persist view preferences. Prunes drafts ONLY against a healthy
+    /// catalog: registry recovery must never delete drafts for temporarily
+    /// unavailable projects. Throws on IO failure (callers keep memory and
+    /// mark a persist retry); returns silently when preferences recovery
+    /// disabled persistence (the startup status stands).
     private void SaveViewPrefs()
     {
-        try
-        {
-            var keys = _catalog?.Entries.Select(e => e.Key);
-            _viewPrefs.Save(ManagedRoot, keys);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            StatusText.Text = $"Could not save view preferences: {ex.Message}";
-        }
+        var healthy = _catalog is not null && !_catalog.IsRecovery;
+        _viewPrefs.Save(
+            ManagedRoot,
+            knownKeys: healthy ? _catalog!.Entries.Select(e => e.Key) : null,
+            pruneDrafts: healthy);
     }
 
     private void ApplyPageVisibility(int index)

@@ -101,3 +101,25 @@ Model/thinking selection (adapter ready, Core op pending); background
 multiworker viewing (coordinator pins the connected tab by design —
 Agent ONE's manager changes the ownership rule); token/cost usage
 (no Pi source). No placeholders or dead buttons for any of these.
+
+## B3 reliability corrections (Lucy review)
+
+- **Draft loss on programmatic rebuild (P1):** `LoadWorkspaceTabs`
+  restored the target view without saving the outgoing one, so
+  registering a project wiped an unsent draft. Now it snapshots the
+  outgoing view (draft, selection, scroll, status) under its owning key
+  BEFORE the guarded coordinator transition; refusal round-trips the
+  same key exactly. No feed work added; unchanged views skip the disk
+  write via record equality (failed writes mark a persist retry instead
+  of destroying memory).
+- **Corrupt prefs / degraded catalog (P1):** `ViewPrefs.Load` preserves
+  corrupt bytes to a timestamped backup, exposes `IsRecovery` +
+  `RecoveryMessage` (shown in the footer), and disables persistence
+  while active — ordinary saves return false, original stays
+  byte-identical, drafts keep working in memory. Draft pruning runs
+  ONLY against a healthy catalog; pruning applies to a serialization
+  copy so a failed write cannot destroy the in-memory drafts.
+  `WorkerViewStore` (UI-free) owns the snapshot lifecycle; covered with
+  `tests/AgentX.App.Tests` (15 tests: corruption, recovery refusal,
+  no-prune-on-degraded, prune-on-healthy, failed-write memory safety,
+  store isolation and refusal semantics).
