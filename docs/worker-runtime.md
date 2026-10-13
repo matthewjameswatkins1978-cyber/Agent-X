@@ -50,7 +50,8 @@ failed validation/probe QUARANTINES the connection (process disposed; if
 retirement itself fails the reference and claim are kept for retry — never
 a silent orphan) and ConnectAsync re-verifies instead of taking a
 shortcut; a failed reconnect clears capabilities and confirmed state before
-attempting the swap. `SendAsync` closes the visible turn on cancellation,
+attempting the swap. Disposal is bounded: the lifecycle-gate wait defaults to 10s (test seam); a connect holding the gate past it makes DisposeAsync throw `TimeoutException` having torn NOTHING down — claim and references retained for a retry — and a connect queued behind a completed disposal re-checks disposal inside the gate and never starts or publishes a process. 
+`SendAsync` closes the visible turn on cancellation,
 command rejection AND transport failure — never leaves a streaming row
 open, never fabricates a receipt. Persistence is transactional: create
 rolls back to the on-disk bytes on save failure; remove retires the Pi

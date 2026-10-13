@@ -246,6 +246,12 @@ public sealed class PiWorker : IAsyncDisposable
     private readonly Lock _gate = new();
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private readonly SemaphoreSlim _send = new(1, 1);
+
+    /// <summary>Bounded wait for DisposeAsync's lifecycle gate; tests shorten it to force a deterministic timeout.</summary>
+    internal TimeSpan DisposeGateTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>Test seam: awaited inside the lifecycle gate during ConnectAsync so a blocked connect can overlap disposal.</summary>
+    internal Func<CancellationToken, Task>? LifecycleGateHookForTests;
     private PiConversation? _conversation;
     private FeedBridge? _bridge;
     private VisibilityLevel _pendingVisibility = VisibilityLevel.Detailed;
@@ -374,6 +380,11 @@ public sealed class PiWorker : IAsyncDisposable
         await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // Re-check INSIDE the gate: a DisposeAsync that completed while
+            // this call waited must prevent any process from being started
+            // or published after successful disposal.
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
             // Fast path ONLY for a previously verified, still-running
             // connection: identity and capability probes were accepted before
             // this connection was ever published as usable. An unverified or
@@ -412,6 +423,16 @@ public sealed class PiWorker : IAsyncDisposable
             }
 
             var conversation = EnsureConversation();
+
+            // Test seam: parks the connect inside the lifecycle gate (after
+            // the session claim) so a regression can overlap it with a
+            // DisposeAsync contending for the same gate.
+            var hook = LifecycleGateHookForTests;
+            if (hook is not null)
+            {
+                await hook(cancellationToken).ConfigureAwait(false);
+            }
+
             try
             {
                 await conversation.ConnectAsync(cancellationToken).ConfigureAwait(false);
@@ -465,6 +486,11 @@ public sealed class PiWorker : IAsyncDisposable
         await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // Re-check INSIDE the gate: disposal may have completed while
+            // this reconnect waited — never publish after a completed
+            // disposal.
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
             // Invalidate first: a failed swap or failed re-probe must leave
             // this worker unverified (Send/model actions refuse) rather than
             // claiming capabilities of a process that no longer exists.
@@ -944,10 +970,22 @@ public sealed class PiWorker : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        // Serialize with connect/reconnect, bounded so a hung connect can
-        // never deadlock teardown (proceeding is still safe: every step is
-        // idempotent and reference-guarded).
-        var gotGate = await _lifecycle.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+        // Serialize with connect/reconnect, BOUNDED so a hung connect can
+        // never deadlock teardown. If the gate is NOT acquired, no teardown
+        // runs and no claim is released: disposal fails in a retryable
+        // state with ownership retained, so an in-progress connect can
+        // never interleave with a half-done teardown or publish a process
+        // after a "successful" disposal.
+        var gotGate = await _lifecycle.WaitAsync(DisposeGateTimeout).ConfigureAwait(false);
+        if (!gotGate)
+        {
+            throw new TimeoutException(
+                $"Worker '{Id}' teardown did not acquire the lifecycle gate within " +
+                $"{DisposeGateTimeout.TotalSeconds:0.#}s because a connect/reconnect is still " +
+                "running. Nothing was disposed and the session claim is retained — retry " +
+                "DisposeAsync once the in-progress operation completes.");
+        }
+
         try
         {
             FeedBridge? bridge;
@@ -1023,10 +1061,7 @@ public sealed class PiWorker : IAsyncDisposable
         }
         finally
         {
-            if (gotGate)
-            {
-                _lifecycle.Release();
-            }
+            _lifecycle.Release();
         }
     }
 }
