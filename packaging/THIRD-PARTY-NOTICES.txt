@@ -1,0 +1,32 @@
+THIRD-PARTY NOTICES — Agent X portable distribution
+=======================================================
+
+This file lists third-party components bundled in app/ and the external
+prerequisites Agent X talks to. Kept in sync with the PackageReference
+items in src/*/*.csproj by PackagingTests (tests/AgentX.Core.Tests/).
+
+BUNDLED (.NET packages restored from nuget.org at build time)
+--------------------------------------------------------------
+1. Avalonia 12.1.4 (+ Avalonia.Desktop, Avalonia.Themes.Fluent,
+   Avalonia.Fonts.Inter — same version)
+   License: MIT. https://github.com/AvaloniaUI/Avalonia/blob/main/licence.md
+   Used for: the desktop shell (src/AgentX.App).
+
+2. .NET 10 runtime (self-contained publish, win-x64)
+   License: MIT (runtime libraries). https://github.com/dotnet/runtime
+   Used for: the bundled runtime in app/ — no .NET SDK needed to run.
+
+3. Transitive NuGet dependencies of the above (resolved at restore time).
+   Their licenses travel with the packages; the authoritative list for a
+   given build is the publish output plus `dotnet list package`. No
+   copyleft (GPL/AGPL) components are expected; re-check before any RC.
+
+NOT BUNDLED (external prerequisites, separate owners/licenses)
+--------------------------------------------------------------
+4. Pi coding agent 1.1.0 (@earendil-works/pi-coding-agent, npm)
+   License: per the Pi package. Launched as a separate protected process;
+   unmodified. Agent X requires it at D:\AgentTools\bin\pi.cmd.
+
+5. Node.js >= 22.19.0 — required by Pi. https://nodejs.org
+
+6. Provider credentials/models — owned by the operator and providers.

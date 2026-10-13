@@ -1,0 +1,11 @@
+Agent X portable distribution — NOTICE
+========================================
+
+Agent X source in this build has no declared license yet. Treat the
+Agent X portions as Matthew Way's copyrighted work-in-progress shared
+for verification: all rights reserved unless a LICENSE file states
+otherwise. Declaring the Agent X license is an open item before any RC.
+
+Third-party components bundled in app/ are covered by their own
+licenses; see THIRD-PARTY-NOTICES.txt. Pi, Node.js, and provider
+credentials are NOT bundled and remain governed by their owners.
