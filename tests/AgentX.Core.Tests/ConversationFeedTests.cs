@@ -556,6 +556,87 @@ public sealed class ConversationFeedTests
     }
 
     [Fact]
+    public void ReconcileTools_ConflictingKnownIds_UniqueNameNeverOverrides()
+    {
+        // One completed read row with CallId "call-A"; the sole persisted
+        // body carries CallId "call-B". Step 1 cannot match (IDs differ);
+        // Step 2 must NOT fall back to the unique (read, success) name —
+        // explicit identity disagreement wins over name/outcome exclusivity.
+        var feed = new ConversationFeed();
+        feed.AddToolStart("read", "first read", path: null, isMutating: false, callId: "call-A");
+        feed.AddToolEnd("read", isError: false, callId: "call-A");
+        var original = feed.Snapshot().Single().Text;
+        var history = new List<ConversationMessage>
+        {
+            new("tool", "[tool result: read]\nBODY-B", CallId: "call-B"),
+        };
+        Assert.Equal(ReconcileOutcome.SkippedAmbiguous, feed.ReconcileToolResults(history));
+        var rows = feed.Snapshot();
+        Assert.Equal(2, rows.Count); // row untouched + one truthful marker
+        Assert.Equal(original, rows[0].Text);
+        Assert.DoesNotContain("BODY-B", rows[0].Text, StringComparison.Ordinal);
+        Assert.Contains("proven to match their invocation", rows[1].Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReconcileTools_MixedValidIdMatchAndConflictingPair_AppliesOnlyProven()
+    {
+        // One exact-ID match (call-1) alongside a leftover pair whose known
+        // IDs disagree (call-2 vs call-3). The proven pair applies; the
+        // conflicting pair must NOT be name-fallback-paired — its text stays
+        // and one truthful marker records the refusal.
+        var feed = new ConversationFeed();
+        feed.AddToolStart("read", "first read", path: null, isMutating: false, callId: "call-1");
+        feed.AddToolEnd("read", isError: false, callId: "call-1");
+        feed.AddToolStart("read", "second read", path: null, isMutating: false, callId: "call-2");
+        feed.AddToolEnd("read", isError: false, callId: "call-2");
+        var secondText = feed.Snapshot().Last().Text;
+        var history = new List<ConversationMessage>
+        {
+            new("tool", "[tool result: read]\nBODY-1", CallId: "call-1"),
+            new("tool", "[tool result: read]\nBODY-3", CallId: "call-3"),
+        };
+        Assert.Equal(ReconcileOutcome.SkippedAmbiguous, feed.ReconcileToolResults(history));
+        var rows = feed.Snapshot();
+        Assert.Equal(3, rows.Count); // two rows + one marker
+        Assert.Contains("BODY-1", rows[0].Text, StringComparison.Ordinal); // proven pair applied
+        Assert.Equal(secondText, rows[1].Text);                            // conflicting pair refused
+        Assert.DoesNotContain("BODY-3", rows[1].Text, StringComparison.Ordinal);
+        Assert.Contains("proven to match their invocation", rows[2].Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReconcileTools_DuplicateId_BlocksOtherwiseUniqueNameFallback()
+    {
+        // "dup" appears on a leftover read row AND a leftover history body
+        // — but it is ALSO duplicated on a bash body, so the read row's ID
+        // does not uniquely identify its body. Each (name, outcome) group is
+        // exactly 1 row / 1 body (would pass unique-name matching), yet the
+        // known duplicated identity must block the fallback for those keys.
+        var feed = new ConversationFeed();
+        feed.AddToolStart("read", "first read", path: null, isMutating: false, callId: "dup");
+        feed.AddToolEnd("read", isError: false, callId: "dup");
+        feed.AddToolStart("bash", "second", path: null, isMutating: false); // no ID
+        feed.AddToolEnd("bash", isError: true);
+        var originals = feed.Snapshot().Select(r => r.Text).ToArray();
+        var history = new List<ConversationMessage>
+        {
+            new("tool", "[tool result: read]\nBODY-1", CallId: "dup"),
+            new("tool", "[tool bash failed]\nBODY-2", CallId: "dup"),
+        };
+        Assert.Equal(ReconcileOutcome.SkippedAmbiguous, feed.ReconcileToolResults(history));
+        var rows = feed.Snapshot();
+        Assert.Equal(3, rows.Count); // two rows unchanged + one marker
+        Assert.Equal(originals[0], rows[0].Text);
+        Assert.Equal(originals[1], rows[1].Text);
+        Assert.DoesNotContain("BODY-", string.Join("\n", rows.Select(r => r.Text)), StringComparison.Ordinal);
+        Assert.Contains("proven to match their invocation", rows[2].Text, StringComparison.Ordinal);
+        // Repeat: refusal must not stack markers.
+        Assert.Equal(ReconcileOutcome.SkippedAmbiguous, feed.ReconcileToolResults(history));
+        Assert.Equal(3, feed.Snapshot().Count);
+    }
+
+    [Fact]
     public void ReconcileTools_RestoredRowsWithoutLifecycles_InSyncWithoutMarker()
     {
         // Restored rows ARE their own history: no lifecycle note to group

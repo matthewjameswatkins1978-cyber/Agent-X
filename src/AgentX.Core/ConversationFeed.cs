@@ -460,13 +460,18 @@ public sealed class ConversationFeed
     /// from post-run history — ONLY under a demonstrable identity contract
     /// (see ReconcileOutcome). Equal counts never suffice. Matching:
     /// (1) exact call-ID identity where BOTH sides carry the observed ID
-    /// (wire and session both use toolCall.id); (2) among the leftovers, a
-    /// (name, outcome) group with exactly one row and exactly one body —
-    /// unique candidate, no positional assumption. Everything else —
-    /// duplicate IDs, two same-name/same-outcome leftovers, unparseable
-    /// bodies, note-less rows without an ID — cannot be proven; such rows
-    /// keep their text and, if they differ from the leftover bodies
-    /// (multiset comparison), one truthful marker records the refusal.
+    /// (wire and session both use toolCall.id); (2) among leftovers whose
+    /// identity evidence is GENUINELY absent (no observed CallId on either
+    /// side of the key), a (name, outcome) group with exactly one row and
+    /// exactly one body — unique candidate, no positional assumption. A
+    /// key holding ANY leftover with a known ID — conflicting, duplicated
+    /// or merely unmatched — is blocked from fallback entirely: known
+    /// identity is never silently overridden by a name match. Everything
+    /// else — duplicate IDs, two same-name/same-outcome leftovers,
+    /// unparseable bodies, note-less rows without an ID — cannot be
+    /// proven; such rows keep their text and, if they differ from the
+    /// leftover bodies (multiset comparison), one truthful marker records
+    /// the refusal.
     /// </summary>
     public ReconcileOutcome ReconcileToolResults(IReadOnlyList<ConversationMessage> history)
     {
@@ -577,33 +582,68 @@ public sealed class ConversationFeed
 
             // Step 2: exclusivity among leftovers — exactly one note-bearing
             // feed row and exactly one parseable body per (name, outcome)
-            // group is a unique candidate, not a positional guess. Un-note'd
-            // restored rows and unparseable bodies cannot name a group.
+            // group is a unique candidate, not a positional guess. Fallback
+            // exists ONLY for genuinely missing identity: if ANY leftover
+            // candidate in a (name, outcome) key carries an observed CallId
+            // (conflicting, duplicated, or simply unmatched), known identity
+            // would be silently ignored — the whole key is blocked from
+            // fallback. Candidates with an observed ID are never fallback
+            // material themselves. Un-note'd restored rows and unparseable
+            // bodies cannot name a group at all.
+            var blockedKeys = new HashSet<(string, bool)>();
+            for (var f = 0; f < feedRows.Count; f++)
+            {
+                if (!feedPaired[f]
+                    && feedRows[f].Row.CallId is not null
+                    && ToolNoteName(feedRows[f].Row.Note) is { } blockedRowName)
+                {
+                    blockedKeys.Add((blockedRowName.ToLowerInvariant(), feedRows[f].Row.IsError));
+                }
+            }
+
+            for (var b = 0; b < bodies.Count; b++)
+            {
+                if (!bodyMatched[b]
+                    && bodies[b].CallId is not null
+                    && ParseHistoryToolIdentity(bodies[b].Text) is { } blockedIdentity)
+                {
+                    blockedKeys.Add((blockedIdentity.Name.ToLowerInvariant(), blockedIdentity.IsError));
+                }
+            }
+
             var feedGroups = new Dictionary<(string, bool), List<int>>();
             for (var f = 0; f < feedRows.Count; f++)
             {
-                if (feedPaired[f])
+                if (feedPaired[f] || feedRows[f].Row.CallId is not null)
                 {
-                    continue;
+                    continue; // Known ID: never fallback material.
                 }
 
                 if (ToolNoteName(feedRows[f].Row.Note) is { } name)
                 {
-                    AddKey(feedGroups, (name.ToLowerInvariant(), feedRows[f].Row.IsError), f);
+                    var key = (name.ToLowerInvariant(), feedRows[f].Row.IsError);
+                    if (!blockedKeys.Contains(key))
+                    {
+                        AddKey(feedGroups, key, f);
+                    }
                 }
             }
 
             var bodyGroups = new Dictionary<(string, bool), List<int>>();
             for (var b = 0; b < bodies.Count; b++)
             {
-                if (bodyMatched[b])
+                if (bodyMatched[b] || bodies[b].CallId is not null)
                 {
-                    continue;
+                    continue; // Known ID: never fallback material.
                 }
 
                 if (ParseHistoryToolIdentity(bodies[b].Text) is { } identity)
                 {
-                    AddKey(bodyGroups, (identity.Name.ToLowerInvariant(), identity.IsError), b);
+                    var key = (identity.Name.ToLowerInvariant(), identity.IsError);
+                    if (!blockedKeys.Contains(key))
+                    {
+                        AddKey(bodyGroups, key, b);
+                    }
                 }
             }
 

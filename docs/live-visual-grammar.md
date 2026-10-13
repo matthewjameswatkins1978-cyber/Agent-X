@@ -45,8 +45,11 @@ lightness intent, not claimed bit-exact terminal output.
   under a demonstrable identity contract: exact call-ID identity where
   both sides carry the observed ID (wire and session both derive it from
   `toolCall.id`), else a (name, outcome) group with exactly one row and
-  one body — a unique candidate, never a positional guess. Duplicate IDs,
-  two same-name/same-outcome leftovers, unparseable bodies and note-less
+  one body — but ONLY when identity evidence is genuinely absent: a key
+  holding any leftover with a known (conflicting, duplicated or
+  unmatched) ID is blocked from fallback, so a name match can never
+  override explicit identity disagreement. Duplicate IDs, two
+  same-name/same-outcome leftovers, unparseable bodies and note-less
   rows without an ID keep their existing text; when those differ from the
   leftovers, one truthful marker records the refusal (stack-proof).
   Over-cap output shows an explicit `Show full output (N chars)` action; inline expansion itself is
