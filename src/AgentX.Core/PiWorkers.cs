@@ -206,8 +206,9 @@ public sealed class WorkerStore
 /// Process-wide single-writer claims: sessionId → owning worker. The
 /// single-writer rule is per SESSION, so different worker sessions may run
 /// simultaneously while one session can never back two live Pi processes.
-/// Cross-process protection (two Agent X instances) is out of scope and
-/// documented; this registry only covers workers inside one process.
+/// This registry covers workers inside ONE process; the same rule extends
+/// across Agent X instances via CrossProcessSessionLock — an OS-held file
+/// handle acquired alongside this claim before any Pi process launches.
 /// </summary>
 internal static class PiSessionClaims
 {
@@ -257,6 +258,7 @@ public sealed class PiWorker : IAsyncDisposable
     private VisibilityLevel _pendingVisibility = VisibilityLevel.Detailed;
     private CancellationTokenSource? _sendCts;
     private bool _claimed;
+    private FileStream? _sessionLock;
     private bool _identityVerified;
     private bool _disposed;
     private PiEngineState? _lastState;
@@ -288,7 +290,17 @@ public sealed class PiWorker : IAsyncDisposable
     /// <summary>True only after identity validation and capability probes succeeded on the current connection.</summary>
     internal bool IdentityVerified => Volatile.Read(ref _identityVerified);
 
-    /// <summary>
+    /// <summary>True while this worker holds the cross-process session lock (test seam).</summary>
+    internal bool SessionLockHeld
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _sessionLock is not null;
+            }
+        }
+    }
     /// Test seam: simulate a connection whose validation/probe previously
     /// failed (unverified, capabilities and confirmed state cleared), so
     /// regression tests can prove Send/model actions refuse and Connect
@@ -420,6 +432,30 @@ public sealed class PiWorker : IAsyncDisposable
                 }
 
                 _claimed = true;
+            }
+
+            if (_sessionLock is null)
+            {
+                try
+                {
+                    // Cross-process ownership BEFORE any Pi launch: another
+                    // Agent X instance holding this session must be refused
+                    // before EnsureConversation can create a process.
+                    _sessionLock = CrossProcessSessionLock.Acquire(_managedRoot, _reg.SessionId);
+                }
+                catch
+                {
+                    // Roll back the in-process claim taken moments ago (no
+                    // process was started, so nothing can be alive): a
+                    // refusal leaves this worker exactly as it was.
+                    if (_claimed)
+                    {
+                        PiSessionClaims.Release(_reg.SessionId, this);
+                        _claimed = false;
+                    }
+
+                    throw;
+                }
             }
 
             var conversation = EnsureConversation();
@@ -1051,6 +1087,19 @@ public sealed class PiWorker : IAsyncDisposable
                 {
                     PiSessionClaims.Release(_reg.SessionId, this);
                     _claimed = false;
+                }
+
+                if (_sessionLock is not null)
+                {
+                    // Released only AFTER the Pi process is provably retired
+                    // (this block is reached only when conversation disposal
+                    // succeeded) and only on the gated path — a gate-starved
+                    // disposal throws earlier and keeps both. Closing the
+                    // handle hands ownership back to the OS; the file stays
+                    // behind (unlink/recreate is a classic race, and the
+                    // file proves nothing by existing).
+                    _sessionLock.Dispose();
+                    _sessionLock = null;
                 }
 
                 Volatile.Write(ref _identityVerified, false);
