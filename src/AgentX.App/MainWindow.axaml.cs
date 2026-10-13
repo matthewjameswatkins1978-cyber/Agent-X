@@ -80,6 +80,30 @@ public partial class MainWindow : Window
     // Connect/Reconnect/switch transitions. Set alongside _piBusy on UI thread.
     private bool _connecting;
 
+    // Genuine multiworker runtime (one manager per app): worker tabs render
+    // worker.Feed; selection is a view pointer only — background workers are
+    // never interrupted, and worker switching never touches the workspace
+    // coordinator. Null when workers.json failed to load (fail-closed): the
+    // worker UI then stays disabled and the workspace path works alone.
+    private PiWorkerManager? _manager;
+    private string? _managerError;
+    // Per-worker run/connect state (UI thread only): busy = run in flight,
+    // connecting = connect/reconnect underway, sinks/seqs = live run display.
+    // Run ownership, cancellation and status are keyed by worker identity,
+    // never by global selected-tab state.
+    private readonly HashSet<string> _busyWorkers = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _connectingWorkers = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, RunProgressSink> _runSinks = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _runSeqs = new(StringComparer.Ordinal);
+    // Selected worker id mirrored off the UI thread: feed/activity events
+    // arrive on RPC threads that must never touch Avalonia controls, so the
+    // drop-or-sync decision reads this (UI thread writes it on every view
+    // switch). A stale read self-heals on the next event or the switch
+    // rebuild — never a crash, never a misroute.
+    private volatile string? _selectedWorkerId;
+    // True once the window closed: marshaled manager callbacks arriving
+    // late must not touch dead controls.
+    private bool _closed;
     // True while a folder picker is open: Add is not re-entrant (stacked
     // modal pickers). Set on UI thread around OpenFolderPickerAsync.
     private bool _pickingWorkspace;
@@ -140,6 +164,38 @@ public partial class MainWindow : Window
         _viewPrefs = ViewPrefs.Load(ManagedRoot);
         ApplyRailWidth();
         _coordinator = new WorkspaceSessionCoordinator(_feed, WorkspaceCatalog.LegacyKey);
+        // One worker manager per app; persisted workers become real tabs
+        // below. A corrupt workers.json fails closed (file preserved, worker
+        // UI disabled) — the workspace path keeps working alone.
+        try
+        {
+            _manager = new PiWorkerManager(ManagedRoot);
+            foreach (var worker in _manager.Workers)
+            {
+                AttachWorker(worker);
+            }
+
+            _manager.WorkerAdded += (_, worker) =>
+            {
+                AttachWorker(worker);
+                RebuildWorkerTabs();
+            };
+            _manager.WorkerRemoved += (_, _) => Dispatcher.UIThread.Post(() =>
+            {
+                // RemoveWorkerAsync fires after ConfigureAwait(false): this
+                // can arrive on a ThreadPool thread. Marshal to the UI
+                // dispatcher, and never touch a closed window.
+                if (!_closed)
+                {
+                    RebuildWorkerTabs();
+                }
+            });
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            _manager = null;
+            _managerError = $"Worker store unreadable — workers unavailable, file preserved. {ex.Message}";
+        }
         ApplyTheme();
         ThemeCombo.ItemsSource = AgentXPreferences.KnownThemes;
         _syncingPrefs = true;
@@ -163,6 +219,41 @@ public partial class MainWindow : Window
         if (_viewPrefs.IsRecovery)
         {
             StatusText.Text = _viewPrefs.RecoveryMessage;
+        }
+
+        AppendWorkerTabs();
+        UpdateTabDots();
+        if (_managerError is not null)
+        {
+            StatusText.Text = _viewPrefs.IsRecovery
+                ? $"{_viewPrefs.RecoveryMessage} {_managerError}"
+                : _managerError;
+        }
+    }
+
+    /// Append persisted worker tabs after the workspace tabs (startup only;
+    /// later changes go through RebuildWorkerTabs). Never steals the
+    /// workspace selection — startup still lands on legacy.
+    private void AppendWorkerTabs()
+    {
+        if (_manager is null)
+        {
+            return;
+        }
+
+        _suppressTabEvents = true;
+        try
+        {
+            var tintIndex = WorkspaceTabs.Items.Count;
+            foreach (var worker in _manager.Workers)
+            {
+                WorkspaceTabs.Items.Add(MakeWorkerTab(
+                    worker, worker.IsConnected, _busyWorkers.Contains(worker.Id), tintIndex++));
+            }
+        }
+        finally
+        {
+            _suppressTabEvents = false;
         }
     }
 
@@ -221,7 +312,7 @@ public partial class MainWindow : Window
         // refused pinned switches, which round-trip the same key).
         if (_viewLifecycle.StartupComplete)
         {
-            SaveWorkerViewState(_coordinator.ActiveKey);
+            SaveWorkerViewState(_lastViewKey);
         }
         var result = _coordinator.RequestTransition(resolved.TargetKey);
         SelectTab(_coordinator.ActiveKey);
@@ -234,7 +325,14 @@ public partial class MainWindow : Window
 
         UpdateEmptyState();
         RestoreWorkerViewState(_coordinator.ActiveKey);
+        _lastViewKey = _coordinator.ActiveKey;
+        _selectedWorkerId = null;
+        RefreshWorkingRow();
         RefreshDirectoryLabel();
+        RefreshEngineSegments();
+        PiConnectionState.Text = _piBusy ? "Working…" : _connecting ? "Connecting…" : _conversation?.IsConnected == true ? "Connected" : "Disconnected";
+        PiActivityText.Text = string.Empty;
+        _pendingActivityText = null;
         if (!result.Accepted)
         {
             StatusText.Text = $"Staying on '{_connectedLabel}' — {result.RefusalReason} Histories never mix.";
@@ -290,6 +388,99 @@ public partial class MainWindow : Window
 
     private CatalogEntry? SelectedEntry => (WorkspaceTabs.SelectedItem as TabStripItem)?.Tag as CatalogEntry;
 
+    /// Selected worker, or null while a workspace tab is selected. A tab's
+    /// Tag is exactly one of the two — workers are never presented as
+    /// workspace entries and legacy/workspace tabs never as workers.
+    private PiWorker? SelectedWorker => (WorkspaceTabs.SelectedItem as TabStripItem)?.Tag as PiWorker;
+
+    /// Feed the view renders: the selected worker's own feed, else the
+    /// workspace feed. Resolved live at every use, so a queued sync that
+    /// outlives a tab switch renders the new feed, never a stale one.
+    private ConversationFeed ActiveFeed => SelectedWorker?.Feed ?? _feed;
+
+    /// Whether a feed row belongs to the viewed run (follow-behaviour only,
+    /// never routing). Worker turn Seqs are Core-owned: the GUI records the
+    /// last Seq before sending and follows newer rows of that run.
+    private bool IsLiveRow(long seq) => SelectedWorker is { } worker
+        ? _runSeqs.TryGetValue(worker.Id, out var floor) && seq > floor
+        : seq == _liveSeq;
+
+    /// Owning key of the visible view (worker id namespaced, workspace key
+    /// passthrough). Updated at the end of every view switch; the next
+    /// switch saves the outgoing draft/selection/scroll under exactly this.
+    private string _lastViewKey = WorkspaceCatalog.LegacyKey;
+
+    /// Subscribe one worker's view-relevant events. Feed rows, tool pairing
+    /// and error rows are written by Core on the RPC thread; the GUI only
+    /// syncs the view (when selected) and refreshes tab dots on death.
+    /// Tool events need no GUI subscription at all.
+    private void AttachWorker(PiWorker worker)
+    {
+        worker.Feed.Changed += () => WorkerFeedChanged(worker);
+        worker.ActivityChanged += Worker_ActivityChanged;
+        worker.ConnectionLost += Worker_ConnectionLost;
+        worker.Visibility = _prefs.Visibility switch
+        {
+            "Compact" => VisibilityLevel.Compact,
+            "Full" => VisibilityLevel.Full,
+            _ => VisibilityLevel.Detailed,
+        };
+    }
+
+    private void WorkerFeedChanged(PiWorker worker)
+    {
+        // Background feeds never touch the view: no focus steal, no scroll
+        // disturbance. The full rebuild on selection shows everything.
+        // Runs on the RPC thread: compare ids, never touch controls.
+        if (worker.Id != _selectedWorkerId)
+        {
+            return;
+        }
+
+        _syncCoalescer.Signal(SyncFeedView);
+    }
+
+    private void Worker_ActivityChanged(object? sender, string activity)
+    {
+        // Feed activity was already recorded by Core; stash the footer text
+        // only for the viewed worker — never let a background worker
+        // overwrite the reader's activity line. Dots refresh with run
+        // transitions, not per activity event.
+        if (sender is PiWorker worker && worker.Id == _selectedWorkerId)
+        {
+            _pendingActivityText = activity;
+        }
+    }
+
+    private void Worker_ConnectionLost(object? sender, Exception error)
+    {
+        if (sender is not PiWorker worker)
+        {
+            return;
+        }
+
+        // Core already recorded the error row and cleared feed activity.
+        // If this worker is selected its feed Changed drives the view sync;
+        // otherwise the reader is undisturbed apart from the tab dot.
+        Dispatcher.UIThread.Post(() =>
+        {
+            UpdateTabDots();
+            if (!ReferenceEquals(worker, SelectedWorker))
+            {
+                return;
+            }
+
+            PiActivityText.Text = string.Empty;
+            _pendingActivityText = null;
+            PiConnectionState.Text = "Connection lost";
+            PiRunStatus.Text = "Connection to Pi lost — session is persisted. Press Reconnect to restore.";
+            RebuildSessionMap();
+            RefreshOverviewAndSettings();
+            RefreshConnectionButtons();
+            RefreshEngineSegments();
+        });
+    }
+
     private void SelectTab(string key)
     {
         // Nesting-safe: rebuilds already suppress around this call.
@@ -302,16 +493,195 @@ public partial class MainWindow : Window
                 if (item is TabStripItem tab && (tab.Tag as CatalogEntry)?.Key == key)
                 {
                     WorkspaceTabs.SelectedItem = tab;
+                    _selectedWorkerId = null;
                     return;
                 }
             }
 
             WorkspaceTabs.SelectedIndex = 0;
+            _selectedWorkerId = null;
         }
         finally
         {
             _suppressTabEvents = priorSuppress;
         }
+    }
+
+    private void SelectWorkerTab(string id)
+    {
+        // Nesting-safe twin of SelectTab for worker ids.
+        var priorSuppress = _suppressTabEvents;
+        _suppressTabEvents = true;
+        try
+        {
+            foreach (var item in WorkspaceTabs.Items)
+            {
+                if (item is TabStripItem tab && (tab.Tag as PiWorker)?.Id == id)
+                {
+                    WorkspaceTabs.SelectedItem = tab;
+                    _selectedWorkerId = id;
+                    return;
+                }
+            }
+        }
+        finally
+        {
+            _suppressTabEvents = priorSuppress;
+        }
+    }
+
+    /// Switch the view to a worker tab: save the outgoing view under its
+    /// owning key, rebind to the worker's own feed, rebuild derived views,
+    /// restore this worker's draft/selection/scroll. No coordinator, no
+    /// refusal, no process action — a foreground run continues on any tab.
+    private void SwitchToWorker(PiWorker worker)
+    {
+        SaveWorkerViewState(_lastViewKey);
+        _lastViewKey = WorkerViewKey.ForWorker(worker.Id);
+        _selectedWorkerId = worker.Id;
+        // Keep the manager's view pointer truthful (SelectionChanged has no
+        // GUI subscriber; same-id selects raise no event).
+        _manager?.SelectWorker(worker.Id);
+        _pendingActivityText = null;
+        RebuildConversationList();
+        RebuildSessionMap();
+        if (OverviewPanel.IsVisible)
+        {
+            RebuildOverview();
+        }
+
+        UpdateEmptyState();
+        var restored = RestoreWorkerViewState(_lastViewKey);
+        UpdateTabDots();
+        RefreshDirectoryLabel();
+        RefreshConnectionButtons();
+        RefreshEngineSegments();
+        RefreshWorkingRow();
+        // Connection state follows the viewed worker too — never another
+        // tab's leftover. Activity restarts from the live feed's ticks.
+        PiConnectionState.Text = _busyWorkers.Contains(worker.Id)
+            ? "Working…"
+            : _connectingWorkers.Contains(worker.Id)
+                ? "Connecting…"
+                : worker.IsConnected ? "Connected" : "Disconnected";
+        PiActivityText.Text = string.Empty;
+        if (!restored)
+        {
+            var label = WorkerViewKey.DisplayLabel(worker.Id, worker.Label);
+            StatusText.Text = worker.IsConnected
+                ? $"Worker '{label}' selected."
+                : $"Worker '{label}' selected — press Connect.";
+        }
+    }
+
+    private static Avalonia.Media.IBrush WorkerDotFill(bool connected, bool busy)
+        => busy
+            ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#E5C07B"))
+            : connected
+                ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#7DD3A8"))
+                : new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#6B7280"));
+
+    private static TabStripItem MakeWorkerTab(PiWorker worker, bool isConnected, bool busy, int tintIndex)
+    {
+        // Same chrome as workspace tabs (B3 fidelity): dot + label, identity
+        // tint, tooltip and automation name carry the worker identity so a
+        // worker tab is never mistaken for a legacy/workspace tab.
+        var dot = new Avalonia.Controls.Shapes.Ellipse
+        {
+            Width = 8,
+            Height = 8,
+            Fill = WorkerDotFill(isConnected, busy),
+        };
+        var display = WorkerViewKey.DisplayLabel(worker.Id, worker.Label);
+        var label = new TextBlock { Text = display, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
+        var header = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 6 };
+        header.Children.Add(dot);
+        header.Children.Add(label);
+        var tint = Avalonia.Media.Color.Parse(WorkerTabColors.TintFor(tintIndex));
+        var tab = new TabStripItem
+        {
+            Content = header,
+            Background = new Avalonia.Media.SolidColorBrush(tint, 0.28),
+        };
+        Avalonia.Controls.ToolTip.SetTip(tab, WorkerViewKey.Tooltip(worker.Id, worker.Label, worker.SessionId, worker.ProjectRoot));
+        tab.SetValue(Avalonia.Automation.AutomationProperties.NameProperty, display);
+        tab.Tag = worker;
+        return tab;
+    }
+
+    /// Rebuild ONLY the worker section of the tab strip (workspace tabs and
+    /// the coordinator are untouched). A surviving selection is reselected
+    /// without touching its view; a vanished selection falls forward to the
+    /// manager selection or back to the legacy workspace view.
+    private void RebuildWorkerTabs()
+    {
+        if (_manager is null)
+        {
+            return;
+        }
+
+        var selectedId = SelectedWorker?.Id;
+        _suppressTabEvents = true;
+        try
+        {
+            for (var i = WorkspaceTabs.Items.Count - 1; i >= 0; i--)
+            {
+                if (WorkspaceTabs.Items[i] is TabStripItem { Tag: PiWorker })
+                {
+                    WorkspaceTabs.Items.RemoveAt(i);
+                }
+            }
+
+            var tintIndex = WorkspaceTabs.Items.Count;
+            foreach (var worker in _manager.Workers)
+            {
+                WorkspaceTabs.Items.Add(MakeWorkerTab(
+                    worker, worker.IsConnected, _busyWorkers.Contains(worker.Id), tintIndex++));
+            }
+
+            // Never steal a workspace view: reselect only when a worker was
+            // selected. Otherwise the viewed worker vanished: fall forward
+            // to the manager selection, else back to legacy.
+            if (selectedId is not null)
+            {
+                // Pure repair decision (tested): surviving views reselect
+                // untouched, vanished views fall to the manager selection.
+                var target = WorkerDisplayPolicy.RepairTarget(
+                    selectedId,
+                    _manager.Workers.Select(w => w.Id).ToArray(),
+                    _manager.Selected?.Id);
+                if (target is not null)
+                {
+                    SelectWorkerTab(target);
+                }
+                else
+                {
+                    SelectTab(WorkspaceCatalog.LegacyKey);
+                }
+            }
+        }
+        finally
+        {
+            _suppressTabEvents = false;
+        }
+
+        // The view follows only when the viewed worker actually vanished;
+        // list-only changes (add/remove elsewhere) never disturb the box.
+        var now = SelectedWorker;
+        if (selectedId is not null && (now is null || now.Id != selectedId))
+        {
+            if (now is not null)
+            {
+                SwitchToWorker(now);
+            }
+            else
+            {
+                LoadWorkspaceTabs(selectKey: WorkspaceCatalog.LegacyKey);
+            }
+        }
+
+        _selectedWorkerId = SelectedWorker?.Id;
+        UpdateTabDots();
     }
 
     private void UpdateTabDots()
@@ -322,16 +692,24 @@ public partial class MainWindow : Window
             if (item is TabStripItem tab
                 && tab.Content is StackPanel header
                 && header.Children.Count > 0
-                && header.Children[0] is Avalonia.Controls.Shapes.Ellipse dot
-                && tab.Tag is CatalogEntry entry)
+                && header.Children[0] is Avalonia.Controls.Shapes.Ellipse dot)
             {
-                var on = entry.Key == _connectedKey && _conversation?.IsConnected == true;
-                var busy = on && _piBusy;
-                dot.Fill = busy
-                    ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#E5C07B"))
-                    : on
-                        ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#7DD3A8"))
-                        : new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#6B7280"));
+                if (tab.Tag is PiWorker workerTab)
+                {
+                    // Worker tabs show worker truth: connected green, running
+                    // amber, idle grey. Never the workspace connection state.
+                    dot.Fill = WorkerDotFill(workerTab.IsConnected, _busyWorkers.Contains(workerTab.Id));
+                }
+                else if (tab.Tag is CatalogEntry entry)
+                {
+                    var on = entry.Key == _connectedKey && _conversation?.IsConnected == true;
+                    var busy = on && _piBusy;
+                    dot.Fill = busy
+                        ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#E5C07B"))
+                        : on
+                            ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#7DD3A8"))
+                            : new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#6B7280"));
+                }
                 // Identity tint follows tab position; selection brightens
                 // the fill so the active worker reads at a glance. State
                 // itself stays on the dot + footer text, never colour alone.
@@ -342,12 +720,46 @@ public partial class MainWindow : Window
 
             index++;
         }
+
+        RefreshConnectionButtons();
+    }
+
+    /// Working indicator follows the VIEWED run only — never another
+    /// worker's activity. Background runs keep their tab dots.
+    private void RefreshWorkingRow()
+    {
+        WorkingRow.IsVisible = WorkerDisplayPolicy.ShowWorking(
+            SelectedWorker is { } worker ? _busyWorkers.Contains(worker.Id) : _piBusy);
+    }
+
+    /// Button states follow the selection: Disconnect stops the workspace
+    /// connection only (workers end via Remove worker); Remove worker acts
+    /// on worker tabs only. Refreshed with the tab dots, so every selection
+    /// and state change carries it — no scattered call sites.
+    private void RefreshConnectionButtons()
+    {
+        var workerSelected = SelectedWorker is not null;
+        DisconnectButton.IsEnabled = !workerSelected;
+        Avalonia.Controls.ToolTip.SetTip(DisconnectButton, workerSelected
+            ? "Workers have no disconnect — Remove worker stops the selected worker's process."
+            : "Disconnect the workspace session.");
+        RemoveWorkerButton.IsEnabled = workerSelected && _manager is not null;
     }
 
     private void WorkspaceTabs_OnChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (_suppressTabEvents)
         {
+            return;
+        }
+
+        // Worker tabs bypass the workspace coordinator entirely: its
+        // connected-pins-the-tab rule belongs to the single-connection
+        // design and would refuse worker switching. Selection is a view
+        // pointer only — background workers keep running untouched.
+        if (SelectedWorker is { } worker)
+        {
+            SwitchToWorker(worker);
             return;
         }
 
@@ -361,14 +773,39 @@ public partial class MainWindow : Window
         // refuses pinned workspaces and syncs feed memory atomically.
         // Save this tab's view state FIRST: refusal keeps the same view, and
         // saving is idempotent, so the current draft/selection/scroll/status
-        // always lands on the key that owns them.
-        SaveWorkerViewState(_coordinator.ActiveKey);
+        // always lands on the key that owns them (the last viewed tab, which
+        // may be a worker the coordinator never knew).
+        SaveWorkerViewState(_lastViewKey);
         var result = _coordinator.RequestTransition(entry.Key);
         if (!result.Accepted)
         {
-            StatusText.Text = $"Disconnect from '{_connectedLabel}' before opening '{entry.Label}' — histories never mix.";
+            // The kept tab must own a coherent view: the composer and rows
+            // may still show the worker (or workspace) we came from, which
+            // would misroute the next prompt under the wrong identity.
+            // Restore the active workspace view first; the refusal stays
+            // the final word.
+            SaveWorkerViewState(_lastViewKey);
             SelectTab(_coordinator.ActiveKey);
+            _lastViewKey = _coordinator.ActiveKey;
+            _selectedWorkerId = null;
+            _pendingActivityText = null;
+            RebuildConversationList();
+            RebuildSessionMap();
+            if (OverviewPanel.IsVisible)
+            {
+                RebuildOverview();
+            }
+
+            UpdateEmptyState();
+            RestoreWorkerViewState(_lastViewKey);
+            UpdateTabDots();
             RefreshDirectoryLabel();
+            RefreshConnectionButtons();
+            RefreshEngineSegments();
+            RefreshWorkingRow();
+            PiConnectionState.Text = _piBusy ? "Working…" : _connecting ? "Connecting…" : _conversation?.IsConnected == true ? "Connected" : "Disconnected";
+            PiActivityText.Text = string.Empty;
+            StatusText.Text = $"Disconnect from '{_connectedLabel}' before opening '{entry.Label}' — histories never mix.";
             return;
         }
 
@@ -381,8 +818,17 @@ public partial class MainWindow : Window
 
         UpdateEmptyState();
         var restored = RestoreWorkerViewState(entry.Key);
+        _lastViewKey = entry.Key;
+        _selectedWorkerId = null;
         UpdateTabDots();
         RefreshDirectoryLabel();
+        RefreshWorkingRow();
+        RefreshEngineSegments();
+        // Footer connection/activity follow the viewed workspace: a worker's
+        // leftovers must not linger under this tab. The feed keeps truth.
+        PiConnectionState.Text = _piBusy ? "Working…" : _connecting ? "Connecting…" : _conversation?.IsConnected == true ? "Connected" : "Disconnected";
+        PiActivityText.Text = string.Empty;
+        _pendingActivityText = null;
         if (_conversation is null && !restored)
         {
             StatusText.Text = entry.IsLegacy
@@ -580,6 +1026,78 @@ public partial class MainWindow : Window
         StatusText.Text = "Confirm registration below — nothing has been registered yet.";
     }
 
+    /// Create a worker for the staged folder (the Add flow's explicit
+    /// confirmation). Reuses the existing picker staging — no new navigation.
+    /// Shows the new worker immediately; the outgoing draft stays under its
+    /// own key.
+    private void CreateWorker_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        var path = _pendingWorkspacePath;
+        _pendingWorkspacePath = null;
+        PendingConfirmPanel.IsVisible = false;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return;
+        }
+
+        if (_manager is null)
+        {
+            StatusText.Text = $"Workers unavailable ({_managerError ?? "store failed to load"}) — nothing created.";
+            return;
+        }
+
+        if (!Directory.Exists(path))
+        {
+            StatusText.Text = $"Selected folder no longer exists: {path} — nothing created.";
+            return;
+        }
+
+        try
+        {
+            var folder = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var worker = _manager.CreateWorker(path, Path.GetFileName(folder));
+            // WorkerAdded already rebuilt the tab list; move the view now.
+            SaveWorkerViewState(_lastViewKey);
+            _manager.SelectWorker(worker.Id);
+            SelectWorkerTab(worker.Id);
+            SwitchToWorker(worker);
+            StatusText.Text = $"Worker '{WorkerViewKey.DisplayLabel(worker.Id, worker.Label)}' created — session {worker.SessionId}. Press Connect.";
+        }
+        catch (Exception ex) when (ex is ArgumentException or DirectoryNotFoundException or IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            StatusText.Text = $"Cannot create worker: {ex.Message}";
+        }
+    }
+
+    /// Remove the selected worker: Core retires its Pi process first, then
+    /// unpersists. Refused while a run or connect is active. Session files
+    /// stay on disk; the tab list rebuild moves the view to a survivor.
+    private async void RemoveWorker_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (SelectedWorker is not { } worker || _manager is null)
+        {
+            return;
+        }
+
+        var id = worker.Id;
+        var label = WorkerViewKey.DisplayLabel(id, worker.Label);
+        if (!WorkerViewKey.CanRemove(_busyWorkers.Contains(id), _connectingWorkers.Contains(id)))
+        {
+            StatusText.Text = $"Worker '{label}' is active — cancel the run first.";
+            return;
+        }
+
+        try
+        {
+            await _manager.RemoveWorkerAsync(id);
+            StatusText.Text = $"Worker '{label}' removed — process stopped, session files kept on disk.";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Cannot remove worker '{label}': {ex.Message} — retry to complete.";
+        }
+    }
+
     private void ConfirmWorkspace_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         var path = _pendingWorkspacePath;
@@ -753,8 +1271,177 @@ public partial class MainWindow : Window
 
     // --- Pi agent panel: thin UI over the AgentX.Core RPC client. ---
 
+    /// Connect the selected worker: Core verifies identity, probes
+    /// capabilities and loads the feed itself — the GUI renders, never
+    /// re-validates. Footer and status update only while still selected.
+    private async Task WorkerConnectAsync(PiWorker worker)
+    {
+        var id = worker.Id;
+        var label = WorkerViewKey.DisplayLabel(id, worker.Label);
+        if (worker.IsConnected)
+        {
+            if (IsSelectedWorker(id))
+            {
+                StatusText.Text = $"Worker '{label}' is already connected.";
+            }
+
+            return;
+        }
+
+        if (!_connectingWorkers.Add(id))
+        {
+            if (IsSelectedWorker(id))
+            {
+                StatusText.Text = $"Worker '{label}' is already connecting.";
+            }
+
+            return;
+        }
+
+        if (IsSelectedWorker(id))
+        {
+            PiConnectionState.Text = "Connecting…";
+        }
+
+        try
+        {
+            await worker.ConnectAsync();
+            UpdateTabDots();
+            if (!IsSelectedWorker(id))
+            {
+                return; // Reader moved on; feed + dots are current.
+            }
+
+            PiConnectionState.Text = "Connected";
+            var count = worker.History.Count;
+            RebuildConversationList();
+            RebuildSessionMap();
+            RefreshOverviewAndSettings();
+            PiRunStatus.Text = count == 0
+                ? $"New worker session for '{label}' — no previous conversation."
+                : $"Worker '{label}' connected — restored {count} message(s). Send a prompt to continue.";
+            StatusText.Text = $"Pi runs in {worker.ProjectRoot} with your user authority.";
+            RefreshDirectoryLabel();
+            RefreshConnectionButtons();
+            RefreshEngineSegments();
+        }
+        catch (Exception ex)
+        {
+            UpdateTabDots();
+            if (!IsSelectedWorker(id))
+            {
+                return;
+            }
+
+            PiConnectionState.Text = "Connection failed";
+            StatusText.Text = $"Worker '{label}' connection failed: {ex.Message} — nothing connected.";
+            RefreshConnectionButtons();
+            RefreshEngineSegments();
+        }
+        finally
+        {
+            _connectingWorkers.Remove(id);
+        }
+    }
+
+    /// Reconnect the selected worker after transport death: Core swaps the
+    /// process, keeps the session and records the restore notice in the
+    /// feed itself. Never-connected workers are told to connect first.
+    private async Task WorkerReconnectAsync(PiWorker worker)
+    {
+        var id = worker.Id;
+        var label = WorkerViewKey.DisplayLabel(id, worker.Label);
+        if (_busyWorkers.Contains(id))
+        {
+            if (IsSelectedWorker(id))
+            {
+                StatusText.Text = $"Worker '{label}' has a run in progress — cancel it before reconnecting.";
+            }
+
+            return;
+        }
+
+        if (worker.IsConnected)
+        {
+            if (IsSelectedWorker(id))
+            {
+                StatusText.Text = $"Worker '{label}' is already connected — nothing to reconnect.";
+            }
+
+            return;
+        }
+
+        if (!_connectingWorkers.Add(id))
+        {
+            if (IsSelectedWorker(id))
+            {
+                StatusText.Text = $"Worker '{label}' is already connecting.";
+            }
+
+            return;
+        }
+
+        if (IsSelectedWorker(id))
+        {
+            PiConnectionState.Text = "Reconnecting…";
+        }
+
+        try
+        {
+            await worker.ReconnectAsync();
+            UpdateTabDots();
+            if (!IsSelectedWorker(id))
+            {
+                return;
+            }
+
+            PiConnectionState.Text = "Connected";
+            RebuildConversationList();
+            RebuildSessionMap();
+            RefreshOverviewAndSettings();
+            MaybeAutoScroll();
+            PiRunStatus.Text = $"Worker '{label}' reconnected — session intact.";
+            RefreshConnectionButtons();
+            RefreshEngineSegments();
+        }
+        catch (InvalidOperationException)
+        {
+            // Never connected: Core refuses the swap. Connect first.
+            UpdateTabDots();
+            if (IsSelectedWorker(id))
+            {
+                PiConnectionState.Text = "Disconnected";
+                StatusText.Text = $"Worker '{label}' never connected — press Connect first.";
+            }
+        }
+        catch (Exception ex)
+        {
+            UpdateTabDots();
+            if (!IsSelectedWorker(id))
+            {
+                return;
+            }
+
+            PiConnectionState.Text = "Reconnect failed";
+            PiRunStatus.Text = $"Worker '{label}' reconnect failed: {ex.Message} — session is persisted; press Reconnect to retry.";
+            RefreshConnectionButtons();
+        }
+        finally
+        {
+            _connectingWorkers.Remove(id);
+        }
+    }
+
     private async void ConnectPi_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
+        // Worker tabs connect the selected worker only — independent of any
+        // workspace connection, which keeps running untouched.
+        if (SelectedWorker is { } worker)
+        {
+            await WorkerConnectAsync(worker);
+            return;
+        }
+
         // One controlled transition: while a conversation object exists
         // (connected OR dead) only Disconnect or Reconnect may change state.
         // Otherwise a failed transport plus Connect would strand the old
@@ -851,11 +1538,28 @@ public partial class MainWindow : Window
 
     private async void DisconnectPi_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
+        // Workers have no disconnect in Core (dispose or process death ends
+        // them): removal is the honest stop and keeps session files on disk.
+        // The button is also disabled for worker tabs; this guards the path.
+        if (SelectedWorker is { } worker)
+        {
+            StatusText.Text = $"Worker '{WorkerViewKey.DisplayLabel(worker.Id, worker.Label)}' has no disconnect — Remove worker stops its process.";
+            return;
+        }
+
         await DisconnectPiAsync();
     }
 
     private async void ReconnectPi_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
+        // Worker tabs reconnect the selected worker only — Core swaps the
+        // process, keeps the session and preserves the feed itself.
+        if (SelectedWorker is { } worker)
+        {
+            await WorkerReconnectAsync(worker);
+            return;
+        }
+
         var conversation = _conversation;
         if (conversation is null)
         {
@@ -922,8 +1626,157 @@ public partial class MainWindow : Window
         }
     }
 
+    private bool IsSelectedWorker(string id) => SelectedWorker?.Id == id;
+
+    /// Send on the selected worker only. Core creates and closes the turn
+    /// (AddUser/BeginAssistantTurn/Reconcile/EndAssistantTurn all inside
+    /// worker.SendAsync) — the GUI must not duplicate any of it. Progress
+    /// streams through a run-local sink for the status line; Core already
+    /// appended every delta to the worker feed on the RPC thread.
+    private async Task WorkerSendAsync(PiWorker worker)
+    {
+        var id = worker.Id;
+        if (_busyWorkers.Contains(id) || _connectingWorkers.Contains(id))
+        {
+            return; // One run per worker; a second send would throw in Core.
+        }
+
+        if (!worker.IsConnected)
+        {
+            if (IsSelectedWorker(id))
+            {
+                PiRunStatus.Text = "Connect to Pi first.";
+            }
+
+            return;
+        }
+
+        var message = PromptInput.Prepare(PiPromptBox.Text);
+        if (message is null)
+        {
+            if (IsSelectedWorker(id))
+            {
+                PiRunStatus.Text = "Type or paste a prompt first — empty prompts are not sent.";
+            }
+
+            return;
+        }
+
+        var sink = new RunProgressSink();
+        _runSinks[id] = sink;
+        _runSeqs[id] = worker.Feed.Snapshot().LastOrDefault()?.Seq ?? -1;
+        _busyWorkers.Add(id);
+        IProgress<string> progress = sink;
+        if (IsSelectedWorker(id))
+        {
+            PiConnectionState.Text = "Working…";
+        }
+
+        RefreshWorkingRow();
+
+        if (!_flushTimer.IsEnabled)
+        {
+            _flushTimer.Start();
+        }
+
+        UpdateTabDots();
+        try
+        {
+            var (text, receipt) = await worker.SendAsync(message, progress);
+            if (!IsSelectedWorker(id))
+            {
+                return; // Reader moved on: feed + dots are current; footer stays theirs.
+            }
+
+            PiConnectionState.Text = "Idle";
+            PiActivityText.Text = string.Empty;
+            _pendingActivityText = null;
+            RebuildSessionMap();
+            RefreshOverviewAndSettings();
+            PiRunStatus.Text = $"Last run: {receipt.Display} ({receipt.AssistantChars:N0} chars in {sink.Accumulator.FlushCount:N0} UI updates, {worker.Feed.Count} feed entries.)";
+            StatusText.Text = receipt.RunHealthy
+                ? $"Pi replied with {text.Length:N0} characters — healthy run (correctness needs separate acceptance checks)."
+                : $"Pi run finished — {receipt.Display}";
+        }
+        catch (OperationCanceledException)
+        {
+            // Core already closed the turn and kept partial text in the
+            // feed; report the cancel truthfully, claim no health signal.
+            if (!IsSelectedWorker(id))
+            {
+                return;
+            }
+
+            PiConnectionState.Text = "Cancelled";
+            PiActivityText.Text = string.Empty;
+            _pendingActivityText = null;
+            PiRunStatus.Text = "Last run: cancelled — run did not complete and earned no health signal.";
+            RebuildSessionMap();
+            RefreshOverviewAndSettings();
+        }
+        catch (Exception ex)
+        {
+            // Core already closed the turn and recorded the failure in the
+            // feed; report transport loss truthfully, anything else idle.
+            if (!IsSelectedWorker(id))
+            {
+                return;
+            }
+
+            if (ex is PiRpcTransportException)
+            {
+                PiConnectionState.Text = "Connection lost";
+                PiRunStatus.Text = $"Connection to Pi lost: {ex.Message} — session is persisted. Press Reconnect to restore.";
+            }
+            else
+            {
+                PiConnectionState.Text = "Idle";
+                PiRunStatus.Text = $"Run failed: {ex.Message}";
+            }
+
+            RebuildSessionMap();
+            RefreshOverviewAndSettings();
+        }
+        finally
+        {
+            sink.Close(); // Retire this run: late callbacks drop, never reroute.
+            _runSinks.Remove(id);
+            _runSeqs.Remove(id);
+            _busyWorkers.Remove(id);
+            RefreshWorkingRow();
+            StopFlushTimerIfIdle();
+            UpdateTabDots();
+        }
+    }
+
+    /// Cancel the selected worker's run only. Core owns the cancellation
+    /// (its wait plus best-effort abort) — no GUI lifetime, no other worker.
+    private async Task WorkerCancelAsync(PiWorker worker)
+    {
+        var id = worker.Id;
+        if (!_busyWorkers.Contains(id))
+        {
+            return;
+        }
+
+        if (IsSelectedWorker(id))
+        {
+            PiConnectionState.Text = "Cancelling…";
+        }
+
+        await worker.CancelAsync();
+    }
+
     private async void SendPrompt_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
+        // Worker tabs send on the selected worker only — byte-identical
+        // prompt content via the same composer. Never the workspace path.
+        if (SelectedWorker is { } worker)
+        {
+            await WorkerSendAsync(worker);
+            return;
+        }
+
         if (_piBusy)
         {
             return;
@@ -944,7 +1797,7 @@ public partial class MainWindow : Window
 
         _piBusy = true;
         PiConnectionState.Text = "Working…";
-        WorkingRow.IsVisible = true;
+        RefreshWorkingRow();
         UpdateTabDots();
 
         _feed.AddUser(message);
@@ -961,7 +1814,7 @@ public partial class MainWindow : Window
         try
         {
             var (text, receipt) = await _conversation.SendAsync(message, progress, _promptLifetime.Token);
-            _flushTimer.Stop();
+            StopFlushTimerIfIdle();
             // Authoritative reconcile: the returned text wins over the
             // progressively flushed chunks (same deltas, race-free).
             _feed.ReconcileStreamingText(_liveSeq, text);
@@ -984,7 +1837,7 @@ public partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
-            _flushTimer.Stop();
+            StopFlushTimerIfIdle();
             FlushLive(); // Keep whatever streamed before cancellation — never drop partial work.
             _feed.EndAssistantTurn(_liveSeq, null);
             _feed.AddSystemNotice("Run cancelled — partial streamed text above is kept as-is. History refreshes on next connect.");
@@ -1009,7 +1862,7 @@ public partial class MainWindow : Window
         }
         catch (PiRpcCommandException ex)
         {
-            _flushTimer.Stop();
+            StopFlushTimerIfIdle();
             _feed.EndAssistantTurn(_liveSeq, null);
             _feed.AddSystemNotice($"Pi rejected the prompt: {ex.Error} — partial streamed text above is kept as-is.");
             _feed.SetActivity(null);
@@ -1021,7 +1874,7 @@ public partial class MainWindow : Window
         }
         catch (PiRpcTransportException ex)
         {
-            _flushTimer.Stop();
+            StopFlushTimerIfIdle();
             // Recorded as an error EVENT, never a synthetic receipt: the run
             // did not settle and earns no health signal either way.
             _feed.AddError($"Connection to Pi lost: {ex.Message}");
@@ -1046,10 +1899,11 @@ public partial class MainWindow : Window
 
             _piBusy = false;
             _liveSeq = -1;
-            WorkingRow.IsVisible = false;
+            RefreshWorkingRow();
             UpdateTabDots();
             _promptLifetime?.Dispose();
             _promptLifetime = null;
+            StopFlushTimerIfIdle();
         }
     }
 
@@ -1071,7 +1925,9 @@ public partial class MainWindow : Window
         // touch the draft (no clear, no send). Cancellation stays truthful:
         // "Cancelling…" now, "Cancelled" only once Pi confirms or the
         // pending operation terminates in the existing handler below.
-        if (e.Key == Avalonia.Input.Key.Escape && _piBusy)
+        // Escape interrupts the selected run only: a worker run, else the
+        // workspace run. An idle Escape must not touch the draft.
+        if (e.Key == Avalonia.Input.Key.Escape && (SelectedWorker?.Id is { } busyId ? _busyWorkers.Contains(busyId) : _piBusy))
         {
             e.Handled = true;
             CancelPrompt_OnClick(sender, new Avalonia.Interactivity.RoutedEventArgs());
@@ -1080,6 +1936,14 @@ public partial class MainWindow : Window
 
     private async void CancelPrompt_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
+        // Worker tabs cancel the selected worker's run only — Core owns its
+        // cancellation; no other worker is touched.
+        if (SelectedWorker is { } worker)
+        {
+            await WorkerCancelAsync(worker);
+            return;
+        }
+
         if (!_piBusy)
         {
             return;
@@ -1110,9 +1974,13 @@ public partial class MainWindow : Window
     /// the pointer) so it flips above the composer with every item visible.
     private void ComposerMenu_OnContextRequested(object? sender, Avalonia.Input.ContextRequestedEventArgs e)
     {
-        ComposerSendItem.IsEnabled = ComposerActionPolicy.CanSend(
-            _conversation?.IsConnected == true, _piBusy, PiPromptBox.Text);
-        ComposerStopItem.IsEnabled = ComposerActionPolicy.CanStop(_piBusy);
+        // Enablement follows the VIEWED tab: a worker's connection and run,
+        // else the workspace connection and run. B4 chords preserved.
+        var (connected, busy) = SelectedWorker is { } worker
+            ? (worker.IsConnected, _busyWorkers.Contains(worker.Id))
+            : (_conversation?.IsConnected == true, _piBusy);
+        ComposerSendItem.IsEnabled = ComposerActionPolicy.CanSend(connected, busy, PiPromptBox.Text);
+        ComposerStopItem.IsEnabled = ComposerActionPolicy.CanStop(busy);
         // The flyout root is not in the XAML namescope: resolve it from the
         // box it is attached to.
         if (PiPromptBox.ContextFlyout is MenuFlyout menu)
@@ -1154,7 +2022,8 @@ public partial class MainWindow : Window
     private void SyncFeedView()
     {
         _syncRuns++;
-        var snapshot = _feed.Snapshot();
+        var feed = ActiveFeed;
+        var snapshot = feed.Snapshot();
         var bySeq = new Dictionary<long, ConversationViewItem>(_conversationItems.Count);
         foreach (var existing in _conversationItems)
         {
@@ -1187,7 +2056,7 @@ public partial class MainWindow : Window
                 // Core text replaced under a live row (tool close, reconcile,
                 // streaming chunks, completion reconcile). Refresh in place.
                 RefreshItem(item, entry);
-                if (entry.Seq == _liveSeq)
+                if (IsLiveRow(entry.Seq))
                 {
                     follow = true;
                 }
@@ -1239,11 +2108,32 @@ public partial class MainWindow : Window
             "Full" => VisibilityLevel.Full,
             _ => VisibilityLevel.Detailed,
         };
+
+        // Workers own their bridges in Core: push the same level to each.
+        if (_manager is not null)
+        {
+            var level = _bridge.Level;
+            foreach (var worker in _manager.Workers)
+            {
+                worker.Visibility = level;
+            }
+        }
     }
 
     /// Single bounded entry from feed Changed (any thread): at most one
     /// sync is ever queued; the run observes the latest snapshot.
-    private void FeedChanged() => _syncCoalescer.Signal(SyncFeedView);
+    private void FeedChanged()
+    {
+        // The workspace feed changed while a worker tab is selected: the
+        // background run keeps its feed, the view stays on the worker.
+        // Fires on the RPC thread: read the mirrored id, not the control.
+        if (_selectedWorkerId is not null)
+        {
+            return;
+        }
+
+        _syncCoalescer.Signal(SyncFeedView);
+    }
 
     private static readonly Avalonia.Media.IBrush UserBlockBrush =
         new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse(PiPalette.UserBg));
@@ -1338,7 +2228,7 @@ public partial class MainWindow : Window
     {
         _conversationItems.Clear();
         _shownSeq = 0;
-        foreach (var entry in _feed.Snapshot())
+        foreach (var entry in ActiveFeed.Snapshot())
         {
             _conversationItems.Add(ToViewItem(entry));
             _shownSeq = Math.Max(_shownSeq, entry.Seq);
@@ -1370,10 +2260,39 @@ public partial class MainWindow : Window
         }
     }
 
+    /// Stop the flush tick only when nothing streams anywhere: concurrent
+    /// worker runs share the tick with the workspace run.
+    private void StopFlushTimerIfIdle()
+    {
+        if (_busyWorkers.Count == 0 && !_piBusy)
+        {
+            _flushTimer.Stop();
+        }
+    }
+
     /// <summary>Move buffered deltas into the feed (10 Hz, not per delta).
     /// The feed's Changed post drives SyncFeedView; no direct UI work here.</summary>
     private void FlushLive()
     {
+        // Worker sinks: Core already appended every delta to the worker feed
+        // on the RPC thread, so flushing here only bounds the buffers and
+        // keeps lifetime totals for the status line. No feed writes from
+        // the GUI on the worker path — never duplicate Core turns.
+        foreach (var sink in _runSinks.Values)
+        {
+            sink.Accumulator.Flush();
+        }
+
+        if (SelectedWorker is { } worker)
+        {
+            if (_runSinks.TryGetValue(worker.Id, out var running))
+            {
+                StatusText.Text = $"Streaming… {running.Accumulator.CommittedChars:N0} chars in {running.Accumulator.FlushCount:N0} UI updates.";
+            }
+
+            return;
+        }
+
         var accumulator = _liveAccumulator;
         if (accumulator is null || _liveSeq < 0)
         {
@@ -1392,7 +2311,7 @@ public partial class MainWindow : Window
 
     private void RebuildSessionMap()
     {
-        SessionMapText.Text = _feed.BuildMap().ToDisplayText(_prefs.Visibility != "Compact");
+        SessionMapText.Text = ActiveFeed.BuildMap().ToDisplayText(_prefs.Visibility != "Compact");
     }
 
     private void ToolExpand_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -1411,9 +2330,9 @@ public partial class MainWindow : Window
         {
             item.DisplayText = FeedEntry.TruncateExpanded(item.FullText);
         }
-        else if (_feed.GetEntryText(item.Seq) is { } current)
+        else if (ActiveFeed.GetEntryText(item.Seq) is { } current)
         {
-            var entry = _feed.Snapshot().FirstOrDefault(x => x.Seq == item.Seq);
+            var entry = ActiveFeed.Snapshot().FirstOrDefault(x => x.Seq == item.Seq);
             var cap = entry?.IsStreaming == true ? LiveDisplayCap : HistoryDisplayCap;
             item.DisplayText = FeedEntry.TruncateForDisplay(current, cap);
         }
@@ -1506,17 +2425,22 @@ public partial class MainWindow : Window
             expanded ? "Collapse navigation" : "Expand navigation");
     }
 
-    /// Persist view preferences. Prunes drafts ONLY against a healthy
-    /// catalog: registry recovery must never delete drafts for temporarily
-    /// unavailable projects. Throws on IO failure (callers keep memory and
-    /// mark a persist retry); returns silently when preferences recovery
-    /// disabled persistence (the startup status stands).
+    /// Persist view preferences. Prunes drafts ONLY against healthy sources:
+    /// a degraded catalog or an unavailable worker store must never delete
+    /// drafts for temporarily unknown tabs. Throws on IO failure (callers
+    /// keep memory and mark a persist retry); returns silently when
+    /// preferences recovery disabled persistence (the startup status stands).
     private void SaveViewPrefs()
     {
-        var healthy = _catalog is not null && !_catalog.IsRecovery;
+        var catalogHealthy = _catalog is not null && !_catalog.IsRecovery;
+        var healthy = catalogHealthy && _manager is not null;
         _viewPrefs.Save(
             ManagedRoot,
-            knownKeys: healthy ? _catalog!.Entries.Select(e => e.Key) : null,
+            knownKeys: healthy
+                ? WorkerViewKey.MergeKnownKeys(
+                    _catalog!.Entries.Select(e => e.Key),
+                    _manager!.Workers.Select(w => w.Id))
+                : null,
             pruneDrafts: healthy);
     }
 
@@ -1536,11 +2460,65 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Overview shows only observed worker facts: identity, connection,
+    /// session file, map-derived counts and milestones. Nothing invented;
+    /// model/thinking show the last confirmed values (selection pending).
+    private void RebuildWorkerOverview(PiWorker worker)
+    {
+        var label = WorkerViewKey.DisplayLabel(worker.Id, worker.Label);
+        WorkspaceDetailText.Text = WorkerViewKey.Tooltip(worker.Id, worker.Label, worker.SessionId, worker.ProjectRoot);
+        var state = worker.LastConfirmedState;
+        OverviewConnectionText.Text = worker.IsConnected && state is not null
+            ? $"Worker '{label}' connected. {EngineSummary()}"
+            : $"Worker '{label}' not connected. Press Connect on the Live page.";
+        var sessionFile = state?.SessionFile;
+        OverviewSessionFileText.Text = sessionFile is not null && File.Exists(sessionFile)
+            ? $"{sessionFile} ({new FileInfo(sessionFile).Length:N0} bytes)"
+            : "No session file yet — Pi persists on the first completed run.";
+        var map = ActiveFeed.BuildMap();
+        var changed = map.ChangedFiles.Count == 0 ? "none observed" : string.Join(", ", map.ChangedFiles);
+        var tests = map.TestCommands.Count == 0 ? "none observed" : string.Join(" | ", map.TestCommands);
+        OverviewFactsText.Text =
+            $"Entries: {ActiveFeed.Count} · error events: {map.ErrorCount} · " +
+            $"changed files: {changed} · test commands (heuristic): {tests} · " +
+            $"last run: {map.LastReceipt ?? "none"} · view syncs: {_syncRuns:N0}.";
+        OverviewMilestones.Children.Clear();
+        if (map.Milestones.Count == 0)
+        {
+            OverviewMilestones.Children.Add(new TextBlock
+            {
+                Text = "No milestones yet — they appear as you work.",
+                Foreground = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#AAB2BF")),
+                FontSize = 12,
+            });
+        }
+
+        foreach (var milestone in map.Milestones.TakeLast(8))
+        {
+            var button = new Button
+            {
+                Content = $"[#{milestone.Seq} {milestone.Kind}] {milestone.Title}",
+                Tag = milestone.Seq,
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+            };
+            button.Click += Milestone_OnClick;
+            OverviewMilestones.Children.Add(button);
+        }
+
+        RebuildSessionMap();
+    }
+
     /// Overview shows only observed facts: workspace identity, connection,
     /// session file, map-derived counts and milestones. Nothing invented.
     /// </summary>
     private void RebuildOverview()
     {
+        if (SelectedWorker is { } worker)
+        {
+            RebuildWorkerOverview(worker);
+            return;
+        }
+
         var entry = SelectedEntry;
         if (entry is null)
         {
@@ -1621,6 +2599,15 @@ public partial class MainWindow : Window
     {
         var empty = _conversationItems.Count == 0;
         EmptyStatePanel.IsVisible = empty;
+        if (empty && SelectedWorker is { } worker)
+        {
+            var label = WorkerViewKey.DisplayLabel(worker.Id, worker.Label);
+            EmptyStateText.Text = worker.IsConnected
+                ? $"'{label}' is quiet. Ask anything below to begin."
+                : $"Worker '{label}' is not connected yet. Connect, then ask your first question.";
+            return;
+        }
+
         if (empty && SelectedEntry is { } entry)
         {
             EmptyStateText.Text = _conversation is null
@@ -1681,11 +2668,16 @@ public partial class MainWindow : Window
             ManagedPathsText.Text =
                 $"Sessions: {Path.Combine(ManagedRoot, "sessions")}\n" +
                 $"Registry: {WorkspaceRegistry.RegistryPath(ManagedRoot)}\n" +
+                $"Workers: {PiWorkerManager.StorePath(ManagedRoot)}{(_manager is null ? " (unavailable — file preserved)" : "")}\n" +
                 $"Preferences: {AgentXPreferences.PreferencesPath(ManagedRoot)}\n" +
                 (_catalog.IsRecovery ? "Registry state: RECOVERY (registration disabled)." : "Registry state: healthy.");
-            PiInfoText.Text = _conversation?.IsConnected == true
-                ? $"{EngineSummary()} Session: {_connectedWorkspace?.SessionId ?? _connectedKey}."
-                : "Pi engine not connected. Provider authentication lives in Pi itself; Agent X never copies credentials.";
+            PiInfoText.Text = SelectedWorker is { } worker
+                ? worker.IsConnected && worker.LastConfirmedState is not null
+                    ? $"{EngineSummary()} Session: {worker.SessionId}."
+                    : $"Worker '{WorkerViewKey.DisplayLabel(worker.Id, worker.Label)}' registered — press Connect on the Live page."
+                : _conversation?.IsConnected == true
+                    ? $"{EngineSummary()} Session: {_connectedWorkspace?.SessionId ?? _connectedKey}."
+                    : "Pi engine not connected. Provider authentication lives in Pi itself; Agent X never copies credentials.";
             var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
             AppVersionText.Text = $"Agent X desktop (Avalonia UI) — app version {version?.ToString() ?? "dev"}. Pi engine 1.1.0 external, unmodified.";
         }
@@ -1817,7 +2809,7 @@ public partial class MainWindow : Window
         // Authoritative Core text by Seq — never the possibly stale view
         // snapshot: live rows are constructed empty and only the feed sees
         // every chunk, the completion reconcile and cancellation partials.
-        var text = _feed.GetEntryText(item.Seq) ?? item.FullText;
+        var text = ActiveFeed.GetEntryText(item.Seq) ?? item.FullText;
         var transfer = new DataTransfer();
         transfer.Add(DataTransferItem.CreateText(text));
         await clipboard.SetDataAsync(transfer);
@@ -1827,7 +2819,7 @@ public partial class MainWindow : Window
 
     private async void CopyFullConversation_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (_feed.Count == 0)
+        if (ActiveFeed.Count == 0)
         {
             StatusText.Text = "Connect to Pi first — the conversation is empty.";
             return;
@@ -1840,12 +2832,12 @@ public partial class MainWindow : Window
             return;
         }
 
-        var transcript = _feed.BuildTranscriptText();
+        var transcript = ActiveFeed.BuildTranscriptText();
         var transfer = new DataTransfer();
         transfer.Add(DataTransferItem.CreateText(transcript));
         await clipboard.SetDataAsync(transfer);
         await clipboard.FlushAsync();
-        StatusText.Text = $"Copied the full conversation ({transcript.Length:N0} chars, {_feed.Count} entries).";
+        StatusText.Text = $"Copied the full conversation ({transcript.Length:N0} chars, {ActiveFeed.Count} entries).";
     }
 
     private async void CopySessionMap_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -1877,9 +2869,17 @@ public partial class MainWindow : Window
             return;
         }
 
-        _pendingActivityText = activity;
-        // The session map shows real observed activity, never stale idle.
+        // Stash the footer text only while the workspace feed is viewed:
+        // a background workspace run must not overwrite a worker reader.
+        // Fires on the RPC thread: read the mirrored id, not the control.
+        // The session map still shows real observed activity, never stale idle.
+        if (_selectedWorkerId is null)
+        {
+            _pendingActivityText = activity;
+        }
+
         _feed.SetActivity(string.IsNullOrWhiteSpace(activity) ? null : activity);
+
     }
 
     private void Conversation_ToolActivityChanged(object? sender, PiToolActivity activity)
@@ -1924,6 +2924,15 @@ public partial class MainWindow : Window
             }
 
             _feed.SetActivity(null);
+            if (SelectedWorker is not null)
+            {
+                // Workspace connection died while a worker tab is selected:
+                // the error row is in the workspace feed; the reader's
+                // footer stays on the worker. Dots refresh below.
+                RefreshOverviewAndSettings();
+                return;
+            }
+
             PiActivityText.Text = string.Empty;
             _pendingActivityText = null;
             PiConnectionState.Text = "Connection lost";
@@ -1934,6 +2943,23 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Genuine engine values for the viewed tab: the selected worker's last
+    /// confirmed state, else the workspace connection's noted values.
+    /// Model/thinking selection stays pending (adapter) — display only.
+    private (string? Provider, string? Model, string? Thinking, int? Messages) ActiveEngine()
+    {
+        if (SelectedWorker is { } worker)
+        {
+            // No cross-identity fallback: an unconnected worker with no
+            // confirmed state shows unknown, never legacy's values.
+            return WorkerDisplayPolicy.EngineForWorker(worker.LastConfirmedState);
+        }
+
+        return _knownModelDisplay is null
+            ? (null, null, null, null)
+            : (_knownProvider, _knownModelDisplay, _knownThinking, _knownMessages);
+    }
+
     /// Remember the genuine engine values from get_state (connect and
     /// reconnect). The footer shows these verbatim; usage shows the message
     /// count only, because token/cost context does not exist on this path.
@@ -1958,20 +2984,24 @@ public partial class MainWindow : Window
         RefreshEngineSegments();
     }
 
-    /// <summary>One-line engine summary for Overview/Settings (genuine values only).</summary>
+    /// <summary>One-line engine summary for Overview/Settings (genuine values only, from the viewed tab).</summary>
     private string EngineSummary()
-        => _knownModelDisplay is null
+    {
+        var engine = ActiveEngine();
+        return engine.Model is null
             ? "Pi engine not connected."
-            : $"Model: {_knownModelDisplay} ({_knownProvider ?? "?"}) · thinking {_knownThinking ?? "?"} · messages {_knownMessages?.ToString("N0") ?? "?"}";
+            : $"Model: {engine.Model} ({engine.Provider ?? "?"}) · thinking {engine.Thinking ?? "?"} · messages {engine.Messages?.ToString("N0") ?? "?"}";
+    }
 
-    /// <summary>Footer engine segments from the last known genuine values.</summary>
+    /// <summary>Footer engine segments from the last known genuine values of the viewed tab.</summary>
     private void RefreshEngineSegments()
     {
-        ModelButton.Content = _knownModelDisplay is null
+        var engine = ActiveEngine();
+        ModelButton.Content = engine.Model is null
             ? "Model: —"
-            : $"({_knownProvider ?? "?"}) {_knownModelDisplay}";
-        ThinkingButton.Content = _knownThinking is null ? "Thinking: —" : _knownThinking;
-        UsageText.Text = _knownMessages is { } messages ? $"messages {messages:N0}" : "messages —";
+            : $"({engine.Provider ?? "?"}) {engine.Model}";
+        ThinkingButton.Content = engine.Thinking is null ? "Thinking: —" : engine.Thinking;
+        UsageText.Text = engine.Messages is { } messages ? $"messages {messages:N0}" : "messages —";
         var engineTip = _settingsRuntime.CanConfigure
             ? "Click to change (verified Core operation)"
             : $"Selection pending: {_settingsRuntime.UnavailableReason}";
@@ -1987,6 +3017,12 @@ public partial class MainWindow : Window
     {
         try
         {
+            if (SelectedWorker is { } worker)
+            {
+                DirectoryButton.Content = worker.ProjectRoot;
+                return;
+            }
+
             AgentXWorkspace? workspace = _connectedWorkspace;
             if (workspace is null && SelectedEntry is { } entry)
             {
@@ -2003,13 +3039,18 @@ public partial class MainWindow : Window
 
     private void DirectoryButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        // Guard first: the picker must never move a running agent. Past the
+        // Guard first: the picker must never disturb a live run. Past the
         // guard, the existing Add flow stages the folder and requires
         // explicit confirmation — registration alone never retargets live
         // work, and the staged confirm panel is surfaced on Settings.
-        if (_conversation is not null || _piBusy || _connecting)
+        // An idle workspace connection does not block: registering (or
+        // creating a worker) cannot steal its view, and workers are
+        // independent processes by design.
+        if (_piBusy || _connecting
+            || (SelectedWorker?.Id is { } busyId
+                && (_busyWorkers.Contains(busyId) || _connectingWorkers.Contains(busyId))))
         {
-            StatusText.Text = $"Disconnect from '{_connectedLabel}' first — the folder picker never moves a running agent.";
+            StatusText.Text = "A run or connection is active — wait for it to settle before opening the picker.";
             return;
         }
 
@@ -2058,9 +3099,9 @@ public partial class MainWindow : Window
     {
         _modelFlyout ??= new Avalonia.Controls.Flyout();
         _modelFlyout.Content = BuildEngineFlyoutPanel("Engine model",
-            _knownModelDisplay is null
+            ActiveEngine().Model is null
                 ? "No engine connected."
-                : $"Current: ({_knownProvider ?? "?"}) {_knownModelDisplay}");
+                : $"Current: ({ActiveEngine().Provider ?? "?"}) {ActiveEngine().Model}");
         _modelFlyout.ShowAt(ModelButton);
     }
 
@@ -2068,13 +3109,13 @@ public partial class MainWindow : Window
     {
         _thinkingFlyout ??= new Avalonia.Controls.Flyout();
         _thinkingFlyout.Content = BuildEngineFlyoutPanel("Thinking level",
-            _knownThinking is null ? "No engine connected." : $"Current: {_knownThinking}");
+            ActiveEngine().Thinking is null ? "No engine connected." : $"Current: {ActiveEngine().Thinking}");
         _thinkingFlyout.ShowAt(ThinkingButton);
     }
 
     private async Task DisconnectPiAsync()
     {
-        _flushTimer.Stop();
+        StopFlushTimerIfIdle();
         if (_promptLifetime is not null)
         {
             await _promptLifetime.CancelAsync();
@@ -2116,9 +3157,10 @@ public partial class MainWindow : Window
     protected override async void OnClosed(EventArgs e)
     {
         base.OnClosed(e);
+        _closed = true;
         _flushTimer.Stop();
         _bridge.Detach();
-        SaveWorkerViewState(_coordinator.ActiveKey);
+        SaveWorkerViewState(_lastViewKey);
         if (_conversation is not null)
         {
             _conversation.ActivityChanged -= Conversation_ActivityChanged;
@@ -2126,6 +3168,20 @@ public partial class MainWindow : Window
             _conversation.ConnectionLost -= Conversation_ConnectionLost;
             await _conversation.DisposeAsync();
             _conversation = null;
+        }
+
+        // Retire every worker process: no orphans past app exit. A failed
+        // retirement is swallowed — the window is closing and no surface is
+        // left to report on; Core keeps ownership for a retry.
+        if (_manager is not null)
+        {
+            try
+            {
+                await _manager.DisposeAsync();
+            }
+            catch
+            {
+            }
         }
 
         _promptLifetime?.Dispose();

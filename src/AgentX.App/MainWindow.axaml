@@ -141,8 +141,10 @@
       <Grid x:Name="LivePanel" RowDefinitions="Auto,*,Auto" RowSpacing="8">
         <WrapPanel Grid.Row="0" Orientation="Horizontal" ItemSpacing="8">
           <Button Content="Connect" Click="ConnectPi_OnClick" />
-          <Button Content="Disconnect" Click="DisconnectPi_OnClick" />
+          <Button x:Name="DisconnectButton" Content="Disconnect" Click="DisconnectPi_OnClick" />
           <Button Content="Reconnect" Click="ReconnectPi_OnClick" />
+          <Button x:Name="RemoveWorkerButton" Content="Remove worker" Click="RemoveWorker_OnClick"
+                  ToolTip.Tip="Stop the selected worker's process and remove its registration (session files stay on disk)" />
           <CheckBox x:Name="AutoScrollCheck" Content="Auto-scroll"
                     IsChecked="True" IsCheckedChanged="AutoScrollCheck_OnChanged"
                     VerticalAlignment="Center" />
@@ -299,6 +301,8 @@
                        TextWrapping="Wrap" />
             <StackPanel Orientation="Horizontal" Spacing="8">
               <Button Content="Confirm registration" Click="ConfirmWorkspace_OnClick" />
+              <Button Content="Create worker here" Click="CreateWorker_OnClick"
+                      ToolTip.Tip="Create an independent Pi worker for the staged folder (separate process and session)" />
               <Button Content="Cancel" Click="CancelWorkspace_OnClick" />
             </StackPanel>
           </StackPanel>
