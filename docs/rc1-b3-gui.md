@@ -123,3 +123,14 @@ Agent ONE's manager changes the ownership rule); token/cost usage
   `tests/AgentX.App.Tests` (15 tests: corruption, recovery refusal,
   no-prune-on-degraded, prune-on-healthy, failed-write memory safety,
   store isolation and refusal semantics).
+- **Startup draft-loss (Lucy follow-up P1):** the save-before-rebuild
+  alone was not enough — adding the first tab auto-selects it, and that
+  shadow `WorkspaceTabs_OnChanged` snapshotted the still-empty composer
+  (and repeated feed snapshots) mid-rebuild, before the restore ever ran.
+  `LoadWorkspaceTabs` now suppresses selection events across the whole
+  rebuild (it owns the transition; user clicks still flow through the
+  handler), `SelectTab` restores the prior suppress flag (nesting-safe),
+  and the first restore is gated by `WorkerViewLifecycle.StartupComplete`
+  (new UI-free policy class, 4 more tests: startup/close/reopen for legacy
+  + non-legacy keys, bug-shape documentation, later-transition and
+  refusal behaviour).

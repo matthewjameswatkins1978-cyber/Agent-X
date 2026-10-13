@@ -43,7 +43,7 @@ public partial class MainWindow : Window
     // Per-worker-tab view state (App-owned): composer draft, selection by
     // feed Seq, scroll offset, status snapshots. Transcript memory lives in
     // the Core coordinator; this dictionary covers only what the view owns.
-    private readonly WorkerViewStore _viewStore = new();
+    private readonly WorkerViewLifecycle _viewLifecycle = new();
     private ViewPrefs _viewPrefs = new();
     // Engine settings boundary (Agent ONE owns the Core contract): model
     // and thinking selection flow ONLY through this adapter. Pending until
@@ -168,6 +168,15 @@ public partial class MainWindow : Window
 
     private void LoadWorkspaceTabs(string? selectKey = null)
     {
+        // The rebuild performs its own authoritative transition below, so
+        // list construction must not re-enter through WorkspaceTabs_OnChanged:
+        // adding the first tab auto-selects it, and that shadow transition
+        // would snapshot the still-empty composer (startup wipe) and repeat
+        // feed snapshots on every rebuild. User clicks still flow through
+        // the handler — they only happen outside rebuilds.
+        _suppressTabEvents = true;
+        try
+        {
         // Never throws for registry problems: the catalog degrades to
         // legacy-only with a recovery reason instead of crashing init.
         _catalog = WorkspaceCatalog.Load(ManagedRoot);
@@ -203,7 +212,15 @@ public partial class MainWindow : Window
         // (possibly stale) snapshot over unsent work. On refusal the same
         // key is restored afterwards, round-tripping exactly; unchanged
         // views skip the disk write inside. No feed work is added here.
-        SaveWorkerViewState(_coordinator.ActiveKey);
+        // Startup exception: on the very first rebuild the composer still
+        // holds its default empty string, so snapshotting now would store
+        // "" over the persisted draft before the restore below ever reads
+        // it. Restore first; snapshot on every later rebuild (including
+        // refused pinned switches, which round-trip the same key).
+        if (_viewLifecycle.StartupComplete)
+        {
+            SaveWorkerViewState(_coordinator.ActiveKey);
+        }
         var result = _coordinator.RequestTransition(resolved.TargetKey);
         SelectTab(_coordinator.ActiveKey);
         RebuildConversationList();
@@ -232,6 +249,11 @@ public partial class MainWindow : Window
             StatusText.Text = resolved.RetentionNote is not null
                 ? $"{recovery} {resolved.RetentionNote}"
                 : recovery;
+        }
+        }
+        finally
+        {
+            _suppressTabEvents = false;
         }
     }
 
@@ -268,6 +290,8 @@ public partial class MainWindow : Window
 
     private void SelectTab(string key)
     {
+        // Nesting-safe: rebuilds already suppress around this call.
+        var priorSuppress = _suppressTabEvents;
         _suppressTabEvents = true;
         try
         {
@@ -284,7 +308,7 @@ public partial class MainWindow : Window
         }
         finally
         {
-            _suppressTabEvents = false;
+            _suppressTabEvents = priorSuppress;
         }
     }
 
@@ -386,8 +410,8 @@ public partial class MainWindow : Window
             StatusText = StatusText.Text ?? string.Empty,
             RunStatusText = PiRunStatus.Text ?? string.Empty,
         };
-        var changed = _viewStore.Save(key, snapshot);
-        if (!changed && !_viewStore.TakeDirty(key))
+        var changed = _viewLifecycle.Store.Save(key, snapshot);
+        if (!changed && !_viewLifecycle.Store.TakeDirty(key))
         {
             return false; // Nothing new; skip the disk write entirely.
         }
@@ -399,7 +423,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            _viewStore.MarkDirty(key);
+            _viewLifecycle.Store.MarkDirty(key);
             StatusText.Text = $"Could not save view preferences: {ex.Message} — draft kept in memory.";
         }
 
@@ -415,16 +439,12 @@ public partial class MainWindow : Window
     /// </summary>
     private bool RestoreWorkerViewState(string key)
     {
-        var existed = _viewStore.Contains(key);
-        var state = _viewStore.GetOrCreate(key);
-        if (!existed)
-        {
-            if (_viewPrefs.Drafts.TryGetValue(key, out var draft))
-            {
-                state.DraftText = draft;
-                existed = true;
-            }
-        }
+        // Ordering lives in WorkerViewLifecycle: first visit seeds from
+        // persisted prefs (and completes startup); the empty composer is
+        // never snapshotted before this runs (see LoadWorkspaceTabs).
+        var (state, existed) = _viewLifecycle.Restore(
+            key,
+            k => _viewPrefs.Drafts.TryGetValue(k, out var draft) ? draft : null);
 
         PiPromptBox.Text = state.DraftText;
         ConversationList.SelectedItem = state.SelectedSeq is { } seq
