@@ -37,7 +37,7 @@ worker.Version; worker.Capabilities;                        // after connect
 
 Errors are loud and typed: missing project → `DirectoryNotFoundException`
 (never recreated); foreign session → `PiRpcTransportException`; duplicate
-session owner → `InvalidOperationException`; unsupported operation →
+session owner → `InvalidOperationException`; cross-process session owner → `SessionLockedException` (refused before any Pi launch); unsupported operation →
 `NotSupportedException` (probed); accepted-but-not-applied state →
 `InvalidOperationException`. Nothing silently falls back.
 
@@ -98,8 +98,18 @@ retry).
   remove worker + create new one; an active process is never retargeted.
 - Process-wide single-writer claims: one live Pi process per session id.
   A second worker on the same session is refused (`PiSessionClaims`).
-  Cross-process (two Agent X instances) is NOT protected — same as the
-  existing workspace assumption.
+  Cross-process (two Agent X instances) is protected by
+  `CrossProcessSessionLock`: an OS-held exclusive file handle on
+  `sessions/<sessionId>.lock`, acquired before any Pi launch. A competing
+  instance gets `SessionLockedException` (an `InvalidOperationException`)
+  and starts nothing; the kernel drops the lock when the holder dies, so a
+  crash can never strand ownership, and the file itself is never unlinked
+  (it proves nothing by existence — the open handle is the lock). Path
+  resolution happens in NTFS, so equivalent spellings of the same managed
+  root converge on one lock. Scope note: session locks do NOT serialize
+  `workers.json` writes — two instances sharing one managed root can still
+  race registry saves (last writer wins). That is a separate, pre-existing
+  registry risk, reported here and not addressed by this mechanism.
 
 ## Model / thinking operations — verified semantics (Pi 1.1.0 and 1.2.0)
 
@@ -192,8 +202,13 @@ refused. Manager disposal kills every worker process (PIDs verified gone).
   setting or preflight in this PR).
 - One run per worker at a time (second send throws; Pi's own queueing is
   untouched). Cross-session prompts from one worker are not supported.
-- Single-writer claims are per process; two Agent X instances can still
-  open the same session (pre-existing workspace-level assumption).
+- Single-writer claims are per process and paired with a cross-process
+  session lock (OS-held file handle): two Agent X instances can no longer
+  hold one session concurrently. A crashed instance's orphaned Pi child
+  is not covered by the lock its death released (no supervisor, by
+  design) — a pre-existing hazard, unchanged. Concurrent `workers.json`
+  saves across instances remain unprotected (registry risk, reported
+  separately).
 - Workers do not disconnect explicitly (dispose or process death).
 - No GUI yet: the contract above is what Agent TWO consumes; interactive
   click-through and live status polling remain NOT VERIFIED until the GUI
