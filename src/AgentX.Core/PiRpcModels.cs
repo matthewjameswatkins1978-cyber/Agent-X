@@ -31,7 +31,8 @@ public sealed record PiEngineState(
     bool IsCompacting,
     string? SessionId,
     int MessageCount,
-    int PendingMessageCount)
+    int PendingMessageCount,
+    string? SessionFile = null)
 {
     public static PiEngineState FromResponse(JsonDocument response)
     {
@@ -69,7 +70,8 @@ public sealed record PiEngineState(
             data.TryGetProperty("isCompacting", out var c) && c.ValueKind == JsonValueKind.True,
             Str("sessionId"),
             data.TryGetProperty("messageCount", out var mc) && mc.ValueKind == JsonValueKind.Number ? mc.GetInt32() : 0,
-            data.TryGetProperty("pendingMessageCount", out var pmc) && pmc.ValueKind == JsonValueKind.Number ? pmc.GetInt32() : 0);
+            data.TryGetProperty("pendingMessageCount", out var pmc) && pmc.ValueKind == JsonValueKind.Number ? pmc.GetInt32() : 0,
+            Str("sessionFile"));
     }
 }
 

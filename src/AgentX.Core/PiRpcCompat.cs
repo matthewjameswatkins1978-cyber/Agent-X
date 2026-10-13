@@ -151,87 +151,129 @@ public static class PiRpcCompat
     }
 
     /// <summary>
-    /// Probe the capability surface of a live connection. Each probe issues
-    /// its command and classifies ONLY the response: success → supported;
-    /// a command-level rejection (PiRpcCommandException) → not supported;
-    /// transport faults propagate (a dead pipe is not a capability answer).
-    /// Idempotent sets re-apply the state reported by get_state, so probing
-    /// never changes what the connection is doing.
+    /// Probe the capability surface of a live connection. Classification
+    /// keeps a strict line between a BROKEN connection and an UNSUPPORTED
+    /// optional feature:
+    /// - get_state / get_messages are baseline: a command-level rejection
+    ///   or a probe timeout throws PiRpcTransportException (connection not
+    ///   usable — never reported as "unsupported").
+    /// - everything else is optional: rejection or timeout → false
+    ///   (unsupported/indeterminate on THIS connection, fail closed).
+    /// Transport faults always propagate — a dead pipe is not a capability
+    /// answer. Idempotent sets re-apply the state reported by get_state, so
+    /// probing never changes what the connection is doing.
     /// </summary>
     public static async Task<PiRpcCapabilities> ProbeAsync(PiRpcClient client, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(client);
+        return await ProbeAsync(
+            (command, payload, ct) => client.SendRawAsync(command, payload, ct),
+            cancellationToken).ConfigureAwait(false);
+    }
 
-        var getState = await ProbeAsync(client, "get_state", null, cancellationToken).ConfigureAwait(false);
-        var getMessages = await ProbeAsync(client, "get_messages", null, cancellationToken).ConfigureAwait(false);
-        var availableModels = await ProbeAsync(client, "get_available_models", null, cancellationToken).ConfigureAwait(false);
-        var availableThinking = await ProbeAsync(client, "get_available_thinking_levels", null, cancellationToken).ConfigureAwait(false);
+    /// <summary>Send seam so classification is testable without a live Pi.</summary>
+    /// <summary>Default per-probe timeout: a baseline command that does not answer this fast is broken, not "unsupported".</summary>
+    private static readonly TimeSpan DefaultProbeTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>Send seam so classification is testable without a live Pi; probeTimeout overrides the default clock.</summary>
+    internal static async Task<PiRpcCapabilities> ProbeAsync(
+        Func<string, Dictionary<string, object?>?, CancellationToken, Task<System.Text.Json.JsonDocument>> send,
+        CancellationToken cancellationToken = default,
+        TimeSpan? probeTimeout = null)
+    {
+        ArgumentNullException.ThrowIfNull(send);
+        var timeout = probeTimeout ?? DefaultProbeTimeout;
+
+        // Baseline first: these must answer, or the connection is not usable.
+        await ProbeRequiredAsync(send, "get_state", timeout, cancellationToken).ConfigureAwait(false);
+        await ProbeRequiredAsync(send, "get_messages", timeout, cancellationToken).ConfigureAwait(false);
+        var availableModels = await ProbeOptionalAsync(send, "get_available_models", null, timeout, cancellationToken).ConfigureAwait(false);
+        var availableThinking = await ProbeOptionalAsync(send, "get_available_thinking_levels", null, timeout, cancellationToken).ConfigureAwait(false);
 
         // Idempotent set probes: re-apply what get_state reports. When the
         // state needed for idempotence is unavailable, the set capability is
         // unknown and reported as unsupported (fail closed, never assume).
         var setModel = false;
         var setThinking = false;
-        if (getState)
-        {
-            try
-            {
-                using var state = await client.SendRawAsync("get_state", null, cancellationToken).ConfigureAwait(false);
-                var data = state.RootElement.TryGetProperty("data", out var d) ? d : default;
-                if (data.ValueKind == System.Text.Json.JsonValueKind.Object
-                    && data.TryGetProperty("model", out var model) && model.ValueKind == System.Text.Json.JsonValueKind.Object
-                    && model.TryGetProperty("id", out var id) && id.ValueKind == System.Text.Json.JsonValueKind.String
-                    && model.TryGetProperty("provider", out var prov) && prov.ValueKind == System.Text.Json.JsonValueKind.String)
-                {
-                    setModel = await ProbeAsync(client, "set_model",
-                        new Dictionary<string, object?> { ["provider"] = prov.GetString(), ["modelId"] = id.GetString() },
-                        cancellationToken).ConfigureAwait(false);
-                }
-
-                if (data.ValueKind == System.Text.Json.JsonValueKind.Object
-                    && data.TryGetProperty("thinkingLevel", out var level) && level.ValueKind == System.Text.Json.JsonValueKind.String
-                    && !string.IsNullOrWhiteSpace(level.GetString()))
-                {
-                    setThinking = await ProbeAsync(client, "set_thinking_level",
-                        new Dictionary<string, object?> { ["level"] = level.GetString() },
-                        cancellationToken).ConfigureAwait(false);
-                }
-            }
-            catch (PiRpcTransportException)
-            {
-                throw;
-            }
-        }
-
-        return new PiRpcCapabilities(getState, getMessages, availableModels, setModel, availableThinking, setThinking);
-    }
-
-    private static async Task<bool> ProbeAsync(
-        PiRpcClient client,
-        string command,
-        Dictionary<string, object?>? payload,
-        CancellationToken cancellationToken)
-    {
-        // Per-probe timeout: a future Pi that ignores an unknown command
-        // must fail the probe closed (unsupported), never hang the connect.
-        // The caller's own cancellation still propagates.
-        using var probeTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        probeTimeout.CancelAfter(TimeSpan.FromSeconds(10));
         try
         {
-            using var response = await client.SendRawAsync(command, payload, probeTimeout.Token).ConfigureAwait(false);
+            using var state = await send("get_state", null, cancellationToken).ConfigureAwait(false);
+            var data = state.RootElement.TryGetProperty("data", out var d) ? d : default;
+            if (data.ValueKind == System.Text.Json.JsonValueKind.Object
+                && data.TryGetProperty("model", out var model) && model.ValueKind == System.Text.Json.JsonValueKind.Object
+                && model.TryGetProperty("id", out var id) && id.ValueKind == System.Text.Json.JsonValueKind.String
+                && model.TryGetProperty("provider", out var prov) && prov.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                setModel = await ProbeOptionalAsync(send, "set_model",
+                    new Dictionary<string, object?> { ["provider"] = prov.GetString(), ["modelId"] = id.GetString() },
+                    timeout, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (data.ValueKind == System.Text.Json.JsonValueKind.Object
+                && data.TryGetProperty("thinkingLevel", out var level) && level.ValueKind == System.Text.Json.JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(level.GetString()))
+            {
+                setThinking = await ProbeOptionalAsync(send, "set_thinking_level",
+                    new Dictionary<string, object?> { ["level"] = level.GetString() },
+                    timeout, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (PiRpcTransportException)
+        {
+            throw;
+        }
+
+        return new PiRpcCapabilities(true, true, availableModels, setModel, availableThinking, setThinking);
+    }
+
+    private static async Task ProbeRequiredAsync(
+        Func<string, Dictionary<string, object?>?, CancellationToken, Task<System.Text.Json.JsonDocument>> send,
+        string command,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        using var probeTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        probeTimeout.CancelAfter(timeout);
+        try
+        {
+            using var response = await send(command, null, probeTimeout.Token).ConfigureAwait(false);
+            if (!PiRpcClient.IsCommandSuccess(response))
+            {
+                throw new PiRpcTransportException(
+                    $"Pi rejected required command '{command}' — the connection is not usable (not reported as unsupported).");
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new PiRpcTransportException(
+                $"Pi did not answer required command '{command}' within {timeout.TotalMilliseconds:0} ms — broken probe, connection not usable.");
+        }
+    }
+
+    private static async Task<bool> ProbeOptionalAsync(
+        Func<string, Dictionary<string, object?>?, CancellationToken, Task<System.Text.Json.JsonDocument>> send,
+        string command,
+        Dictionary<string, object?>? payload,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        using var probeTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        probeTimeout.CancelAfter(timeout);
+        try
+        {
+            using var response = await send(command, payload, probeTimeout.Token).ConfigureAwait(false);
             return PiRpcClient.IsCommandSuccess(response);
         }
         catch (PiRpcCommandException)
         {
-            // Command-level rejection from a no-arg/idempotent probe means
-            // this Pi build does not support the command. Deliberately not
-            // matched on message text: wording is not a stable contract.
+            // Command-level rejection from an optional probe: unsupported on
+            // this build. Deliberately not matched on message text — wording
+            // is not a stable contract.
             return false;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            return false; // Probe timed out on its own clock: unsupported (fail closed).
+            return false; // Optional probe timed out on its own clock: unsupported/indeterminate (fail closed).
         }
     }
 }

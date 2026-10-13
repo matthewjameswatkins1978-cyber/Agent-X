@@ -28,7 +28,7 @@ var levels = await worker.GetThinkingLevelsAsync(ct);                   // per c
 confirmed = await worker.SetThinkingLevelAsync(level, ct);              // validated + CONFIRMED
 
 worker.Feed;                     // THIS worker's ConversationFeed (render whichever is selected)
-worker.Snapshot();               // WorkerSnapshot { …, Version, Capabilities, LastConfirmedState, ProcessId }
+worker.Snapshot();               // WorkerSnapshot { …, Version, Capabilities, LastConfirmedState, ProcessId, Verified }
 worker.History;                  // restored session messages
 events: WorkerAdded / WorkerRemoved / SelectionChanged   (manager)
         ActivityChanged / ToolActivityChanged / ConnectionLost   (worker)
@@ -40,6 +40,25 @@ Errors are loud and typed: missing project → `DirectoryNotFoundException`
 session owner → `InvalidOperationException`; unsupported operation →
 `NotSupportedException` (probed); accepted-but-not-applied state →
 `InvalidOperationException`. Nothing silently falls back.
+
+Connection lifecycle (failure-path rules): a worker is only USABLE after
+identity validation AND capability probes succeed — `Snapshot().Verified`
+reports it. Identity proof is the engine-reported session id; when it is
+missing, Pi's own session-file name must carry the expected id, otherwise
+the connection is refused as unverified (`PiRpcTransportException`). Any
+failed validation/probe QUARANTINES the connection (process disposed; if
+retirement itself fails the reference and claim are kept for retry — never
+a silent orphan) and ConnectAsync re-verifies instead of taking a
+shortcut; a failed reconnect clears capabilities and confirmed state before
+attempting the swap. `SendAsync` closes the visible turn on cancellation,
+command rejection AND transport failure — never leaves a streaming row
+open, never fabricates a receipt. Persistence is transactional: create
+rolls back to the on-disk bytes on save failure; remove retires the Pi
+process FIRST and only then unpersists, so a failed save leaves a
+dead-but-owned worker (a retry completes it) — never an unreachable live
+process; manager disposal attempts EVERY worker and throws an
+AggregateException listing any it could not retire (those stay owned for a
+retry).
 
 ### GUI integration instructions (Agent TWO)
 
@@ -106,11 +125,14 @@ Probed empirically with disposable processes (no LLM calls for state ops):
 - `DetectVersionAsync(exe)` — runs `<exe> --version`, parses best-effort.
   INFORMATIONAL ONLY; a null version is fine. Behavior is never gated on a
   version number.
-- `ProbeAsync(client)` — issues each command on the live connection:
-  success → supported; command-level rejection → not supported; per-probe
-  10s timeout fails closed; transport faults propagate (a dead pipe is not
-  a capability answer). Probes are side-effect free: no-arg queries plus
-  idempotent sets that re-apply the state reported by `get_state`.
+- `ProbeAsync(client)` — classifies against a strict BROKEN vs UNSUPPORTED
+  line: get_state / get_messages are REQUIRED baseline commands — a
+  rejection or probe timeout throws `PiRpcTransportException` (a broken
+  connection is never reported as "unsupported"). All other commands are
+  OPTIONAL: rejection or 10s timeout → `false` (fail closed; error wording
+  is never matched). Transport faults always propagate. Probes are
+  side-effect free: no-arg queries plus idempotent sets re-applying the
+  state reported by `get_state`.
   Probed: get_state, get_messages, get_available_models, set_model,
   get_available_thinking_levels, set_thinking_level.
 - Not probed (inference cost or session writes): prompt, abort, bash —
