@@ -96,6 +96,43 @@ suspends, reconnects or cancels anything. App-only; Core untouched.
   clean with 5 tabs. 4K + native picker confirm + tall-scroll perf NOT
   VERIFIED (display-off session).
 
+## Review corrections (Lucy, PR #19)
+
+- **P1 worker-removal threading:** `WorkerRemoved` can fire on a
+  ThreadPool thread (`ConfigureAwait(false)`). The handler now marshals
+  via `Dispatcher.UIThread.Post` and no-ops once `_closed` is set in
+  `OnClosed`. Selection repair itself is pure
+  (`WorkerDisplayPolicy.RepairTarget`) and tested; removal of a connected
+  worker verified live with no violation and correct fallback.
+- **P1 refused workspace switch:** the early-return refusal left the
+  worker's feed/draft under the reverted workspace tab (prompt
+  misrouting). It now restores the kept workspace view (save outgoing,
+  reselect, rebind, restore, dots/directory/engine/working/footer)
+  before the refusal stays the final word. Verified live: tab, draft,
+  feed and session-file routing all coherent; post-refusal send lands in
+  the kept session only.
+- **P1 engine attribution:** `ActiveEngine` returns
+  `EngineForWorker(confirmed-or-all-null)` for worker tabs — an
+  unconnected worker shows unknown, never legacy's values. Round-trip
+  verified live both directions. Found while verifying: footer engine
+  and connection segments went stale across tab switches (only some
+  paths refreshed them); every switch path now refreshes them plus the
+  connection/activity line from the viewed identity.
+- **P2 working indicator:** `RefreshWorkingRow` derives visibility from
+  the viewed run only (`ShowWorking`, tested); background runs keep
+  their tab dots. Verified live with concurrent runs: idle tab shows no
+  indicator while the busy tab's dot burns amber, and vice versa.
+- **Close during a live run:** graceful `CloseMainWindow` mid-run
+  retired every Pi child (zero `axw-*`/`agent-x-main` node processes
+  after). No shutdown redesign; force-kill orphaning remains out of
+  scope (true of any process).
+- **One-off unknown (recorded, not reproduced):** during corrections
+  smoke an app instance vanished and an unfamiliar one was running, with
+  no crash log. Cause unknown (attended machine, other processes
+  active). Re-ran heavier concurrent switching under watch with zero
+  recurrence; no evidence implicating the new code. Carried as an open
+  observation, not a claim.
+
 ## Files (App-only)
 
 - `src/AgentX.App/MainWindow.axaml(.cs)`: manager wiring, selection

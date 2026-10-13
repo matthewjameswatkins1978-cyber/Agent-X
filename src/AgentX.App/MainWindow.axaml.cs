@@ -101,6 +101,9 @@ public partial class MainWindow : Window
     // switch). A stale read self-heals on the next event or the switch
     // rebuild — never a crash, never a misroute.
     private volatile string? _selectedWorkerId;
+    // True once the window closed: marshaled manager callbacks arriving
+    // late must not touch dead controls.
+    private bool _closed;
     // True while a folder picker is open: Add is not re-entrant (stacked
     // modal pickers). Set on UI thread around OpenFolderPickerAsync.
     private bool _pickingWorkspace;
@@ -177,7 +180,16 @@ public partial class MainWindow : Window
                 AttachWorker(worker);
                 RebuildWorkerTabs();
             };
-            _manager.WorkerRemoved += (_, _) => RebuildWorkerTabs();
+            _manager.WorkerRemoved += (_, _) => Dispatcher.UIThread.Post(() =>
+            {
+                // RemoveWorkerAsync fires after ConfigureAwait(false): this
+                // can arrive on a ThreadPool thread. Marshal to the UI
+                // dispatcher, and never touch a closed window.
+                if (!_closed)
+                {
+                    RebuildWorkerTabs();
+                }
+            });
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         {
@@ -315,7 +327,12 @@ public partial class MainWindow : Window
         RestoreWorkerViewState(_coordinator.ActiveKey);
         _lastViewKey = _coordinator.ActiveKey;
         _selectedWorkerId = null;
+        RefreshWorkingRow();
         RefreshDirectoryLabel();
+        RefreshEngineSegments();
+        PiConnectionState.Text = _piBusy ? "Working…" : _connecting ? "Connecting…" : _conversation?.IsConnected == true ? "Connected" : "Disconnected";
+        PiActivityText.Text = string.Empty;
+        _pendingActivityText = null;
         if (!result.Accepted)
         {
             StatusText.Text = $"Staying on '{_connectedLabel}' — {result.RefusalReason} Histories never mix.";
@@ -522,6 +539,9 @@ public partial class MainWindow : Window
         SaveWorkerViewState(_lastViewKey);
         _lastViewKey = WorkerViewKey.ForWorker(worker.Id);
         _selectedWorkerId = worker.Id;
+        // Keep the manager's view pointer truthful (SelectionChanged has no
+        // GUI subscriber; same-id selects raise no event).
+        _manager?.SelectWorker(worker.Id);
         _pendingActivityText = null;
         RebuildConversationList();
         RebuildSessionMap();
@@ -536,6 +556,15 @@ public partial class MainWindow : Window
         RefreshDirectoryLabel();
         RefreshConnectionButtons();
         RefreshEngineSegments();
+        RefreshWorkingRow();
+        // Connection state follows the viewed worker too — never another
+        // tab's leftover. Activity restarts from the live feed's ticks.
+        PiConnectionState.Text = _busyWorkers.Contains(worker.Id)
+            ? "Working…"
+            : _connectingWorkers.Contains(worker.Id)
+                ? "Connecting…"
+                : worker.IsConnected ? "Connected" : "Disconnected";
+        PiActivityText.Text = string.Empty;
         if (!restored)
         {
             var label = WorkerViewKey.DisplayLabel(worker.Id, worker.Label);
@@ -615,10 +644,15 @@ public partial class MainWindow : Window
             // to the manager selection, else back to legacy.
             if (selectedId is not null)
             {
-                var alive = _manager.Workers.FirstOrDefault(w => w.Id == selectedId) ?? _manager.Selected;
-                if (alive is not null)
+                // Pure repair decision (tested): surviving views reselect
+                // untouched, vanished views fall to the manager selection.
+                var target = WorkerDisplayPolicy.RepairTarget(
+                    selectedId,
+                    _manager.Workers.Select(w => w.Id).ToArray(),
+                    _manager.Selected?.Id);
+                if (target is not null)
                 {
-                    SelectWorkerTab(alive.Id);
+                    SelectWorkerTab(target);
                 }
                 else
                 {
@@ -690,6 +724,14 @@ public partial class MainWindow : Window
         RefreshConnectionButtons();
     }
 
+    /// Working indicator follows the VIEWED run only — never another
+    /// worker's activity. Background runs keep their tab dots.
+    private void RefreshWorkingRow()
+    {
+        WorkingRow.IsVisible = WorkerDisplayPolicy.ShowWorking(
+            SelectedWorker is { } worker ? _busyWorkers.Contains(worker.Id) : _piBusy);
+    }
+
     /// Button states follow the selection: Disconnect stops the workspace
     /// connection only (workers end via Remove worker); Remove worker acts
     /// on worker tabs only. Refreshed with the tab dots, so every selection
@@ -737,9 +779,33 @@ public partial class MainWindow : Window
         var result = _coordinator.RequestTransition(entry.Key);
         if (!result.Accepted)
         {
-            StatusText.Text = $"Disconnect from '{_connectedLabel}' before opening '{entry.Label}' — histories never mix.";
+            // The kept tab must own a coherent view: the composer and rows
+            // may still show the worker (or workspace) we came from, which
+            // would misroute the next prompt under the wrong identity.
+            // Restore the active workspace view first; the refusal stays
+            // the final word.
+            SaveWorkerViewState(_lastViewKey);
             SelectTab(_coordinator.ActiveKey);
+            _lastViewKey = _coordinator.ActiveKey;
+            _selectedWorkerId = null;
+            _pendingActivityText = null;
+            RebuildConversationList();
+            RebuildSessionMap();
+            if (OverviewPanel.IsVisible)
+            {
+                RebuildOverview();
+            }
+
+            UpdateEmptyState();
+            RestoreWorkerViewState(_lastViewKey);
+            UpdateTabDots();
             RefreshDirectoryLabel();
+            RefreshConnectionButtons();
+            RefreshEngineSegments();
+            RefreshWorkingRow();
+            PiConnectionState.Text = _piBusy ? "Working…" : _connecting ? "Connecting…" : _conversation?.IsConnected == true ? "Connected" : "Disconnected";
+            PiActivityText.Text = string.Empty;
+            StatusText.Text = $"Disconnect from '{_connectedLabel}' before opening '{entry.Label}' — histories never mix.";
             return;
         }
 
@@ -756,6 +822,13 @@ public partial class MainWindow : Window
         _selectedWorkerId = null;
         UpdateTabDots();
         RefreshDirectoryLabel();
+        RefreshWorkingRow();
+        RefreshEngineSegments();
+        // Footer connection/activity follow the viewed workspace: a worker's
+        // leftovers must not linger under this tab. The feed keeps truth.
+        PiConnectionState.Text = _piBusy ? "Working…" : _connecting ? "Connecting…" : _conversation?.IsConnected == true ? "Connected" : "Disconnected";
+        PiActivityText.Text = string.Empty;
+        _pendingActivityText = null;
         if (_conversation is null && !restored)
         {
             StatusText.Text = entry.IsLegacy
@@ -1597,8 +1670,9 @@ public partial class MainWindow : Window
         if (IsSelectedWorker(id))
         {
             PiConnectionState.Text = "Working…";
-            WorkingRow.IsVisible = true;
         }
+
+        RefreshWorkingRow();
 
         if (!_flushTimer.IsEnabled)
         {
@@ -1669,7 +1743,7 @@ public partial class MainWindow : Window
             _runSinks.Remove(id);
             _runSeqs.Remove(id);
             _busyWorkers.Remove(id);
-            WorkingRow.IsVisible = _busyWorkers.Count > 0 || _piBusy;
+            RefreshWorkingRow();
             StopFlushTimerIfIdle();
             UpdateTabDots();
         }
@@ -1723,7 +1797,7 @@ public partial class MainWindow : Window
 
         _piBusy = true;
         PiConnectionState.Text = "Working…";
-        WorkingRow.IsVisible = true;
+        RefreshWorkingRow();
         UpdateTabDots();
 
         _feed.AddUser(message);
@@ -1825,7 +1899,7 @@ public partial class MainWindow : Window
 
             _piBusy = false;
             _liveSeq = -1;
-            WorkingRow.IsVisible = false;
+            RefreshWorkingRow();
             UpdateTabDots();
             _promptLifetime?.Dispose();
             _promptLifetime = null;
@@ -2874,9 +2948,11 @@ public partial class MainWindow : Window
     /// Model/thinking selection stays pending (adapter) — display only.
     private (string? Provider, string? Model, string? Thinking, int? Messages) ActiveEngine()
     {
-        if (SelectedWorker?.LastConfirmedState is { } state)
+        if (SelectedWorker is { } worker)
         {
-            return (state.Provider, state.ModelName ?? state.ModelId, state.ThinkingLevel, state.MessageCount);
+            // No cross-identity fallback: an unconnected worker with no
+            // confirmed state shows unknown, never legacy's values.
+            return WorkerDisplayPolicy.EngineForWorker(worker.LastConfirmedState);
         }
 
         return _knownModelDisplay is null
@@ -3081,6 +3157,7 @@ public partial class MainWindow : Window
     protected override async void OnClosed(EventArgs e)
     {
         base.OnClosed(e);
+        _closed = true;
         _flushTimer.Stop();
         _bridge.Detach();
         SaveWorkerViewState(_lastViewKey);
