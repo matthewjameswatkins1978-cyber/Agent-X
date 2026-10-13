@@ -236,14 +236,31 @@
           <StackPanel Spacing="6">
             <TextBlock x:Name="PiRunStatus" Text="" Foreground="#AAB2BF" FontSize="12"
                        TextWrapping="Wrap" />
-            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
-              <!-- Chord handled in code (PreviewKeyDown tunnel): XAML cannot attach tunnel events. -->
-              <TextBox x:Name="PiPromptBox" PlaceholderText="Ask Pi anything… (Ctrl+Enter to send)"
-                       AcceptsReturn="True" TextWrapping="Wrap" MinHeight="64" MaxHeight="220"
-                       ScrollViewer.VerticalScrollBarVisibility="Auto" />
-              <Button Grid.Column="1" x:Name="PiSendButton" Content="Send" Click="SendPrompt_OnClick" />
-              <Button Grid.Column="2" x:Name="PiCancelButton" Content="Cancel" Click="CancelPrompt_OnClick" IsEnabled="False" />
-            </Grid>
+            <!-- The text box is the interface: full composer width, keyboard-first.
+                 Chord + Escape handled in code (PreviewKeyDown tunnel): XAML cannot
+                 attach tunnel events. The only visible Send/Stop surface is the context
+                 menu (mouse right-click or Shift+F10/Menu key) — no permanent buttons. -->
+            <TextBox x:Name="PiPromptBox" PlaceholderText="Ask Pi anything… (Ctrl+Enter to send)"
+                     AcceptsReturn="True" TextWrapping="Wrap" MinHeight="64" MaxHeight="220"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                     ContextRequested="ComposerMenu_OnContextRequested">
+              <TextBox.ContextFlyout>
+                <!-- Opened programmatically at the CONTROL (see ContextRequested
+                     below): a pointer-anchored flyout grows down-right off the
+                     window and clips Send/Stop, while a control-anchored one flips
+                     above the composer with every item visible — identical for
+                     mouse and keyboard. -->
+                <MenuFlyout Placement="TopEdgeAlignedLeft">
+                  <MenuItem Header="Cut" InputGesture="Ctrl+X" Click="ComposerCut_OnClick" />
+                  <MenuItem Header="Copy" InputGesture="Ctrl+C" Click="ComposerCopy_OnClick" />
+                  <MenuItem Header="Paste" InputGesture="Ctrl+V" Click="ComposerPaste_OnClick" />
+                  <MenuItem Header="Select all" InputGesture="Ctrl+A" Click="ComposerSelectAll_OnClick" />
+                  <Separator />
+                  <MenuItem x:Name="ComposerSendItem" Header="Send message" InputGesture="Ctrl+Enter" Click="ComposerSend_OnClick" />
+                  <MenuItem x:Name="ComposerStopItem" Header="Stop current run" InputGesture="Escape" Click="ComposerStop_OnClick" />
+                </MenuFlyout>
+              </TextBox.ContextFlyout>
+            </TextBox>
           </StackPanel>
         </Border>
       </Grid>
