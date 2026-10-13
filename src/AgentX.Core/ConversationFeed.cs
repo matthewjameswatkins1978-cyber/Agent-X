@@ -5,6 +5,9 @@ namespace AgentX.Core;
 /// <summary>
 /// One row in the GUI conversation feed. <see cref="Text"/> is always the
 /// complete text — display truncation happens in the view, never here.
+/// <see cref="CallId"/> is Pi's observed tool-call ID (raw, never rendered),
+/// set ONLY on a start row paired with its end; unverified end rows are
+/// always null. It is identity evidence for history reconciliation.
 /// </summary>
 public sealed record FeedEntry(
     long Seq,
@@ -14,12 +17,76 @@ public sealed record FeedEntry(
     string? Note = null,
     string? Path = null,
     bool IsMutating = false,
-    bool IsError = false)
+    bool IsError = false,
+    string? CallId = null)
 {
     public static string TruncateForDisplay(string text, int maxChars = 2000)
         => text.Length <= maxChars
             ? text
             : text[..maxChars] + $"… [truncated for display; all {text.Length:N0} chars preserved — copy the message for the full text]";
+
+    /// Explicitly bounded inline expansion for large tool output. Rendering
+    /// one inline per line freezes the UI on 100k-line outputs, so expanded
+    /// display stops at the first bound (lines or chars) with a notice
+    /// carrying the EXACT totals. The source text is never altered — copy
+    /// actions keep using the full text, so nothing is silently lost.
+    public static string TruncateExpanded(string text, int maxLines = 2000, int maxChars = 100_000)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        if (text.Length == 0)
+        {
+            return text;
+        }
+
+        var lines = 0;
+        var cut = -1;
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] == '\n' && ++lines == maxLines)
+            {
+                cut = i + 1;
+                break;
+            }
+        }
+
+        var lineBounded = cut >= 0 && cut < text.Length;
+        var charBounded = text.Length > maxChars;
+        if (!lineBounded && !charBounded)
+        {
+            return text;
+        }
+
+        var shown = lineBounded && cut < maxChars ? text[..cut] : text[..Math.Min(maxChars, text.Length)];
+        var (shownLines, totalLines) = CountLines(shown, text);
+        return shown + $"… [expanded display bounded: showing {shownLines:N0} of {totalLines:N0} lines " +
+            $"({shown.Length:N0} of {text.Length:N0} chars) — copy the message for the full text]";
+    }
+
+    private static (int Shown, int Total) CountLines(string shown, string full)
+    {
+        return (CountContentLines(shown), CountContentLines(full));
+    }
+
+    private static int CountContentLines(string text)
+    {
+        var lines = 0;
+        foreach (var c in text)
+        {
+            if (c == '\n')
+            {
+                lines++;
+            }
+        }
+
+        // A trailing newline terminates the last line rather than starting
+        // an empty one: "a\nb\n" is two lines, not three.
+        if (text.Length > 0 && !text.EndsWith('\n'))
+        {
+            lines++;
+        }
+
+        return lines;
+    }
 }
 
 /// <summary>One session-map row. <see cref="Seq"/> is the evidence link: the feed entry number.</summary>
@@ -69,6 +136,18 @@ public sealed record SessionMapSnapshot(
     }
 }
 
+/// Result of a history-reconcile attempt. Only Applied and InSync leave
+/// rows touched; both skips leave the existing safe output alone
+/// (SkippedAmbiguous additionally records one explicit marker row so the
+/// refusal is visible, not silent).
+public enum ReconcileOutcome
+{
+    Applied,
+    InSync,
+    SkippedCountMismatch,
+    SkippedAmbiguous,
+}
+
 /// <summary>
 /// UI-free ordered conversation feed: restored history plus the live turn,
 /// tool activity, errors and run receipts. The GUI binds a snapshot of this
@@ -81,6 +160,12 @@ public sealed class ConversationFeed
 {
     private readonly Lock _gate = new();
     private readonly List<FeedEntry> _entries = new();
+    // Open starts by Pi's observed call ID (exact identity). Starts whose
+    // wire record carried no ID fall back to per-name stacks, paired only
+    // when unambiguous (see AddToolEnd). Both are pairing indexes only:
+    // rows are the record and are never rewritten by pairing.
+    private readonly Dictionary<string, long> _openByCallId = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Stack<long>> _openByName = new(StringComparer.OrdinalIgnoreCase);
     private long _nextSeq = 1;
     private string? _activity;
 
@@ -111,9 +196,12 @@ public sealed class ConversationFeed
         lock (_gate)
         {
             _entries.Clear();
+            AbandonOpenToolsLocked();
             foreach (var message in history)
             {
-                _entries.Add(new FeedEntry(_nextSeq++, message.Role, message.Text));
+                // CallId propagates so restored rows keep identity for a
+                // later reconcile; rows without one fall back to exclusivity.
+                _entries.Add(new FeedEntry(_nextSeq++, message.Role, message.Text, CallId: message.CallId));
             }
         }
 
@@ -132,6 +220,11 @@ public sealed class ConversationFeed
         lock (_gate)
         {
             _entries.Clear();
+            // Feed replacement is a new evidence context: any in-flight
+            // pairing from the previous context is dropped. Restored rows
+            // keep their observed text/notes untouched; a later orphan end
+            // becomes a separate row, never a rewrite of restored history.
+            AbandonOpenToolsLocked();
             _entries.AddRange(entries);
             if (entries.Count > 0)
             {
@@ -207,6 +300,12 @@ public sealed class ConversationFeed
             // its call order — can show a stale "working" state once idle.
             _activity = null;
 
+            // The turn is over: no more ends can arrive for its calls. Drop
+            // any orphan starts so a LATER run's ends can never pop them.
+            // (Ends already processed paired before this ran; a genuinely
+            // late end becomes a separate unverified row, outcome preserved.)
+            AbandonOpenToolsLocked();
+
             if (receipt is not null)
             {
                 _entries.Add(new FeedEntry(
@@ -221,13 +320,489 @@ public sealed class ConversationFeed
         Changed?.Invoke();
     }
 
-    public long AddToolStart(string toolName, string? summary, string? path, bool isMutating)
-        => Add(new FeedEntry(NextSeq(), "tool", summary ?? string.Empty,
-            Note: $"started: {toolName}", Path: path, IsMutating: isMutating));
+    public long AddToolStart(string toolName, string? summary, string? path, bool isMutating, string? callId = null)
+    {
+        long seq;
+        lock (_gate)
+        {
+            seq = _nextSeq++;
+            _entries.Add(new FeedEntry(seq, "tool", summary ?? string.Empty,
+                Note: $"started: {toolName}", Path: path, IsMutating: isMutating,
+                CallId: string.IsNullOrEmpty(callId) ? null : callId));
+            if (!string.IsNullOrEmpty(callId))
+            {
+                _openByCallId[callId] = seq;
+            }
+            else
+            {
+                if (!_openByName.TryGetValue(toolName, out var stack))
+                {
+                    stack = new Stack<long>();
+                    _openByName[toolName] = stack;
+                }
 
-    public long AddToolEnd(string toolName, bool isError)
-        => Add(new FeedEntry(NextSeq(), "tool", isError ? $"Tool {toolName} failed." : $"Tool {toolName} finished.",
-            Note: isError ? $"failed: {toolName}" : $"finished: {toolName}", IsError: isError));
+                stack.Push(seq);
+            }
+        }
+
+        Changed?.Invoke();
+        return seq;
+    }
+
+    /// <summary>
+    /// Close one tool operation IN its start row — but ONLY with proven
+    /// identity. Pairing order: (1) Pi's observed call ID against the open
+    /// call-ID index (exact match, order-independent); (2) when the wire
+    /// carried no ID, the per-name stack ONLY if exactly one start of that
+    /// name is open (a single candidate is unambiguous). Anything else —
+    /// unknown ID, several same-name opens with no ID, no open start —
+    /// becomes a separate outcome row marked "(unverified)" so the outcome
+    /// is preserved without attributing it to an unproven invocation.
+    /// Never fabricates, never swaps concurrent same-name outcomes.
+    /// </summary>
+    public long AddToolEnd(string toolName, bool isError, string? callId = null)
+    {
+        long? openSeq = null;
+        lock (_gate)
+        {
+            if (!string.IsNullOrEmpty(callId))
+            {
+                if (_openByCallId.Remove(callId, out var startSeq))
+                {
+                    openSeq = startSeq;
+                }
+            }
+            else if (_openByName.TryGetValue(toolName, out var stack) && stack.Count == 1)
+            {
+                openSeq = stack.Pop();
+            }
+        }
+
+        if (openSeq is { } seq)
+        {
+            CloseToolCall(seq, toolName, isError);
+            return seq;
+        }
+
+        return AddUnverifiedEnd(toolName, isError);
+    }
+
+    private long AddUnverifiedEnd(string toolName, bool isError)
+    {
+        // No CallId on this row (its start was never proven), and the
+        // " (unverified)" note suffix keeps its name out of reconcile name
+        // groups — together they gate history reconciliation without any
+        // separate bookkeeping (the write-only set we used to keep).
+        var note = isError ? $"failed: {toolName} (unverified)" : $"finished: {toolName} (unverified)";
+        var text = isError
+            ? $"Tool {toolName} failed (outcome not paired to an observed start)."
+            : $"Tool {toolName} finished (outcome not paired to an observed start).";
+        long seq;
+        lock (_gate)
+        {
+            seq = _nextSeq++;
+            _entries.Add(new FeedEntry(seq, "tool", text, Note: note, IsError: isError));
+        }
+
+        Changed?.Invoke();
+        return seq;
+    }
+
+    /// <summary>
+    /// Drop all in-flight tool pairing state WITHOUT touching rows (session
+    /// boundary: disconnect, workspace switch, feed replacement). Rows keep
+    /// their observed text; later ends become separate unverified rows.
+    /// Same-session ends (cancel, reconnect resume) keep pairing because
+    /// their call IDs are still indexed — abandon only at real boundaries.
+    /// </summary>
+    public void AbandonOpenTools()
+    {
+        lock (_gate)
+        {
+            AbandonOpenToolsLocked();
+        }
+        // No Changed: rows are untouched (pairing indexes only), so no
+        // view refresh is owed. The next real mutation drives the tick.
+    }
+
+    private void AbandonOpenToolsLocked()
+    {
+        _openByCallId.Clear();
+        _openByName.Clear();
+    }
+
+    private void CloseToolCall(long seq, string toolName, bool isError)
+    {
+        lock (_gate)
+        {
+            var index = _entries.FindIndex(e => e.Seq == seq);
+            if (index < 0)
+            {
+                return;
+            }
+
+            var entry = _entries[index];
+            var outcome = isError ? $"Tool {toolName} failed." : $"Tool {toolName} finished.";
+            var text = string.IsNullOrEmpty(entry.Text) ? outcome : entry.Text + "\n" + outcome;
+            _entries[index] = entry with
+            {
+                Text = text,
+                Note = isError ? $"failed: {toolName}" : $"finished: {toolName}",
+                IsError = isError,
+            };
+        }
+
+        Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// Replace live tool placeholder texts with the full persisted bodies
+    /// from post-run history — ONLY under a demonstrable identity contract
+    /// (see ReconcileOutcome). Equal counts never suffice. Matching:
+    /// (1) exact call-ID identity where BOTH sides carry the observed ID
+    /// (wire and session both use toolCall.id); (2) among leftovers whose
+    /// identity evidence is GENUINELY absent (no observed CallId on either
+    /// side of the key), a (name, outcome) group with exactly one row and
+    /// exactly one body — unique candidate, no positional assumption. A
+    /// key holding ANY leftover with a known ID — conflicting, duplicated
+    /// or merely unmatched — is blocked from fallback entirely: known
+    /// identity is never silently overridden by a name match. Everything
+    /// else — duplicate IDs, two same-name/same-outcome leftovers,
+    /// unparseable bodies, note-less rows without an ID — cannot be
+    /// proven; such rows keep their text and, if they differ from the
+    /// leftover bodies (multiset comparison), one truthful marker records
+    /// the refusal.
+    /// </summary>
+    public ReconcileOutcome ReconcileToolResults(IReadOnlyList<ConversationMessage> history)
+    {
+        ArgumentNullException.ThrowIfNull(history);
+        var applied = false;
+        var ambiguous = false;
+        lock (_gate)
+        {
+            var feedRows = new List<(int Index, FeedEntry Row)>(16);
+            for (var i = 0; i < _entries.Count; i++)
+            {
+                if (_entries[i].Role == "tool")
+                {
+                    feedRows.Add((i, _entries[i]));
+                }
+            }
+
+            var bodies = new List<(string Text, string? CallId)>(16);
+            foreach (var message in history)
+            {
+                if (message.Role == "tool")
+                {
+                    bodies.Add((message.Text, message.CallId));
+                }
+            }
+
+            if (feedRows.Count == 0)
+            {
+                return ReconcileOutcome.InSync;
+            }
+
+            if (feedRows.Count != bodies.Count)
+            {
+                return ReconcileOutcome.SkippedCountMismatch;
+            }
+
+            // A still-open start can never be proven to match a persisted
+            // result (its end was never observed): refuse outright.
+            foreach (var (_, row) in feedRows)
+            {
+                if (row.Note is not null && row.Note.StartsWith("started:", StringComparison.Ordinal))
+                {
+                    ambiguous = true;
+                    MarkAmbiguousLocked();
+                    goto Done; // Steps below would only fabricate pairings.
+                }
+            }
+
+            // Step 1: exact call-ID identity. An ID is usable only when it
+            // appears exactly once on EACH side — a duplicate on either side
+            // makes that ID unprovable rather than guessable.
+            var bodyIdCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var (_, id) in bodies)
+            {
+                if (id is not null)
+                {
+                    bodyIdCounts[id] = bodyIdCounts.GetValueOrDefault(id) + 1;
+                }
+            }
+
+            var feedIdCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var (_, row) in feedRows)
+            {
+                if (row.CallId is not null)
+                {
+                    feedIdCounts[row.CallId] = feedIdCounts.GetValueOrDefault(row.CallId) + 1;
+                }
+            }
+
+            var bodyIndexById = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (var b = 0; b < bodies.Count; b++)
+            {
+                if (bodies[b].CallId is { } id && bodyIdCounts[id] == 1)
+                {
+                    bodyIndexById[id] = b;
+                }
+            }
+
+            var bodyMatched = new bool[bodies.Count];
+            var feedPaired = new bool[feedRows.Count];
+            var replacements = new List<(int Index, string Text)>(4);
+
+            for (var f = 0; f < feedRows.Count; f++)
+            {
+                var (entryIndex, row) = feedRows[f];
+                if (row.CallId is not { } fid
+                    || !feedIdCounts.ContainsKey(fid) || feedIdCounts[fid] != 1
+                    || !bodyIndexById.TryGetValue(fid, out var b))
+                {
+                    continue;
+                }
+
+                // Identity matched: still require the body's own header to
+                // agree with the row's lifecycle (name + error). Contradictory
+                // evidence is never resolved by guessing.
+                if (!ToolPairAgrees(row, bodies[b].Text))
+                {
+                    continue;
+                }
+
+                feedPaired[f] = true;
+                bodyMatched[b] = true;
+                if (row.Text != bodies[b].Text)
+                {
+                    replacements.Add((entryIndex, bodies[b].Text));
+                }
+            }
+
+            // Step 2: exclusivity among leftovers — exactly one note-bearing
+            // feed row and exactly one parseable body per (name, outcome)
+            // group is a unique candidate, not a positional guess. Fallback
+            // exists ONLY for genuinely missing identity: if ANY leftover
+            // candidate in a (name, outcome) key carries an observed CallId
+            // (conflicting, duplicated, or simply unmatched), known identity
+            // would be silently ignored — the whole key is blocked from
+            // fallback. Candidates with an observed ID are never fallback
+            // material themselves. Un-note'd restored rows and unparseable
+            // bodies cannot name a group at all.
+            var blockedKeys = new HashSet<(string, bool)>();
+            for (var f = 0; f < feedRows.Count; f++)
+            {
+                if (!feedPaired[f]
+                    && feedRows[f].Row.CallId is not null
+                    && ToolNoteName(feedRows[f].Row.Note) is { } blockedRowName)
+                {
+                    blockedKeys.Add((blockedRowName.ToLowerInvariant(), feedRows[f].Row.IsError));
+                }
+            }
+
+            for (var b = 0; b < bodies.Count; b++)
+            {
+                if (!bodyMatched[b]
+                    && bodies[b].CallId is not null
+                    && ParseHistoryToolIdentity(bodies[b].Text) is { } blockedIdentity)
+                {
+                    blockedKeys.Add((blockedIdentity.Name.ToLowerInvariant(), blockedIdentity.IsError));
+                }
+            }
+
+            var feedGroups = new Dictionary<(string, bool), List<int>>();
+            for (var f = 0; f < feedRows.Count; f++)
+            {
+                if (feedPaired[f] || feedRows[f].Row.CallId is not null)
+                {
+                    continue; // Known ID: never fallback material.
+                }
+
+                if (ToolNoteName(feedRows[f].Row.Note) is { } name)
+                {
+                    var key = (name.ToLowerInvariant(), feedRows[f].Row.IsError);
+                    if (!blockedKeys.Contains(key))
+                    {
+                        AddKey(feedGroups, key, f);
+                    }
+                }
+            }
+
+            var bodyGroups = new Dictionary<(string, bool), List<int>>();
+            for (var b = 0; b < bodies.Count; b++)
+            {
+                if (bodyMatched[b] || bodies[b].CallId is not null)
+                {
+                    continue; // Known ID: never fallback material.
+                }
+
+                if (ParseHistoryToolIdentity(bodies[b].Text) is { } identity)
+                {
+                    var key = (identity.Name.ToLowerInvariant(), identity.IsError);
+                    if (!blockedKeys.Contains(key))
+                    {
+                        AddKey(bodyGroups, key, b);
+                    }
+                }
+            }
+
+            foreach (var (key, feedList) in feedGroups)
+            {
+                if (feedList.Count != 1
+                    || !bodyGroups.TryGetValue(key, out var bodyList)
+                    || bodyList.Count != 1)
+                {
+                    continue;
+                }
+
+                var f = feedList[0];
+                var b = bodyList[0];
+                feedPaired[f] = true;
+                bodyMatched[b] = true;
+                if (feedRows[f].Row.Text != bodies[b].Text)
+                {
+                    replacements.Add((feedRows[f].Index, bodies[b].Text));
+                }
+            }
+
+            // Leftovers: unprovable by both steps. If their texts already
+            // match as a multiset, every possible mapping is a no-op and
+            // rows keep correct text silently (restored rows are their own
+            // history). Otherwise some row's text should change but no
+            // mapping is provable → one truthful marker, no replacement.
+            var leftoverFeed = new List<string>();
+            var leftoverBodies = new List<string>();
+            for (var f = 0; f < feedRows.Count; f++)
+            {
+                if (!feedPaired[f])
+                {
+                    leftoverFeed.Add(feedRows[f].Row.Text);
+                }
+            }
+
+            for (var b = 0; b < bodies.Count; b++)
+            {
+                if (!bodyMatched[b])
+                {
+                    leftoverBodies.Add(bodies[b].Text);
+                }
+            }
+
+            if (leftoverFeed.Count > 0)
+            {
+                leftoverFeed.Sort(StringComparer.Ordinal);
+                leftoverBodies.Sort(StringComparer.Ordinal);
+                if (!leftoverFeed.SequenceEqual(leftoverBodies, StringComparer.Ordinal))
+                {
+                    ambiguous = true;
+                }
+            }
+
+            foreach (var (index, text) in replacements)
+            {
+                _entries[index] = _entries[index] with { Text = text };
+                applied = true;
+            }
+
+            if (ambiguous)
+            {
+                MarkAmbiguousLocked();
+            }
+
+            Done: ;
+        }
+
+        if (applied || ambiguous)
+        {
+            Changed?.Invoke();
+        }
+
+        return ambiguous ? ReconcileOutcome.SkippedAmbiguous
+            : applied ? ReconcileOutcome.Applied
+            : ReconcileOutcome.InSync;
+    }
+
+    private static void AddKey(Dictionary<(string, bool), List<int>> groups, (string, bool) key, int index)
+    {
+        if (!groups.TryGetValue(key, out var list))
+        {
+            list = new List<int>(2);
+            groups[key] = list;
+        }
+
+        list.Add(index);
+    }
+
+    /// One pair agrees when the feed row's lifecycle note names the same
+    /// tool as the history body's own header with the same error state.
+    /// Used as a contradiction check after call-ID identity already matched:
+    /// restored rows (no note) and "(unverified)" rows (suffixed name) can
+    /// never agree by name, so they fall through to the leftover multiset
+    /// check — which never rewrites text.
+    private static bool ToolPairAgrees(FeedEntry row, string body)
+    {
+        var feedName = ToolNoteName(row.Note);
+        var identity = ParseHistoryToolIdentity(body);
+        if (feedName is null || identity is null)
+        {
+            return false;
+        }
+
+        return feedName.Equals(identity.Value.Name, StringComparison.OrdinalIgnoreCase)
+            && row.IsError == identity.Value.IsError;
+    }
+
+    /// Identity of a persisted history tool body from its own header:
+    /// "[tool result: NAME]" / "[tool NAME failed]" (FormatToolResult).
+    /// "Ran ..." bash-execution bodies and anything else carry no provable
+    /// name and return null.
+    internal static (string Name, bool IsError)? ParseHistoryToolIdentity(string text)
+    {
+        const string prefix = "[tool ";
+        if (string.IsNullOrEmpty(text) || !text.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var header = text;
+        var newline = header.IndexOfAny(['\r', '\n']);
+        if (newline >= 0)
+        {
+            header = header[..newline];
+        }
+
+        const string resultPrefix = "[tool result: ";
+        if (header.StartsWith(resultPrefix, StringComparison.Ordinal) && header.EndsWith("]", StringComparison.Ordinal))
+        {
+            var name = header[resultPrefix.Length..^1].Trim();
+            return name.Length == 0 ? null : (name, false);
+        }
+
+        const string failedSuffix = " failed]";
+        if (header.EndsWith(failedSuffix, StringComparison.Ordinal))
+        {
+            var name = header[prefix.Length..^failedSuffix.Length].Trim();
+            return name.Length == 0 ? null : (name, true);
+        }
+
+        return null;
+    }
+
+    private const string AmbiguousMarker =
+        "Some tool results could not be proven to match their invocation — those rows keep their existing text; copy individual tool messages for the full text.";
+
+    private void MarkAmbiguousLocked()
+    {
+        // One marker per ambiguous stretch: repeat post-run reconciles while
+        // the rows stay ambiguous must not stack notices.
+        if (_entries.Count > 0 && _entries[^1].Text == AmbiguousMarker)
+        {
+            return;
+        }
+
+        _entries.Add(new FeedEntry(_nextSeq++, "system", AmbiguousMarker, Note: "reconcile-skipped"));
+    }
 
     public long AddError(string text)
         => Add(new FeedEntry(NextSeq(), "system", text, Note: "error", IsError: true));
@@ -323,9 +898,12 @@ public sealed class ConversationFeed
                 case "user":
                     milestones.Add(new FeedMilestone("prompt", FirstLine(entry.Text, 120), null, entry.Seq));
                     break;
-                case "tool" when entry.Note is not null && entry.Note.StartsWith("started:", StringComparison.Ordinal):
-                    var toolName = entry.Note["started:".Length..].Trim();
-                    milestones.Add(new FeedMilestone("tool", $"Ran {toolName}", entry.Text.Length == 0 ? null : FirstLine(entry.Text, 200), entry.Seq));
+                case "tool" when entry.Note is not null && ToolNoteName(entry.Note) is { } toolName:
+                    milestones.Add(new FeedMilestone(
+                        entry.IsError ? "error" : "tool",
+                        $"Ran {toolName}",
+                        entry.Text.Length == 0 ? null : FirstLine(entry.Text, 200),
+                        entry.Seq));
                     if (entry.IsMutating && !string.IsNullOrEmpty(entry.Path) && !changedFiles.Contains(entry.Path))
                     {
                         changedFiles.Add(entry.Path);
@@ -375,6 +953,30 @@ public sealed class ConversationFeed
         {
             return _nextSeq++;
         }
+    }
+
+    /// <summary>
+    /// Tool name from a lifecycle note ("started: X", "finished: X",
+    /// "failed: X"); null for anything else. Single parser for the note
+    /// shapes AddToolStart/AddToolEnd produce.
+    /// </summary>
+    internal static string? ToolNoteName(string? note)
+    {
+        if (string.IsNullOrEmpty(note))
+        {
+            return null;
+        }
+
+        foreach (var prefix in new[] { "started:", "finished:", "failed:" })
+        {
+            if (note.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                var name = note[prefix.Length..].Trim();
+                return name.Length == 0 ? null : name;
+            }
+        }
+
+        return null;
     }
 
     internal static bool IsTestCommand(string toolName, string command)

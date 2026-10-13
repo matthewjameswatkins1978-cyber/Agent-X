@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:app="using:AgentX.App"
+        xmlns:conv="using:Avalonia.Data.Converters"
         xmlns:core="using:AgentX.Core"
         x:Class="AgentX.App.MainWindow"
         Title="Agent X"
@@ -111,12 +112,44 @@
               </ListBox.ItemsPanel>
               <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="app:ConversationViewItem">
+                  <!-- Pi visual grammar: blue user blocks, unboxed assistant
+                       Markdown, tinted coherent tool blocks, quiet rows. -->
                   <StackPanel Spacing="2" Margin="8,6"
                               AutomationProperties.Name="{Binding Header}">
-                    <TextBlock Text="{Binding Header}" Foreground="{Binding RoleBrush}"
-                               FontSize="11" FontWeight="SemiBold" />
-                    <SelectableTextBlock Text="{Binding DisplayText}" TextWrapping="Wrap"
-                                         FontFamily="Cascadia Code, Consolas, monospace" FontSize="13" />
+                    <Border IsVisible="{Binding IsUser}" Background="{Binding StateBrush}"
+                            CornerRadius="6" Padding="10,8">
+                      <StackPanel Spacing="4">
+                        <TextBlock Text="{Binding Header}" Foreground="#AAB2BF" FontSize="10" />
+                        <SelectableTextBlock Text="{Binding DisplayText}" TextWrapping="Wrap"
+                                                 FontSize="13" />
+                      </StackPanel>
+                    </Border>
+                    <StackPanel IsVisible="{Binding IsAssistant}" Spacing="2">
+                      <TextBlock Text="{Binding Header}" Foreground="#AAB2BF" FontSize="10" />
+                      <app:MarkdownView Markdown="{Binding Markdown}" TextWrapping="Wrap"
+                                            FontSize="13" />
+                      <SelectableTextBlock IsVisible="{Binding Markdown, Converter={x:Static conv:ObjectConverters.IsNull}}"
+                                                 Text="{Binding DisplayText}" TextWrapping="Wrap"
+                                                 FontSize="13" />
+                    </StackPanel>
+                    <Border IsVisible="{Binding IsTool}" Background="{Binding StateBrush}"
+                            CornerRadius="6" Padding="10,8">
+                      <StackPanel Spacing="4">
+                        <TextBlock Text="{Binding Header}" Foreground="{Binding RoleBrush}"
+                                   FontSize="11" FontWeight="SemiBold" />
+                        <app:MarkdownView MonoText="{Binding DisplayText}" DiffTint="True"
+                                            TextWrapping="Wrap" FontSize="13" />
+                        <Button Content="{Binding ExpandLabel}" IsVisible="{Binding CanExpand}"
+                                Click="ToolExpand_OnClick" HorizontalAlignment="Left"
+                                FontSize="11" Foreground="#82AAFF" Background="Transparent"
+                                BorderThickness="0" Padding="0" />
+                      </StackPanel>
+                    </Border>
+                    <StackPanel IsVisible="{Binding IsSystemRow}" Spacing="2">
+                      <TextBlock Text="{Binding Header}" Foreground="#AAB2BF" FontSize="10" />
+                      <app:MarkdownView MonoText="{Binding DisplayText}" TextWrapping="Wrap"
+                                            FontSize="12" />
+                    </StackPanel>
                   </StackPanel>
                 </DataTemplate>
               </ListBox.ItemTemplate>
@@ -170,8 +203,12 @@
           <TextBlock Text="Preferences" FontSize="16" FontWeight="SemiBold" />
           <CheckBox x:Name="SettingsAutoScrollCheck" Content="Auto-scroll conversation"
                     IsCheckedChanged="SettingsAutoScrollCheck_OnChanged" />
-          <CheckBox x:Name="SettingsVerboseCheck" Content="Verbose session-map milestones"
-                    IsCheckedChanged="SettingsVerboseCheck_OnChanged" />
+          <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+            <TextBlock Text="Detail level" VerticalAlignment="Center"
+                       ToolTip.Tip="Compact hides tool detail rows. Detailed (default) shows operations inline. Full trace adds diagnostics." />
+            <ComboBox Grid.Column="1" x:Name="VisibilityCombo" MinWidth="160"
+                      SelectionChanged="VisibilityCombo_OnChanged" />
+          </Grid>
           <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
             <TextBlock Text="Theme" VerticalAlignment="Center" />
             <ComboBox Grid.Column="1" x:Name="ThemeCombo" MinWidth="160"

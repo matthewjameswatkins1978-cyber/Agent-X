@@ -3,8 +3,14 @@ using System.Text.Json;
 
 namespace AgentX.Core;
 
-/// <summary>One restored history entry. Text is the full session text; display may truncate.</summary>
-public sealed record ConversationMessage(string Role, string Text)
+/// <summary>
+/// One restored history entry. Text is the full session text; display may
+/// truncate. <see cref="CallId"/> is the persisted tool-call ID (raw,
+/// never rendered; same value the wire events carry) so reconciliation can
+/// match a live row to its persisted result by identity — null when the
+/// message carries none.
+/// </summary>
+public sealed record ConversationMessage(string Role, string Text, string? CallId = null)
 {
     public string DisplayText(int maxChars = 2000)
         => Text.Length <= maxChars
@@ -16,14 +22,17 @@ public sealed record ConversationMessage(string Role, string Text)
 /// Structured tool lifecycle for the conversation feed. <see cref="Path"/>
 /// is only set for edit/write calls with an explicit path argument (a read
 /// path is not a change); for bash/powershell <see cref="Summary"/> holds
-/// the shell command. Never fabricated: unknown shapes yield nulls.
+/// the shell command. <see cref="CallId"/> is Pi's observed tool-call ID
+/// (raw wire value, never rendered); null when the wire omits it.
+/// Never fabricated: unknown shapes yield nulls.
 /// </summary>
 public sealed record PiToolActivity(
     string ToolName,
     string? Summary,
     string? Path,
     bool IsError,
-    bool IsStart)
+    bool IsStart,
+    string? CallId = null)
 {
     public bool IsMutating =>
         ToolName.Equals("edit", StringComparison.OrdinalIgnoreCase)
@@ -362,8 +371,10 @@ public sealed class PiConversation : IAsyncDisposable
     /// <summary>
     /// Structured tool lifecycle for the feed. Start events carry the observed
     /// file path (edit/write) or shell command (bash/powershell); end events
-    /// carry only the outcome. Unknown tools and malformed records yield a
-    /// name-only activity or null — never a fabricated path.
+    /// carry only the outcome. Both carry Pi's tool-call ID when the wire
+    /// provides it so the feed can pair ends to starts by identity, not by
+    /// name order. Unknown tools and malformed records yield a name-only
+    /// activity or null — never a fabricated path.
     /// </summary>
     internal static PiToolActivity? ParseToolActivity(JsonDocument record)
     {
@@ -375,13 +386,15 @@ public sealed class PiConversation : IAsyncDisposable
             {
                 var toolName = startName.GetString() ?? "?";
                 var args = root.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object ? a : (JsonElement?)null;
-                return new PiToolActivity(toolName, SummarizeToolArgs(toolName, args), ExtractToolPath(toolName, args), IsError: false, IsStart: true);
+                return new PiToolActivity(toolName, SummarizeToolArgs(toolName, args), ExtractToolPath(toolName, args), IsError: false, IsStart: true,
+                    CallId: ToolCallIdOf(root));
             }
 
             if (type == "tool_execution_end" && root.TryGetProperty("toolName", out var endName))
             {
                 var failed = root.TryGetProperty("isError", out var isError) && isError.ValueKind == JsonValueKind.True;
-                return new PiToolActivity(endName.GetString() ?? "?", null, null, IsError: failed, IsStart: false);
+                return new PiToolActivity(endName.GetString() ?? "?", null, null, IsError: failed, IsStart: false,
+                    CallId: ToolCallIdOf(root));
             }
 
             return null;
@@ -390,6 +403,22 @@ public sealed class PiConversation : IAsyncDisposable
         {
             return null;
         }
+    }
+
+    /// Pi's observed tool-call ID for pairing ends to starts by identity.
+    /// Kept RAW (never rendered — display uses the tap's redacted short
+    /// IDs) so distinct wire IDs can never collapse to one pairing key the
+    /// way redacted sentinels could. Null when the wire omits the ID or it
+    /// is empty/oversized (pairing then falls back to conservative rules).
+    private static string? ToolCallIdOf(JsonElement root)
+    {
+        if (!root.TryGetProperty("toolCallId", out var id) || id.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        var callId = id.GetString();
+        return string.IsNullOrEmpty(callId) || callId.Length > 160 ? null : callId;
     }
 
     private static string? SummarizeToolArgs(string toolName, JsonElement? args)
@@ -570,8 +599,8 @@ public sealed class PiConversation : IAsyncDisposable
             "system" => null, // Prompt boilerplate; not conversation.
             "user" => new ConversationMessage("user", ExtractContentText(message)),
             "assistant" => new ConversationMessage("assistant", ExtractAssistantText(message)),
-            "toolResult" => new ConversationMessage("tool", FormatToolResult(message)),
-            "bashExecution" => new ConversationMessage("tool", FormatBashExecution(message)),
+            "toolResult" => new ConversationMessage("tool", FormatToolResult(message), HistoryCallId(message)),
+            "bashExecution" => new ConversationMessage("tool", FormatBashExecution(message), HistoryCallId(message)),
             "custom" => message.TryGetProperty("display", out var display)
                 && display.ValueKind == JsonValueKind.True
                 ? new ConversationMessage("system", ExtractContentText(message))
@@ -671,6 +700,23 @@ public sealed class PiConversation : IAsyncDisposable
         }
 
         return text.ToString();
+    }
+
+    /// <summary>
+    /// Observed tool-call ID from a persisted history message, normalized
+    /// exactly like the wire reader (raw for in-memory identity matching,
+    /// never rendered; empty/oversized → null) so session IDs and wire
+    /// IDs compare equal case-sensitively. Both derive from toolCall.id.
+    /// </summary>
+    private static string? HistoryCallId(JsonElement message)
+    {
+        if (!message.TryGetProperty("toolCallId", out var id) || id.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        var callId = id.GetString();
+        return string.IsNullOrEmpty(callId) || callId.Length > 160 ? null : callId;
     }
 
     private static string FormatToolResult(JsonElement message)
