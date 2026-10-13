@@ -2,6 +2,13 @@ using System.Text.Json;
 
 namespace AgentX.Core;
 
+/// <summary>One selectable model from get_available_models (pinned Pi 1.1.0: id/name/provider).</summary>
+public sealed record PiModelOption(string Provider, string Id, string Name)
+{
+    /// <summary>Stable selector key for SetModelAsync (provider + id as Pi reports them).</summary>
+    public string Key => $"{Provider}/{Id}";
+}
+
 /// <summary>Failure of one Pi RPC command (success: false response).</summary>
 public sealed class PiRpcCommandException(string command, string error)
     : Exception($"Pi command '{command}' failed: {error}")
@@ -24,7 +31,8 @@ public sealed record PiEngineState(
     bool IsCompacting,
     string? SessionId,
     int MessageCount,
-    int PendingMessageCount)
+    int PendingMessageCount,
+    string? SessionFile = null)
 {
     public static PiEngineState FromResponse(JsonDocument response)
     {
@@ -62,7 +70,8 @@ public sealed record PiEngineState(
             data.TryGetProperty("isCompacting", out var c) && c.ValueKind == JsonValueKind.True,
             Str("sessionId"),
             data.TryGetProperty("messageCount", out var mc) && mc.ValueKind == JsonValueKind.Number ? mc.GetInt32() : 0,
-            data.TryGetProperty("pendingMessageCount", out var pmc) && pmc.ValueKind == JsonValueKind.Number ? pmc.GetInt32() : 0);
+            data.TryGetProperty("pendingMessageCount", out var pmc) && pmc.ValueKind == JsonValueKind.Number ? pmc.GetInt32() : 0,
+            Str("sessionFile"));
     }
 }
 
