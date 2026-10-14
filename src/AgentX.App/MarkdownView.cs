@@ -49,14 +49,16 @@ public sealed class MarkdownView : SelectableTextBlock
         DiffTintProperty.Changed.AddClassHandler<MarkdownView>((v, _) => v.Rebuild());
     }
 
-    private static readonly IBrush TextBrush = new SolidColorBrush(Color.Parse(PiPalette.Text));
-    private static readonly IBrush MutedBrush = new SolidColorBrush(Color.Parse(PiPalette.Muted));
-    private static readonly IBrush DimBrush = new SolidColorBrush(Color.Parse(PiPalette.Dim));
-    private static readonly IBrush VioletBrush = new SolidColorBrush(Color.Parse(PiPalette.Violet));
-    private static readonly IBrush BlueBrush = new SolidColorBrush(Color.Parse(PiPalette.Blue));
-    private static readonly IBrush GreenBrush = new SolidColorBrush(Color.Parse(PiPalette.Green));
-    private static readonly IBrush RedBrush = new SolidColorBrush(Color.Parse(PiPalette.Red));
-    private static readonly IBrush YellowBrush = new SolidColorBrush(Color.Parse(PiPalette.Yellow));
+    // B7 treatments: shared live brushes, so a treatment switch repaints
+    // already-rendered inlines in place (see AxTheme).
+    private static IBrush TextBrush => AxTheme.TextBrush;
+    private static IBrush MutedBrush => AxTheme.MutedBrush;
+    private static IBrush DimBrush => AxTheme.DimBrush;
+    private static IBrush VioletBrush => AxTheme.VioletBrush;
+    private static IBrush BlueBrush => AxTheme.BlueBrush;
+    private static IBrush GreenBrush => AxTheme.GreenBrush;
+    private static IBrush RedBrush => AxTheme.RedBrush;
+    private static IBrush YellowBrush => AxTheme.YellowBrush;
     private static readonly FontFamily MonoFamily = new("Cascadia Code,Consolas,monospace");
 
     private void Rebuild()

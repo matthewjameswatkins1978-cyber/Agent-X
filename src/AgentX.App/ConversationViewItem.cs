@@ -18,8 +18,8 @@ public enum FeedBlockKind
 /// One bound row in the conversation feed. <see cref="FullText"/> is the
 /// complete message (copy source, always byte-exact); <see cref="DisplayText"/>
 /// is the bounded view with an explicit truncation notice. <see cref="Markdown"/>
-/// carries the parsed assistant model for rich rendering (null while
-/// streaming); <see cref="IsExpanded"/> reveals the full text on explicit
+/// carries the parsed Markdown model for rich rendering (assistant narrative
+/// and user packets; null while streaming or when empty); <see cref="IsExpanded"/> reveals the full text on explicit
 /// user action for long tool output. Brushes follow <see cref="PiPalette"/>.
 /// </summary>
 public sealed class ConversationViewItem : INotifyPropertyChanged
@@ -159,6 +159,66 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
         return (header ?? "tool", $"#{seq}");
     }
 
+    /// Parse a history-restored tool row: Pi persists the tool name and
+    /// outcome only inside the body's first line ("[tool result: NAME]" /
+    /// "[tool NAME failed]", see PiConversation.FormatToolResult), with no
+    /// Note and no error flag. Live finished/failed rows repeat the same
+    /// prefix under an already-good header, so they strip too. Returns the header note ("finished: NAME" /
+    /// "failed: NAME"), whether it failed, and the body with that redundant
+    /// first line removed for display. Started/pending rows and unknown
+    /// shapes return null and render exactly as before. Never invents:
+    /// empty or bracketed names refuse. Copy always uses FullText, and the
+    /// expanded view keeps the original line, so nothing is lost.
+    internal static (string Note, bool IsError, string DisplayBody)? HistoryToolPresentation(string? note, string text)
+    {
+        // History rows carry no Note; live finished/failed rows carry their
+        // own ("finished: NAME") and are already well-headed, but their
+        // body repeats the same Core prefix — strip it too. Started/pending
+        // rows and unknown shapes refuse (null) and render exactly as before.
+        if (!string.IsNullOrEmpty(note)
+            && !note.StartsWith("finished:", StringComparison.Ordinal)
+            && !note.StartsWith("failed:", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        if (string.IsNullOrEmpty(text))
+        {
+            return null;
+        }
+
+        var cut = text.IndexOf((char)10);
+        var firstLine = (cut < 0 ? text : text[..cut]).TrimEnd('\r');
+        var rest = cut < 0 ? string.Empty : text[(cut + 1)..];
+
+        const string resultPrefix = "[tool result: ";
+        if (firstLine.StartsWith(resultPrefix, StringComparison.Ordinal) && firstLine.EndsWith("]", StringComparison.Ordinal))
+        {
+            var name = firstLine[resultPrefix.Length..^1].Trim();
+            if (name.Length == 0 || name.IndexOfAny(['[', ']']) >= 0)
+            {
+                return null;
+            }
+
+            return ($"finished: {name}", false, rest);
+        }
+
+        const string failPrefix = "[tool ";
+        const string failSuffix = " failed]";
+        if (firstLine.StartsWith(failPrefix, StringComparison.Ordinal) && firstLine.EndsWith(failSuffix, StringComparison.Ordinal))
+        {
+            var name = firstLine[failPrefix.Length..^failSuffix.Length].Trim();
+            if (name.Length == 0 || name.IndexOfAny(['[', ']']) >= 0)
+            {
+                return null;
+            }
+
+            return ($"failed: {name}", true, rest);
+        }
+
+        return null;
+    }
+
     public IBrush StateBrush
     {
         get;
@@ -171,6 +231,22 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
             }
         }
     }
+
+    /// 3px state edge for the B7 tool/user surfaces. Set by the host
+    /// alongside <see cref="StateBrush"/> (shared AxTheme instances, so
+    /// treatment switches propagate to live rows).
+    public IBrush EdgeBrush
+    {
+        get;
+        set
+        {
+            if (!Equals(field, value))
+            {
+                field = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EdgeBrush)));
+            }
+        }
+    } = AxTheme.UserEdgeBrush;
 
     public bool IsUser => Kind == FeedBlockKind.User;
 

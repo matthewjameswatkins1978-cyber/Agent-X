@@ -203,10 +203,12 @@ public partial class MainWindow : Window
         }
         ApplyTheme();
         ThemeCombo.ItemsSource = AgentXPreferences.KnownThemes;
+        TreatmentCombo.ItemsSource = AxTreatments.Names;
+        AxTheme.Apply(AxTreatments.Parse(_viewPrefs.Treatment));
         _syncingPrefs = true;
         try
         {
-            AutoScrollCheck.IsChecked = _prefs.AutoScroll;
+            AutoScrollMenuItem.IsChecked = _prefs.AutoScroll;
         }
         finally
         {
@@ -345,7 +347,7 @@ public partial class MainWindow : Window
         else if (_conversation is null && SelectedEntry is { } current)
         {
             StatusText.Text = current.IsLegacy
-                ? "Legacy session selected — press Connect."
+                ? "Main selected — press Connect."
                 : $"Workspace '{current.Label}' selected — press Connect.";
         }
 
@@ -372,7 +374,9 @@ public partial class MainWindow : Window
                 ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#7DD3A8"))
                 : new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#6B7280")),
         };
-        var label = new TextBlock { Text = entry.Label, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
+        // Display label only: legacy shows as Main (storage identity and
+        // session id stay in the tooltip). See AxTheme.WorkspaceTabLabel.
+        var label = new TextBlock { Text = AxTheme.WorkspaceTabLabel(entry.IsLegacy, entry.Label), VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
         var header = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 6 };
         header.Children.Add(dot);
         header.Children.Add(label);
@@ -733,8 +737,11 @@ public partial class MainWindow : Window
     /// worker's activity. Background runs keep their tab dots.
     private void RefreshWorkingRow()
     {
-        WorkingRow.IsVisible = WorkerDisplayPolicy.ShowWorking(
-            SelectedWorker is { } worker ? _busyWorkers.Contains(worker.Id) : _piBusy);
+        var viewedBusy = SelectedWorker is { } worker ? _busyWorkers.Contains(worker.Id) : _piBusy;
+        WorkingRow.IsVisible = WorkerDisplayPolicy.ShowWorking(viewedBusy);
+        // The toolbar Stop icon exists only while the VIEWED run is active —
+        // never a permanent button, never for another worker's run.
+        StopButton.IsVisible = viewedBusy;
     }
 
     /// Button states follow the selection: Disconnect stops the workspace
@@ -744,11 +751,11 @@ public partial class MainWindow : Window
     private void RefreshConnectionButtons()
     {
         var workerSelected = SelectedWorker is not null;
-        DisconnectButton.IsEnabled = !workerSelected;
-        Avalonia.Controls.ToolTip.SetTip(DisconnectButton, workerSelected
+        DisconnectMenuItem.IsEnabled = !workerSelected;
+        Avalonia.Controls.ToolTip.SetTip(DisconnectMenuItem, workerSelected
             ? "Workers have no disconnect — Remove worker stops the selected worker's process."
             : "Disconnect the workspace session.");
-        RemoveWorkerButton.IsEnabled = workerSelected && _manager is not null;
+        RemoveWorkerMenuItem.IsEnabled = workerSelected && _manager is not null;
     }
 
     private void WorkspaceTabs_OnChanged(object? sender, SelectionChangedEventArgs e)
@@ -837,7 +844,7 @@ public partial class MainWindow : Window
         if (_conversation is null && !restored)
         {
             StatusText.Text = entry.IsLegacy
-                ? "Legacy session selected — press Connect."
+                ? "Main selected — press Connect."
                 : $"Workspace '{entry.Label}' selected — press Connect.";
         }
     }
@@ -2056,7 +2063,11 @@ public partial class MainWindow : Window
                 follow = true;
                 structural = true;
             }
-            else if (!ReferenceEquals(entry.Text, item.FullText))
+            else if (!ReferenceEquals(entry.Text, item.FullText)
+                // A settled assistant turn keeps the SAME text reference (only
+                // IsStreaming flips): without this clause its Markdown never
+                // parses until the next full rebuild. Refresh then too.
+                || (item.Kind == FeedBlockKind.Assistant && !entry.IsStreaming && item.Markdown is null))
             {
                 // Core text replaced under a live row (tool close, reconcile,
                 // streaming chunks, completion reconcile). Refresh in place.
@@ -2094,13 +2105,28 @@ public partial class MainWindow : Window
         if (item.Kind == FeedBlockKind.Tool)
         {
             item.StateBrush = ToolStateBrush(entry);
+            item.EdgeBrush = ToolEdgeBrush(entry);
             item.RefreshToolDisplay();
         }
         var body = entry.IsStreaming && entry.Text.Length == 0 ? "Working…" : entry.Text;
-        item.DisplayText = item.IsExpanded ? FeedEntry.TruncateExpanded(entry.Text) : FeedEntry.TruncateForDisplay(body, cap);
+        // Same history-prefix strip as ToViewItem (expanded and copy paths
+        // keep the full text).
+        var displaySource = item.Kind == FeedBlockKind.Tool
+            && ConversationViewItem.HistoryToolPresentation(entry.Note, entry.Text) is { } historyStripped
+            ? historyStripped.DisplayBody
+            : body;
+        item.DisplayText = item.IsExpanded ? FeedEntry.TruncateExpanded(entry.Text) : FeedEntry.TruncateForDisplay(displaySource, cap);
         if (item.Kind == FeedBlockKind.Assistant && !entry.IsStreaming && entry.Text.Length > 0 && item.Markdown is null)
         {
             item.Markdown = MarkdownLite.Parse(entry.Text);
+        }
+        // Rows created before the user-parse path (or skipped while empty)
+        // get the same bounded rich render on the next sync. Parse-once:
+        // user entry text is immutable after arrival, so DisplayText is
+        // stable and this never re-parses on every tick.
+        if (item.Kind == FeedBlockKind.User && item.Markdown is null && item.DisplayText.Length > 0)
+        {
+            item.Markdown = MarkdownLite.Parse(item.DisplayText);
         }
     }
 
@@ -2140,14 +2166,12 @@ public partial class MainWindow : Window
         _syncCoalescer.Signal(SyncFeedView);
     }
 
-    private static readonly Avalonia.Media.IBrush UserBlockBrush =
-        new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse(PiPalette.UserBg));
-    private static readonly Avalonia.Media.IBrush ToolPendingBrush =
-        new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse(PiPalette.ToolPendingBg));
-    private static readonly Avalonia.Media.IBrush ToolSuccessBrush =
-        new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse(PiPalette.ToolSuccessBg));
-    private static readonly Avalonia.Media.IBrush ToolErrorBrush =
-        new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse(PiPalette.ToolErrorBg));
+    // B7 treatments: row backgrounds are the SHARED AxTheme brushes, so a
+    // treatment switch repaints live rows in place (Color setters propagate).
+    private static Avalonia.Media.IBrush UserBlockBrush => AxTheme.UserBgBrush;
+    private static Avalonia.Media.IBrush ToolPendingBrush => AxTheme.ToolPendingBgBrush;
+    private static Avalonia.Media.IBrush ToolSuccessBrush => AxTheme.ToolSuccessBgBrush;
+    private static Avalonia.Media.IBrush ToolErrorBrush => AxTheme.ToolErrorBgBrush;
     private static readonly Avalonia.Media.IBrush ClearBrush =
         new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#00000000"));
 
@@ -2155,6 +2179,13 @@ public partial class MainWindow : Window
     {
         var kind = KindOf(entry);
         var body = entry.IsStreaming && entry.Text.Length == 0 ? "Working…" : entry.Text;
+        // History tool rows render without their redundant first line (the
+        // name/outcome prefix promoted into the header above); truncation
+        // and copy still see the full text.
+        var displaySource = kind == FeedBlockKind.Tool
+            && ConversationViewItem.HistoryToolPresentation(entry.Note, entry.Text) is { } historyStripped
+            ? historyStripped.DisplayBody
+            : body;
         var cap = entry.IsStreaming ? LiveDisplayCap : HistoryDisplayCap;
         var brush = kind switch
         {
@@ -2162,16 +2193,38 @@ public partial class MainWindow : Window
             FeedBlockKind.Tool => ToolStateBrush(entry),
             _ => ClearBrush,
         };
-        return new ConversationViewItem(
+        var item = new ConversationViewItem(
             entry.Seq,
             entry.Role,
             BuildHeader(entry, kind),
-            FeedEntry.TruncateForDisplay(body, cap),
+            FeedEntry.TruncateForDisplay(displaySource, cap),
             entry.Text,
             kind,
             entry.IsStreaming,
             brush,
             cap);
+        item.EdgeBrush = kind switch
+        {
+            FeedBlockKind.User => AxTheme.UserEdgeBrush,
+            FeedBlockKind.Tool => ToolEdgeBrush(entry),
+            _ => ClearBrush,
+        };
+        // A burst that settles before the first sync (reconcile, fixture,
+        // back-to-back run completion) is first SEEN settled: parse its
+        // Markdown here, or it stays raw until an unrelated later sync.
+        if (kind == FeedBlockKind.Assistant && !entry.IsStreaming && entry.Text.Length > 0)
+        {
+            item.Markdown = MarkdownLite.Parse(entry.Text);
+        }
+        // User packets render through the same safe parser (Lucy B7 review):
+        // parsed from the BOUNDED display text, so giant pastes keep today's
+        // cap contract and layout cost. Copy stays byte-exact from FullText
+        // via the Core feed — never from this rendered view.
+        if (kind == FeedBlockKind.User && entry.Text.Length > 0 && item.DisplayText.Length > 0)
+        {
+            item.Markdown = MarkdownLite.Parse(item.DisplayText);
+        }
+        return item;
     }
 
     private static FeedBlockKind KindOf(FeedEntry entry)
@@ -2194,6 +2247,16 @@ public partial class MainWindow : Window
             "receipt" => "Run receipt",
             _ => entry.Role,
         };
+        // History-restored tool rows carry no Note: the name and outcome live
+        // in the body's first line. Promote them into the header so the row
+        // reads as one coherent unit ("powershell · finished #27") instead of
+        // echoing the seq ("[Tool #27] #27"). Full text and copy untouched.
+        if (entry.Note is null && kind == FeedBlockKind.Tool
+            && ConversationViewItem.HistoryToolPresentation(null, entry.Text) is { } history)
+        {
+            return $"[{label} #{entry.Seq}] {history.Note}";
+        }
+
         return entry.Note is null
             ? $"[{label} #{entry.Seq}]"
             : $"[{label} #{entry.Seq}] {entry.Note}";
@@ -2204,7 +2267,11 @@ public partial class MainWindow : Window
     /// and error flag the feed maintains.</summary>
     private static Avalonia.Media.IBrush ToolStateBrush(FeedEntry entry)
     {
-        if (entry.IsError)
+        // History-restored failures carry no error flag (only the "[tool X
+        // failed]" first line), so sniff the same presentation parse.
+        if (entry.IsError
+            || (entry.Note is null
+                && ConversationViewItem.HistoryToolPresentation(null, entry.Text) is { IsError: true }))
         {
             return ToolErrorBrush;
         }
@@ -2212,6 +2279,23 @@ public partial class MainWindow : Window
         return entry.Note is not null && entry.Note.StartsWith("started:", StringComparison.Ordinal)
             ? ToolPendingBrush
             : ToolSuccessBrush;
+    }
+
+    /// 3px state edge for the B7 tool surfaces: Pi semantic hues, shared
+    /// instances so treatment switches propagate (see UserBlockBrush).
+    private static Avalonia.Media.IBrush ToolEdgeBrush(FeedEntry entry)
+    {
+        // Same history-failure sniff as the state brush (see above).
+        if (entry.IsError
+            || (entry.Note is null
+                && ConversationViewItem.HistoryToolPresentation(null, entry.Text) is { IsError: true }))
+        {
+            return AxTheme.RedBrush;
+        }
+
+        return entry.Note is not null && entry.Note.StartsWith("started:", StringComparison.Ordinal)
+            ? AxTheme.DimBrush
+            : AxTheme.GreenBrush;
     }
 
     /// <summary>Refresh visible derived views after connection/feed changes.</summary>
@@ -2259,7 +2343,7 @@ public partial class MainWindow : Window
 
     private void MaybeAutoScroll()
     {
-        if (AutoScrollCheck.IsChecked == true && _conversationItems.Count > 0)
+        if (AutoScrollMenuItem.IsChecked == true && _conversationItems.Count > 0)
         {
             ConversationList.ScrollIntoView(_conversationItems[^1]);
         }
@@ -2366,7 +2450,19 @@ public partial class MainWindow : Window
             _syncingRail = false;
         }
 
+        SyncRailSelection();
+
         ApplyPageVisibility((int)page);
+    }
+
+    /// Rail selection is painted explicitly — never left to the Fluent
+    /// checked style, which follows the Windows accent colour. The selected
+    /// destination gets the surface pill; the others stay transparent.
+    private void SyncRailSelection()
+    {
+        NavLive.Background = _page == AppPage.Live ? AxTheme.Surface2Brush : Avalonia.Media.Brushes.Transparent;
+        NavOverview.Background = _page == AppPage.Overview ? AxTheme.Surface2Brush : Avalonia.Media.Brushes.Transparent;
+        NavSettings.Background = _page == AppPage.Settings ? AxTheme.Surface2Brush : Avalonia.Media.Brushes.Transparent;
     }
 
     private void Nav_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -2615,9 +2711,10 @@ public partial class MainWindow : Window
 
         if (empty && SelectedEntry is { } entry)
         {
+            var name = AxTheme.WorkspaceTabLabel(entry.IsLegacy, entry.Label);
             EmptyStateText.Text = _conversation is null
-                ? $"No conversation in '{entry.Label}' yet. Connect, then ask your first question — or try a suggestion below."
-                : $"'{entry.Label}' is quiet. Ask anything below to begin.";
+                ? $"No conversation in '{name}' yet. Connect, then ask your first question — or try a suggestion below."
+                : $"'{name}' is quiet. Ask anything below to begin.";
         }
     }
 
@@ -2670,6 +2767,7 @@ public partial class MainWindow : Window
             VisibilityCombo.ItemsSource = AgentXPreferences.KnownVisibility;
             VisibilityCombo.SelectedItem = _prefs.Visibility;
             ThemeCombo.SelectedItem = _prefs.Theme;
+            TreatmentCombo.SelectedItem = AxTreatments.DisplayName(AxTreatments.Parse(_viewPrefs.Treatment));
             ManagedPathsText.Text =
                 $"Sessions: {Path.Combine(ManagedRoot, "sessions")}\n" +
                 $"Registry: {WorkspaceRegistry.RegistryPath(ManagedRoot)}\n" +
@@ -2704,7 +2802,7 @@ public partial class MainWindow : Window
         _syncingPrefs = true;
         try
         {
-            AutoScrollCheck.IsChecked = _prefs.AutoScroll;
+            AutoScrollMenuItem.IsChecked = _prefs.AutoScroll;
         }
         finally
         {
@@ -2712,14 +2810,16 @@ public partial class MainWindow : Window
         }
     }
 
-    private void AutoScrollCheck_OnChanged(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    /// Overflow-menu auto-scroll toggle (replaces the old permanent toolbar
+    /// checkbox): same pref, same sync with the Settings checkbox.
+    private void AutoScrollMenu_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (_syncingPrefs)
         {
             return;
         }
 
-        _prefs = _prefs with { AutoScroll = AutoScrollCheck.IsChecked == true };
+        _prefs = _prefs with { AutoScroll = AutoScrollMenuItem.IsChecked };
         SavePrefs();
         _syncingPrefs = true;
         try
@@ -2771,6 +2871,58 @@ public partial class MainWindow : Window
         _prefs = _prefs.Normalized();
         SavePrefs();
         ApplyTheme();
+    }
+
+    /// B7 appearance treatment: same layout and behaviour, three finishes.
+    /// Brushes are shared live instances, so the switch repaints in place;
+    /// the choice persists in view prefs (Core preferences untouched).
+    private void TreatmentCombo_OnChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingPrefs || TreatmentCombo.SelectedItem is not string name)
+        {
+            return;
+        }
+
+        var treatment = AxTreatments.Parse(name);
+        AxTheme.Apply(treatment);
+        AxTheme.EnsureDarkTitleBar(this);
+        _viewPrefs.Treatment = AxTreatments.DisplayName(treatment);
+        try
+        {
+            SaveViewPrefs();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            StatusText.Text = $"Could not save view preferences: {ex.Message}";
+        }
+    }
+
+    /// Native dark title bar once the handle exists; all window behaviour
+    /// stays native and untouched. Best-effort (see AxTheme). Applied at
+    /// Opened, re-asserted on every activation and twice more shortly after
+    /// Opened: DWM attributes proved flaky across identical runs (bright
+    /// system-blue captions in some captures), consistent with a handle that
+    /// is not ready yet or attributes dropped on re-activation.
+    private void MainWindow_OnOpened(object? sender, EventArgs e) => ApplyTitleBar();
+
+    private void MainWindow_OnActivated(object? sender, EventArgs e)
+        => AxTheme.EnsureDarkTitleBar(this);
+
+    private void ApplyTitleBar()
+    {
+        AxTheme.EnsureDarkTitleBar(this);
+        var attempts = 0;
+        var retry = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        retry.Tick += (_, _) =>
+        {
+            attempts++;
+            AxTheme.EnsureDarkTitleBar(this);
+            if (attempts >= 2)
+            {
+                retry.Stop();
+            }
+        };
+        retry.Start();
     }
 
     private void OpenSessions_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -3024,7 +3176,7 @@ public partial class MainWindow : Window
         {
             if (SelectedWorker is { } worker)
             {
-                DirectoryButton.Content = worker.ProjectRoot;
+                DirectoryButtonText.Text = worker.ProjectRoot;
                 return;
             }
 
@@ -3034,11 +3186,11 @@ public partial class MainWindow : Window
                 workspace = entry.ToWorkspace(ManagedRoot);
             }
 
-            DirectoryButton.Content = workspace?.WorkingDirectory ?? "Select a workspace…";
+            DirectoryButtonText.Text = workspace?.WorkingDirectory ?? "Select a workspace…";
         }
         catch
         {
-            DirectoryButton.Content = "Select a workspace…";
+            DirectoryButtonText.Text = "Select a workspace…";
         }
     }
 

@@ -16,6 +16,10 @@ public sealed class ViewPrefs
 {
     public bool RailExpanded { get; set; }
 
+    /// B7 appearance treatment display name ("Pi Faithful" default).
+    /// Unknown values fall back on load; Core preferences are untouched.
+    public string Treatment { get; set; } = "Pi Faithful";
+
     public Dictionary<string, string> Drafts { get; set; } = new();
 
     /// True when the file existed but could not be parsed or read: the
@@ -73,6 +77,7 @@ public sealed class ViewPrefs
             }
 
             prefs.Drafts ??= new Dictionary<string, string>();
+            prefs.Treatment = AxTreatments.DisplayName(AxTreatments.Parse(prefs.Treatment));
             return prefs;
         }
         catch (JsonException ex)
@@ -143,6 +148,7 @@ public sealed class ViewPrefs
             File.WriteAllText(tmp, JsonSerializer.Serialize(new ViewPrefs
             {
                 RailExpanded = RailExpanded,
+                Treatment = Treatment,
                 Drafts = drafts,
             }));
             File.Move(tmp, path, overwrite: true);

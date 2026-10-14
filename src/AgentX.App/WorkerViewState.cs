@@ -24,21 +24,21 @@ public sealed record WorkerViewState
 }
 
 /// <summary>
-/// Stable identity tints for worker tabs, mirroring the terminal-tab idea:
-/// crimson / amber / violet / slate (the reference tab colours). Tints are
-/// applied as translucent tab fills; selection brightens via fill opacity.
+/// Stable identity tints for worker tabs, mirroring the terminal-tab idea.
+/// B7: muted slate-leaning tints — a subtle per-tab accent, never a dominant
+/// wash. Applied as translucent fills; selection brightens via fill opacity.
 /// Dots and footer text — never colour alone — carry connection state.
 /// </summary>
 public static class WorkerTabColors
 {
     private static readonly string[] Tints =
     [
-        "#B3404F", // crimson
-        "#C77B3B", // amber
-        "#7A5FC0", // violet
-        "#4E7FA3", // slate blue
-        "#3E8E6B", // teal
-        "#8A6D5A", // umber
+        "#4A5A6A", // slate
+        "#4E6B5E", // sage teal
+        "#5A5A72", // muted violet grey
+        "#6B5E4E", // umber grey
+        "#54687A", // steel
+        "#5E6B7A", // cool grey
     ];
 
     public static string TintFor(int index)

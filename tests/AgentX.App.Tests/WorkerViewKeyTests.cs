@@ -55,7 +55,15 @@ public sealed class WorkerViewKeyTests
     [InlineData("   ")]
     public void DisplayLabel_FallsBackToShortId(string? label)
     {
-        Assert.Equal("Worker 59ff", WorkerViewKey.DisplayLabel("59ffa00c", label));
+        Assert.Equal("Agent 59ff", WorkerViewKey.DisplayLabel("59ffa00c", label));
+    }
+
+    [Theory]
+    [InlineData("Worker 1", "Agent 1")]
+    [InlineData("Worker 12", "Agent 12")]
+    public void DisplayLabel_MapsAutoWorkerToAgent(string? label, string expected)
+    {
+        Assert.Equal(expected, WorkerViewKey.DisplayLabel("59ffa00c", label));
     }
 
     [Fact]
