@@ -869,6 +869,21 @@ public sealed class PiWorker : IAsyncDisposable
         return RefreshStateAsync(conversation, cancellationToken);
     }
 
+    /// <summary>
+    /// Poll THIS worker's session stats (get_session_stats): Pi-reported
+    /// totals for this worker's session only — the honest token/cost source
+    /// for status binding and Overview (issue #27). Requires a live
+    /// connection. Deliberately NOT capability-gated: the probed capability
+    /// record does not model stats (same policy as prompt/abort), and an
+    /// unsupported command reports itself at use time as
+    /// PiRpcCommandException — command-level rejection is the probe.
+    /// </summary>
+    public async Task<StatsSnapshot?> GetSessionStatsAsync(CancellationToken cancellationToken = default)
+    {
+        var conversation = RequireConnected();
+        return await conversation.GetSessionStatsAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task<PiEngineState> RefreshStateAsync(PiConversation conversation, CancellationToken ct)
     {
         var state = await conversation.GetStateAsync(ct).ConfigureAwait(false);
