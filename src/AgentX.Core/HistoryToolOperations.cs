@@ -106,8 +106,8 @@ public static class HistoryToolOperations
                     BoolProp(message, "isError"),
                     DurationOf(message),
                     role == "bashExecution"
-                        ? PiConversation.FormatBashExecution(message)
-                        : PiRedaction.Redact(PiConversation.ExtractContentText(message))));
+                        ? BashOutput(message)
+                        : PiRedaction.Redact(SafeResultBody(message))));
             }
         }
 
@@ -217,9 +217,71 @@ public static class HistoryToolOperations
     private static bool TryMessages(JsonDocument response, out JsonElement messages)
     {
         messages = default;
-        return response.RootElement.TryGetProperty("data", out var data)
-            && data.TryGetProperty("messages", out messages)
+        var root = response.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        // Envelope tolerance (Lucy review): the shared readers' own
+        // precondition is that "data" is an OBJECT before TryGetProperty
+        // is called on it — "[]", {"data":null} and {"data":[]} are empty
+        // results, never exceptions. Messages must genuinely be an array.
+        if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        return data.TryGetProperty("messages", out messages)
             && messages.ValueKind == JsonValueKind.Array;
+    }
+
+    /// <summary>bashExecution display honoring FormatBashExecution's exact
+    /// contract while tolerating malformed fields (Lucy review): a
+    /// non-string command/output is treated as absent — precisely the
+    /// shared formatter's own <c>?? string.Empty</c> fallback — so a corrupt
+    /// row degrades instead of throwing. Valid rows go through the shared
+    /// formatter unchanged: ParseHistory/copy display is untouched and this
+    /// path stays byte-identical for well-formed input.</summary>
+    private static string BashOutput(JsonElement message)
+    {
+        if (IsStringish(message, "command") && IsStringish(message, "output"))
+        {
+            return PiConversation.FormatBashExecution(message);
+        }
+
+        var command = ReadStringOrEmpty(message, "command");
+        var output = ReadStringOrEmpty(message, "output");
+        var safeCommand = PiRedaction.Redact(command);
+        var safeOutput = PiRedaction.Redact(output);
+        return string.IsNullOrEmpty(output) ? $"Ran `{safeCommand}`" : $"Ran `{safeCommand}`\n{safeOutput}";
+    }
+
+    private static bool IsStringish(JsonElement message, string name)
+        => !message.TryGetProperty(name, out var value)
+            || value.ValueKind is JsonValueKind.String or JsonValueKind.Null;
+
+    private static string ReadStringOrEmpty(JsonElement message, string name)
+        => message.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? string.Empty
+            : string.Empty;
+
+    /// <summary>Result body via the shared extractor, guarded (Lucy
+    /// review): its String contracts on nested content blocks are strict
+    /// and are deliberately NOT changed here — ParseHistory/copy stay
+    /// exactly as they are — so an unreadable malformed body degrades to
+    /// empty. The row's identity/name/error/duration evidence is preserved
+    /// either way; only unreadable text is lost.</summary>
+    private static string SafeResultBody(JsonElement message)
+    {
+        try
+        {
+            return PiConversation.ExtractContentText(message);
+        }
+        catch (InvalidOperationException)
+        {
+            return string.Empty;
+        }
     }
 
     /// <summary>Same normalization as wire/session readers: raw, non-empty,
