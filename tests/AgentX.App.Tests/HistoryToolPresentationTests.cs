@@ -55,4 +55,16 @@ public sealed class HistoryToolPresentationTests
     {
         Assert.Null(ConversationViewItem.HistoryToolPresentation(note, text));
     }
+
+    [Theory]
+    [InlineData("finished: powershell", "[tool result: powershell]\n674", "finished: powershell", false, "674")]
+    [InlineData("failed: deploy", "[tool deploy failed]\nboom", "failed: deploy", true, "boom")]
+    public void LiveFinishedOrFailed_StripsSamePrefix(string? note, string text, string expectedNote, bool expectedError, string expectedBody)
+    {
+        var parsed = ConversationViewItem.HistoryToolPresentation(note, text);
+        Assert.NotNull(parsed);
+        Assert.Equal(expectedNote, parsed.Value.Note);
+        Assert.Equal(expectedError, parsed.Value.IsError);
+        Assert.Equal(expectedBody, parsed.Value.DisplayBody);
+    }
 }

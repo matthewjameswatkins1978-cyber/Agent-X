@@ -162,15 +162,27 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
     /// Parse a history-restored tool row: Pi persists the tool name and
     /// outcome only inside the body's first line ("[tool result: NAME]" /
     /// "[tool NAME failed]", see PiConversation.FormatToolResult), with no
-    /// Note and no error flag. Returns the header note ("finished: NAME" /
+    /// Note and no error flag. Live finished/failed rows repeat the same
+    /// prefix under an already-good header, so they strip too. Returns the header note ("finished: NAME" /
     /// "failed: NAME"), whether it failed, and the body with that redundant
-    /// first line removed for display. Live rows (Note != null) and unknown
+    /// first line removed for display. Started/pending rows and unknown
     /// shapes return null and render exactly as before. Never invents:
     /// empty or bracketed names refuse. Copy always uses FullText, and the
     /// expanded view keeps the original line, so nothing is lost.
     internal static (string Note, bool IsError, string DisplayBody)? HistoryToolPresentation(string? note, string text)
     {
-        if (note is not null || string.IsNullOrEmpty(text))
+        // History rows carry no Note; live finished/failed rows carry their
+        // own ("finished: NAME") and are already well-headed, but their
+        // body repeats the same Core prefix — strip it too. Started/pending
+        // rows and unknown shapes refuse (null) and render exactly as before.
+        if (!string.IsNullOrEmpty(note)
+            && !note.StartsWith("finished:", StringComparison.Ordinal)
+            && !note.StartsWith("failed:", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        if (string.IsNullOrEmpty(text))
         {
             return null;
         }
