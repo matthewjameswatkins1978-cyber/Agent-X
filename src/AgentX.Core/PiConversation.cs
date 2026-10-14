@@ -697,7 +697,7 @@ public sealed class PiConversation : IAsyncDisposable
         return text.ToString();
     }
 
-    private static string ExtractContentText(JsonElement message)
+    internal static string ExtractContentText(JsonElement message)
     {
         if (!message.TryGetProperty("content", out var content))
         {
@@ -742,7 +742,7 @@ public sealed class PiConversation : IAsyncDisposable
     /// never rendered; empty/oversized → null) so session IDs and wire
     /// IDs compare equal case-sensitively. Both derive from toolCall.id.
     /// </summary>
-    private static string? HistoryCallId(JsonElement message)
+    internal static string? HistoryCallId(JsonElement message)
     {
         if (!message.TryGetProperty("toolCallId", out var id) || id.ValueKind != JsonValueKind.String)
         {
@@ -762,7 +762,7 @@ public sealed class PiConversation : IAsyncDisposable
         return string.IsNullOrEmpty(body) ? header : header + "\n" + PiRedaction.Redact(body);
     }
 
-    private static string FormatBashExecution(JsonElement message)
+    internal static string FormatBashExecution(JsonElement message)
     {
         var command = message.TryGetProperty("command", out var c) ? c.GetString() ?? string.Empty : string.Empty;
         var output = message.TryGetProperty("output", out var o) ? o.GetString() ?? string.Empty : string.Empty;
