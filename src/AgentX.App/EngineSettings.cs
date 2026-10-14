@@ -6,9 +6,11 @@ public sealed record EngineModel(string Provider, string ModelId, string Display
 /// <summary>
 /// App-side boundary for engine settings that Agent ONE owns in Core: model
 /// list/selection and thinking-level list/selection. The App calls ONLY
-/// through this interface; when Core ships the verified operations, the
-/// pending implementation below is replaced by a thin Core-bound one at the
-/// single construction site in MainWindow. Nothing here invents a worker
+/// through this interface. Core ships CoreEngineSettingsRuntime as the
+/// thin Core-bound implementation over PiWorker; swapping it in at the
+/// single construction site in MainWindow is activation, deliberately
+/// deferred to the native chooser slice (issue #23, Muse) so the footer
+/// never offers a picker that cannot choose. Nothing here invents a worker
 /// manager or a competing protocol path.
 /// </summary>
 public interface IEngineSettingsRuntime
@@ -27,18 +29,19 @@ public interface IEngineSettingsRuntime
 }
 
 /// <summary>
-/// Stand-in while Core has no client operation for models/thinking. The Pi
-/// wire defines get_available_models/set_model/set_thinking_level, but
-/// AgentX.Core exposes none — that contract is Agent ONE's to ship.
-/// Every mutating operation reports the same explicit reason, which the
-/// footer surfaces instead of presenting selection as functional.
+/// Stand-in while the Core-bound runtime is not yet activated. Core now
+/// ships CoreEngineSettingsRuntime over the validated PiWorker operations;
+/// activation waits for the native chooser (issue #23, Muse) so this
+/// surface never presents selection as functional before a real picker
+/// exists. Every mutating operation reports the same explicit reason,
+/// which the footer surfaces instead of pretending selection works.
 /// </summary>
 public sealed class PendingEngineSettingsRuntime : IEngineSettingsRuntime
 {
     public bool CanConfigure => false;
 
     public string UnavailableReason =>
-        "Model and thinking selection need the Core engine operation (Agent ONE, pending) — not yet available.";
+        "Model and thinking selection activate with the native chooser (issue #23); the Core adapter is ready but not yet wired.";
 
     public Task<IReadOnlyList<EngineModel>> ListModelsAsync(CancellationToken cancellationToken)
         => throw new NotSupportedException(UnavailableReason);
