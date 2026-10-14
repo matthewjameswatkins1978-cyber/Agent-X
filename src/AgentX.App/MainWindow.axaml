@@ -7,6 +7,7 @@
         Title="Agent X"
         Width="1200" Height="800" MinWidth="720" MinHeight="480"
         Background="{DynamicResource Ax.Bg}"
+        FontFamily="{DynamicResource Ax.ChromeFont}"
         Opened="MainWindow_OnOpened"
         Activated="MainWindow_OnActivated">
   <Window.Styles>
@@ -228,7 +229,8 @@
                   CornerRadius="{DynamicResource Ax.Radius}" Padding="4"
                   Background="{DynamicResource Ax.Bg}">
             <ListBox x:Name="ConversationList" Background="Transparent" BorderThickness="0"
-                     SelectionMode="Single">
+                     SelectionMode="Single" FontFamily="{DynamicResource Ax.ProseFont}"
+                     FontSize="{DynamicResource Ax.FeedFontSize}">
               <ListBox.ItemsPanel>
                 <ItemsPanelTemplate>
                   <VirtualizingStackPanel />
@@ -256,7 +258,9 @@
                                             FontSize="14" />
                           <SelectableTextBlock IsVisible="{Binding Markdown, Converter={x:Static conv:ObjectConverters.IsNull}}"
                                                  Text="{Binding DisplayText}" TextWrapping="Wrap"
-                                                 FontSize="14" />
+                                                 FontFamily="{DynamicResource Ax.ProseFont}"
+                                                 FontSize="{DynamicResource Ax.FeedFontSize}"
+                                                 LineHeight="{DynamicResource Ax.FeedLineHeight}" />
                         </StackPanel>
                       </Border>
                     </Grid>
@@ -265,7 +269,9 @@
                                             FontSize="14" />
                       <SelectableTextBlock IsVisible="{Binding Markdown, Converter={x:Static conv:ObjectConverters.IsNull}}"
                                                  Text="{Binding DisplayText}" TextWrapping="Wrap"
-                                                 FontSize="14" />
+                                                 FontFamily="{DynamicResource Ax.ProseFont}"
+                                                 FontSize="{DynamicResource Ax.FeedFontSize}"
+                                                 LineHeight="{DynamicResource Ax.FeedLineHeight}" />
                     </StackPanel>
                     <!-- Tool: tinted block, muted hairline, 3px state edge,
                          Pi name header + dim suffix, diff-tinted mono body. -->
@@ -385,6 +391,18 @@
                        ToolTip.Tip="Visual treatment: same layout and behaviour, three professional finishes." />
             <ComboBox Grid.Column="1" x:Name="TreatmentCombo" MinWidth="160"
                       SelectionChanged="TreatmentCombo_OnChanged" />
+          </Grid>
+          <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+            <TextBlock Text="Feed style" VerticalAlignment="Center"
+                       ToolTip.Tip="Feed typography: Studio or Operator. Same content and Pi colours — different voice." />
+            <ComboBox Grid.Column="1" x:Name="FeedCombo" MinWidth="160"
+                      SelectionChanged="FeedCombo_OnChanged" />
+          </Grid>
+          <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+            <TextBlock Text="Feed size" VerticalAlignment="Center"
+                       ToolTip.Tip="Feed prose size in px (13–16). Technical text sits one step under." />
+            <ComboBox Grid.Column="1" x:Name="FeedSizeCombo" MinWidth="160"
+                      SelectionChanged="FeedSizeCombo_OnChanged" />
           </Grid>
           <TextBlock Text="Managed locations" FontWeight="SemiBold" />
           <TextBlock x:Name="ManagedPathsText" Text="" Foreground="{DynamicResource Ax.Muted}"

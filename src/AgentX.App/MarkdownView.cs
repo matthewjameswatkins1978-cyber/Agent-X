@@ -59,15 +59,28 @@ public sealed class MarkdownView : SelectableTextBlock
     private static IBrush GreenBrush => AxTheme.GreenBrush;
     private static IBrush RedBrush => AxTheme.RedBrush;
     private static IBrush YellowBrush => AxTheme.YellowBrush;
-    private static readonly FontFamily MonoFamily = new("Cascadia Code,Consolas,monospace");
+    // Bundled faces follow the feed appearance (see AxTheme): read live at
+    // every Rebuild, never cached, so an appearance switch + row rebuild
+    // picks up the new families with no extra machinery.
+    private static FontFamily MonoFamily => AxTheme.MonoFont;
+    private static FontFamily VoiceFamily => AxTheme.VoiceFont;
 
     private void Rebuild()
     {
         Inlines?.Clear();
         Text = null;
-        if (Markdown is { } document && !document.IsEmpty)
+        // Adjustable feed type (AxFeed.Sizes): prose rows take the full
+        // size in the appearance prose face; technical rows sit one step
+        // under with runs in the mono face. Local values override the XAML
+        // defaults, so Settings changes apply to existing rows after the
+        // standard RebuildConversationList refresh.
+        var technical = Markdown is null || Markdown.IsEmpty;
+        FontFamily = AxTheme.ProseFont;
+        FontSize = technical ? AxTheme.FeedMonoSize : AxTheme.FeedFontSize;
+        LineHeight = AxTheme.FeedLineHeight;
+        if (!technical)
         {
-            RenderMarkdown(document);
+            RenderMarkdown(Markdown!);
         }
         else if (MonoText is { } mono)
         {
@@ -197,6 +210,9 @@ public sealed class MarkdownView : SelectableTextBlock
         if (italic == true)
         {
             run.FontStyle = FontStyle.Italic;
+            // Commentary voice (Operator: Monaspace Argon; Studio: Geist,
+            // same as prose). Quotes and agent asides only — never code.
+            run.FontFamily = VoiceFamily;
         }
 
         return run;
