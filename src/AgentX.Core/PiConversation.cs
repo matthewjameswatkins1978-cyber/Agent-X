@@ -315,6 +315,16 @@ public sealed class PiConversation : IAsyncDisposable
     }
 
     /// <summary>
+    /// Upper bound for the optional post-settle stats refresh (Lucy review):
+    /// telemetry only — never gates a run. get_session_stats answers in
+    /// milliseconds over the local pipe when Pi is healthy; 2 s is ~2 orders
+    /// of magnitude of headroom while keeping a settled run's return
+    /// immediate even when Pi is alive but silent. internal so the
+    /// silent-responder regression can assert against the real bound.
+    /// </summary>
+    internal static readonly TimeSpan PostSettleStatsTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>
     /// Send a prompt and stream assistant text. Returns the streamed text plus
     /// a run-health receipt. Cancellation throws; call RefreshHistoryAsync
     /// afterwards to reconcile partially persisted work.
@@ -345,17 +355,31 @@ public sealed class PiConversation : IAsyncDisposable
 
             // #27: refresh Pi-reported session stats after every CONFIRMED
             // settle — never during streaming, because acceptance is not
-            // completion. Telemetry is optional: a rejected or failed poll
-            // must never fail a settled run, so the last honest value (or
-            // none) simply stands. The receipt above is already final.
-            try
+            // completion. STRICTLY BOUNDED (Lucy review): PiRpcConnection has
+            // no response deadline of its own, so a live-but-silent Pi must
+            // not hold a settled run hostage. The timeout token reaches the
+            // underlying pending RPC, which cancels itself and removes its
+            // pending entry (PiRpcConnection.SendCommandAsync's OCE path) —
+            // nothing is left waiting, nothing runs in the background (the
+            // poll is awaited, never detached). The receipt above and the
+            // user's prompt completion are already final; telemetry failure
+            // can never fail a settled run.
+            using (var statsTimeout = new CancellationTokenSource(PostSettleStatsTimeout))
             {
-                await GetSessionStatsAsync(CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception)
-            {
-                // Broad on purpose: unknown future decode/shape faults are
-                // still telemetry faults. The run itself already succeeded.
+                try
+                {
+                    await GetSessionStatsAsync(statsTimeout.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Bounded: Pi stayed silent or slow — the last honest
+                    // stats value, or none, simply stands.
+                }
+                catch (Exception)
+                {
+                    // Broad on purpose: unknown future decode/shape faults are
+                    // still telemetry faults. The run itself already succeeded.
+                }
             }
 
             return (text, receipt);

@@ -159,6 +159,30 @@ public sealed class PiRpcClient : IAsyncDisposable
         await GetStateAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Attach an already-running transport instead of spawning a Pi
+    /// process — the same connection-layer seam FeedBridge.AttachConnection
+    /// exposes: event forwarding, fault propagation and the reader loop are
+    /// wired exactly as ConnectAsync wires them, so every command path
+    /// (including the bounded post-settle stats poll) behaves identically
+    /// to the live pipe. Internal test seam for deterministic loopback
+    /// tests; production hosts keep using ConnectAsync.
+    /// </summary>
+    internal void AttachConnection(PiRpcConnection connection)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(connection);
+        if (_connection is not null)
+        {
+            throw new InvalidOperationException("A Pi transport is already attached.");
+        }
+
+        _connection = connection;
+        _connection.EventReceived += (_, args) => EventReceived?.Invoke(this, args);
+        _connection.TransportFailed += (_, error) => TransportFailed?.Invoke(this, error);
+        _connection.Start(); // Idempotent: loopback tests may already have started it.
+    }
+
     /// <summary>Inspect current engine state (model, streaming flags, session).</summary>
     public async Task<PiEngineState> GetStateAsync(CancellationToken cancellationToken = default)
     {
@@ -453,12 +477,16 @@ public sealed class PiRpcClient : IAsyncDisposable
     private PiRpcConnection RequireConnection()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_connection is null || _process is null)
+        if (_connection is null)
         {
             throw new PiRpcTransportException("Pi client is not connected. Call ConnectAsync first.");
         }
 
-        if (_process.HasExited)
+        // Liveness is checked only when a process exists: ConnectAsync always
+        // creates connection+process together, so every live host path is
+        // unchanged. A connection attached without a process is the
+        // connection-layer seam (AttachConnection) used by loopback tests.
+        if (_process is { HasExited: true })
         {
             throw new PiRpcTransportException($"Pi has exited (code {_process.ExitCode}). {StderrTail}");
         }
