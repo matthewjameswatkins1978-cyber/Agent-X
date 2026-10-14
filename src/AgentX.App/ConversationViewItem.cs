@@ -172,6 +172,22 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
         }
     }
 
+    /// 3px state edge for the B7 tool/user surfaces. Set by the host
+    /// alongside <see cref="StateBrush"/> (shared AxTheme instances, so
+    /// treatment switches propagate to live rows).
+    public IBrush EdgeBrush
+    {
+        get;
+        set
+        {
+            if (!Equals(field, value))
+            {
+                field = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(EdgeBrush)));
+            }
+        }
+    } = AxTheme.UserEdgeBrush;
+
     public bool IsUser => Kind == FeedBlockKind.User;
 
     public bool IsAssistant => Kind == FeedBlockKind.Assistant;

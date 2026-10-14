@@ -28,10 +28,11 @@ public static class WorkerViewKey
     public static bool CanRemove(bool busy, bool connecting) => !busy && !connecting;
 
     /// <summary>Display label: stored label, or a stable short-id fallback (Core allows blank labels).</summary>
+    /// Display label: stored labels pass through; Core's auto-generated
+    /// "Worker N" shows as "Agent N"; blanks fall back to "Agent xxxx".
+    /// Display-only — keys and storage never change.
     public static string DisplayLabel(string id, string? label)
-        => string.IsNullOrWhiteSpace(label)
-            ? $"Worker {id[..Math.Min(4, id.Length)]}"
-            : label.Trim();
+        => AxTheme.WorkerTabLabel(id, label);
 
     public static string Tooltip(string id, string? label, string sessionId, string projectRoot)
         => $"Worker '{DisplayLabel(id, label)}' — session {sessionId} · {projectRoot}";
