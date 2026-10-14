@@ -46,8 +46,13 @@ public partial class MainWindow : Window
     private readonly WorkerViewLifecycle _viewLifecycle = new();
     private ViewPrefs _viewPrefs = new();
     // Engine settings boundary (Agent ONE owns the Core contract): model
-    // and thinking selection flow ONLY through this adapter. Pending until
-    // Core ships the verified operations; the footer says so explicitly.
+    // and thinking selection flow ONLY through this adapter. Core ships
+    // CoreEngineSettingsRuntime (issue #23 Core half); swapping this line to
+    //   new CoreEngineSettingsRuntime(() => SelectedWorker is { } w ? new PiWorkerEngineSettings(w) : null)
+    // activates it, but ONLY together with Muse's native chooser that renders
+    // the real lists — otherwise CanConfigure flips true while the flyout shows
+    // "Choose:" with no choices. Activation is Muse's; the footer states the
+    // pending reason explicitly until then.
     private readonly IEngineSettingsRuntime _settingsRuntime = new PendingEngineSettingsRuntime();
     // Last genuine engine values (from get_state on connect/reconnect).
     // Usage shows messages only: token/cost context does not exist here.
