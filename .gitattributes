@@ -1,0 +1,3 @@
+# OFL licence texts must keep exact upstream bytes (LF) on every checkout.
+src/AgentX.App/Assets/Fonts/OFL-Geist.txt -text
+src/AgentX.App/Assets/Fonts/OFL-Monaspace.txt -text

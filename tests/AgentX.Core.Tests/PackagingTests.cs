@@ -37,6 +37,38 @@ public sealed class PackagingTests
             "packaging/THIRD-PARTY-NOTICES.txt must name each shipped package: " + string.Join("; ", missing));
     }
 
+    [Fact]
+    public void FontLicenceTexts_AccompanyTheBundledFonts()
+    {
+        var repo = FindRepoRoot();
+        var geist = Path.Combine(repo, "src", "AgentX.App", "Assets", "Fonts", "OFL-Geist.txt");
+        var mona = Path.Combine(repo, "src", "AgentX.App", "Assets", "Fonts", "OFL-Monaspace.txt");
+        Assert.True(File.Exists(geist), "OFL-Geist.txt must sit beside the bundled fonts.");
+        Assert.True(File.Exists(mona), "OFL-Monaspace.txt must sit beside the bundled fonts.");
+        // Complete texts, not stubs: exact upstream byte counts.
+        Assert.Equal(4383, new FileInfo(geist).Length);
+        Assert.Equal(4479, new FileInfo(mona).Length);
+        Assert.Contains("SIL OPEN FONT LICENSE Version 1.1", File.ReadAllText(geist));
+        Assert.Contains("Copyright 2024 The Geist Project Authors", File.ReadAllText(geist));
+        Assert.Contains("Reserved Font Name \"Monaspace\"", File.ReadAllText(mona));
+        // Notices pointers resolve to the real committed paths.
+        var notices = File.ReadAllText(Path.Combine(repo, "THIRD-PARTY-NOTICES.md"));
+        Assert.Contains("src/AgentX.App/Assets/Fonts/OFL-Geist.txt", notices);
+        Assert.Contains("src/AgentX.App/Assets/Fonts/OFL-Monaspace.txt", notices);
+    }
+
+    [Fact]
+    public void PortableDistribution_CarriesTheFontLicences()
+    {
+        var repo = FindRepoRoot();
+        var script = File.ReadAllText(Path.Combine(repo, "scripts", "New-PortableDist.ps1"));
+        Assert.Contains("OFL-Geist.txt", script);
+        Assert.Contains("OFL-Monaspace.txt", script);
+        var distNotices = File.ReadAllText(Path.Combine(repo, "packaging", "THIRD-PARTY-NOTICES.txt"));
+        Assert.Contains("OFL-Geist.txt", distNotices);
+        Assert.Contains("OFL-Monaspace.txt", distNotices);
+    }
+
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
