@@ -169,6 +169,41 @@ public sealed class PiRpcClient : IAsyncDisposable
     }
 
     /// <summary>
+    /// Poll session totals (get_session_stats): Pi-reported tool calls,
+    /// tokens, cost and context for THIS session — the only honest
+    /// token/cost source observed. Returns the raw correlated response for
+    /// the host's approved record boundary (EventReceived never sees it);
+    /// the CALLER owns disposal. Not capability-probed (baseline protocol,
+    /// same policy as prompt/abort): an unsupported command surfaces as
+    /// PiRpcCommandException at use time — command-level rejection IS the
+    /// probe (see PiRpcCompat), never a hang.
+    /// </summary>
+    public Task<JsonDocument> GetSessionStatsAsync(CancellationToken cancellationToken = default)
+        => SendStatsPollAsync(RequireConnection(), cancellationToken);
+
+    /// <summary>
+    /// Connection-level stats poll: exposed for deterministic pipe tests.
+    /// On command failure the typed exception throws AFTER the failed
+    /// response document is disposed — a rejected poll never leaks.
+    /// </summary>
+    internal static async Task<JsonDocument> SendStatsPollAsync(
+        PiRpcConnection connection, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        var response = await connection.SendCommandAsync("get_session_stats", null, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowOnCommandError(response);
+            return response;
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Every model Pi 1.1.0 reports as selectable (get_available_models).
     /// Malformed entries are skipped, never guessed. The list reflects THIS
     /// process's configured providers — query it per connection; do not cache

@@ -342,6 +342,22 @@ public sealed class PiConversation : IAsyncDisposable
                 MessageCount: state.MessageCount);
             LastReceipt = receipt;
             await RefreshHistoryAsync(CancellationToken.None).ConfigureAwait(false);
+
+            // #27: refresh Pi-reported session stats after every CONFIRMED
+            // settle — never during streaming, because acceptance is not
+            // completion. Telemetry is optional: a rejected or failed poll
+            // must never fail a settled run, so the last honest value (or
+            // none) simply stands. The receipt above is already final.
+            try
+            {
+                await GetSessionStatsAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Broad on purpose: unknown future decode/shape faults are
+                // still telemetry faults. The run itself already succeeded.
+            }
+
             return (text, receipt);
         }
         finally
@@ -352,6 +368,36 @@ public sealed class PiConversation : IAsyncDisposable
 
     public Task AbortAsync(CancellationToken cancellationToken = default)
         => Client.AbortAsync(cancellationToken);
+
+    /// <summary>
+    /// Poll this session's stats (get_session_stats): records through the
+    /// bridge's approved boundary — refreshing
+    /// <see cref="FeedBridge.LatestStats"/> for status binding with NO
+    /// fabricated feed rows — and returns the typed snapshot. Pi-reported
+    /// totals for THIS session only: never cross-session, never an invoice.
+    /// Null means the response decoded but was not a stats shape (a future
+    /// Pi change); command and transport failures surface as typed
+    /// exceptions instead of a hollow zero.
+    /// </summary>
+    public async Task<StatsSnapshot?> GetSessionStatsAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        using var response = await Client.GetSessionStatsAsync(cancellationToken).ConfigureAwait(false);
+        return RecordStatsResponse(_bridge, response);
+    }
+
+    /// <summary>
+    /// Approved poll boundary shared by the live path and tests: refresh the
+    /// bridge binding when one is attached, then decode the same document
+    /// through the tap's redacting path. Pure read — the document is never
+    /// mutated and decode fails closed inside the tap.
+    /// </summary>
+    internal static StatsSnapshot? RecordStatsResponse(FeedBridge? bridge, JsonDocument response)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        bridge?.RecordResponse(response);
+        return PiEventTap.DecodeDocument(response, DateTime.UtcNow) as StatsSnapshot;
+    }
 
     /// <summary>Engine state of the CURRENT process (model, thinking, session, counts).</summary>
     public Task<PiEngineState> GetStateAsync(CancellationToken cancellationToken = default)
