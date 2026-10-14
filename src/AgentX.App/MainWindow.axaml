@@ -47,30 +47,9 @@
     <Style Selector="ToggleButton.NavBtn:pointerover">
       <Setter Property="Background" Value="{DynamicResource Ax.Surface2}" />
     </Style>
-    <!-- Lucy B7 review: the v12.1.4 Fluent theme paints ToggleButton :checked
-         onto the template child (ContentPresenter#PART_ContentPresenter) with
-         the system accent, which overrides the root Background above. These
-         class-qualified template-child selectors outrank the theme and keep
-         the selected rail pill inside the treatment. Focus visuals untouched. -->
-    <Style Selector="ToggleButton.NavBtn:checked /template/ ContentPresenter#PART_ContentPresenter">
-      <Setter Property="Background" Value="{DynamicResource Ax.Surface2}" />
-      <Setter Property="Foreground" Value="{DynamicResource Ax.Text}" />
-    </Style>
-    <Style Selector="ToggleButton.NavBtn:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-      <Setter Property="Background" Value="{DynamicResource Ax.Surface2}" />
-      <Setter Property="Foreground" Value="{DynamicResource Ax.Text}" />
-    </Style>
-    <Style Selector="ToggleButton.NavBtn:checked:pressed /template/ ContentPresenter#PART_ContentPresenter">
-      <Setter Property="Background" Value="{DynamicResource Ax.Surface2}" />
-      <Setter Property="Foreground" Value="{DynamicResource Ax.Text}" />
-    </Style>
-    <!-- Lucy B7 review: TabStripItem's selected pipe (Border#PART_SelectedPipe)
-         uses the system accent fill. The id-qualified selector below repaints
-         just the pipe with the treatment accent; selected background stays
-         the theme default (already neutral), keyboard focus untouched. -->
-    <Style Selector="TabStrip#WorkspaceTabs TabStripItem:selected /template/ Border#PART_SelectedPipe">
-      <Setter Property="Background" Value="{DynamicResource Ax.Accent}" />
-    </Style>
+    <!-- Selection fills are driven by the Fluent theme resource overrides in
+         AxTheme.Apply (verified at runtime: template-child selectors do not
+         beat the v12.1.4 ControlTheme). Root setters above remain. -->
   </Window.Styles>
   <Grid Margin="8" RowSpacing="6" ColumnDefinitions="Auto,*" RowDefinitions="Auto,*,Auto">
     <!-- Top row: compact worker tabs + add. Display labels only (Main,

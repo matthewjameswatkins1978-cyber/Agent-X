@@ -109,6 +109,17 @@ public static class AxTheme
             app.Resources["Ax.Violet"] = VioletBrush;
             app.Resources["Ax.Cyan"] = CyanBrush;
             app.Resources["Ax.MonoFont"] = MonoFont;
+            // Verified at runtime: Window.Styles template-child selectors do
+            // not beat the v12.1.4 Fluent ControlTheme, so the selected rail
+            // pill and tab pipe kept the system accent. Overriding the theme's
+            // own DynamicResource keys instead cannot lose, and pointing them
+            // at the shared live brushes keeps every treatment correct.
+            // Scope is safe: ToggleButton is used only for the nav rail, and
+            // the pipe fill only for workspace tabs.
+            app.Resources["ToggleButtonBackgroundChecked"] = Surface2Brush;
+            app.Resources["ToggleButtonBackgroundCheckedPointerOver"] = Surface2Brush;
+            app.Resources["ToggleButtonBackgroundCheckedPressed"] = Surface2Brush;
+            app.Resources["TabItemHeaderSelectedPipeFill"] = AccentBrush;
             // CornerRadius is a struct resource: DynamicResource bindings to
             // CornerRadius properties need the converted value, not a double.
             app.Resources["Ax.Radius"] = new CornerRadius(t.Radius);
