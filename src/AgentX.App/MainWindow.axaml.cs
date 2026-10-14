@@ -2109,6 +2109,14 @@ public partial class MainWindow : Window
         {
             item.Markdown = MarkdownLite.Parse(entry.Text);
         }
+        // Rows created before the user-parse path (or skipped while empty)
+        // get the same bounded rich render on the next sync. Parse-once:
+        // user entry text is immutable after arrival, so DisplayText is
+        // stable and this never re-parses on every tick.
+        if (item.Kind == FeedBlockKind.User && item.Markdown is null && item.DisplayText.Length > 0)
+        {
+            item.Markdown = MarkdownLite.Parse(item.DisplayText);
+        }
     }
 
     /// <summary>Visibility preference to bridge level (Detailed default).</summary>
@@ -2189,6 +2197,14 @@ public partial class MainWindow : Window
         if (kind == FeedBlockKind.Assistant && !entry.IsStreaming && entry.Text.Length > 0)
         {
             item.Markdown = MarkdownLite.Parse(entry.Text);
+        }
+        // User packets render through the same safe parser (Lucy B7 review):
+        // parsed from the BOUNDED display text, so giant pastes keep today's
+        // cap contract and layout cost. Copy stays byte-exact from FullText
+        // via the Core feed — never from this rendered view.
+        if (kind == FeedBlockKind.User && entry.Text.Length > 0 && item.DisplayText.Length > 0)
+        {
+            item.Markdown = MarkdownLite.Parse(item.DisplayText);
         }
         return item;
     }
@@ -2847,9 +2863,32 @@ public partial class MainWindow : Window
     }
 
     /// Native dark title bar once the handle exists; all window behaviour
-    /// stays native and untouched. Best-effort (see AxTheme).
-    private void MainWindow_OnOpened(object? sender, EventArgs e)
+    /// stays native and untouched. Best-effort (see AxTheme). Applied at
+    /// Opened, re-asserted on every activation and twice more shortly after
+    /// Opened: DWM attributes proved flaky across identical runs (bright
+    /// system-blue captions in some captures), consistent with a handle that
+    /// is not ready yet or attributes dropped on re-activation.
+    private void MainWindow_OnOpened(object? sender, EventArgs e) => ApplyTitleBar();
+
+    private void MainWindow_OnActivated(object? sender, EventArgs e)
         => AxTheme.EnsureDarkTitleBar(this);
+
+    private void ApplyTitleBar()
+    {
+        AxTheme.EnsureDarkTitleBar(this);
+        var attempts = 0;
+        var retry = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        retry.Tick += (_, _) =>
+        {
+            attempts++;
+            AxTheme.EnsureDarkTitleBar(this);
+            if (attempts >= 2)
+            {
+                retry.Stop();
+            }
+        };
+        retry.Start();
+    }
 
     private void OpenSessions_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {

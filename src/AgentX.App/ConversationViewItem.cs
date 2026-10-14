@@ -18,8 +18,8 @@ public enum FeedBlockKind
 /// One bound row in the conversation feed. <see cref="FullText"/> is the
 /// complete message (copy source, always byte-exact); <see cref="DisplayText"/>
 /// is the bounded view with an explicit truncation notice. <see cref="Markdown"/>
-/// carries the parsed assistant model for rich rendering (null while
-/// streaming); <see cref="IsExpanded"/> reveals the full text on explicit
+/// carries the parsed Markdown model for rich rendering (assistant narrative
+/// and user packets; null while streaming or when empty); <see cref="IsExpanded"/> reveals the full text on explicit
 /// user action for long tool output. Brushes follow <see cref="PiPalette"/>.
 /// </summary>
 public sealed class ConversationViewItem : INotifyPropertyChanged

@@ -7,7 +7,8 @@
         Title="Agent X"
         Width="1200" Height="800" MinWidth="720" MinHeight="480"
         Background="{DynamicResource Ax.Bg}"
-        Opened="MainWindow_OnOpened">
+        Opened="MainWindow_OnOpened"
+        Activated="MainWindow_OnActivated">
   <Window.Styles>
     <!-- B7 chrome: compact tabs, 28px icon buttons, rail selection pill. -->
     <Style Selector="TabStripItem">
@@ -45,6 +46,30 @@
     </Style>
     <Style Selector="ToggleButton.NavBtn:pointerover">
       <Setter Property="Background" Value="{DynamicResource Ax.Surface2}" />
+    </Style>
+    <!-- Lucy B7 review: the v12.1.4 Fluent theme paints ToggleButton :checked
+         onto the template child (ContentPresenter#PART_ContentPresenter) with
+         the system accent, which overrides the root Background above. These
+         class-qualified template-child selectors outrank the theme and keep
+         the selected rail pill inside the treatment. Focus visuals untouched. -->
+    <Style Selector="ToggleButton.NavBtn:checked /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource Ax.Surface2}" />
+      <Setter Property="Foreground" Value="{DynamicResource Ax.Text}" />
+    </Style>
+    <Style Selector="ToggleButton.NavBtn:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource Ax.Surface2}" />
+      <Setter Property="Foreground" Value="{DynamicResource Ax.Text}" />
+    </Style>
+    <Style Selector="ToggleButton.NavBtn:checked:pressed /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource Ax.Surface2}" />
+      <Setter Property="Foreground" Value="{DynamicResource Ax.Text}" />
+    </Style>
+    <!-- Lucy B7 review: TabStripItem's selected pipe (Border#PART_SelectedPipe)
+         uses the system accent fill. The id-qualified selector below repaints
+         just the pipe with the treatment accent; selected background stays
+         the theme default (already neutral), keyboard focus untouched. -->
+    <Style Selector="TabStrip#WorkspaceTabs TabStripItem:selected /template/ Border#PART_SelectedPipe">
+      <Setter Property="Background" Value="{DynamicResource Ax.Accent}" />
     </Style>
   </Window.Styles>
   <Grid Margin="8" RowSpacing="6" ColumnDefinitions="Auto,*" RowDefinitions="Auto,*,Auto">
@@ -238,13 +263,22 @@
                        edge, quiet rows, violet compaction box. -->
                   <StackPanel Spacing="2" Margin="8,6"
                               AutomationProperties.Name="{Binding Header}">
-                    <!-- User: tinted block with an accent edge. -->
+                    <!-- User: tinted block with an accent edge. Body renders
+                         through the same safe MarkdownLite parser as assistant
+                         rows (Lucy B7 review); the fallback keeps raw text for
+                         empty/unparsed rows. Copy is always byte-exact FullText
+                         from the Core feed, never this rendered view. -->
                     <Grid IsVisible="{Binding IsUser}" ColumnDefinitions="3,*">
                       <Border Background="{Binding EdgeBrush}" CornerRadius="2,0,0,2" />
                       <Border Grid.Column="1" Background="{Binding StateBrush}"
                               CornerRadius="{DynamicResource Ax.Radius}" Padding="10,8">
-                        <SelectableTextBlock Text="{Binding DisplayText}" TextWrapping="Wrap"
-                                                   FontSize="14" />
+                        <StackPanel Spacing="2">
+                          <app:MarkdownView Markdown="{Binding Markdown}" TextWrapping="Wrap"
+                                            FontSize="14" />
+                          <SelectableTextBlock IsVisible="{Binding Markdown, Converter={x:Static conv:ObjectConverters.IsNull}}"
+                                                 Text="{Binding DisplayText}" TextWrapping="Wrap"
+                                                 FontSize="14" />
+                        </StackPanel>
                       </Border>
                     </Grid>
                     <StackPanel IsVisible="{Binding IsAssistant}" Spacing="2">
