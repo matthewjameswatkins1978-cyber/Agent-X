@@ -2104,7 +2104,13 @@ public partial class MainWindow : Window
             item.RefreshToolDisplay();
         }
         var body = entry.IsStreaming && entry.Text.Length == 0 ? "Working…" : entry.Text;
-        item.DisplayText = item.IsExpanded ? FeedEntry.TruncateExpanded(entry.Text) : FeedEntry.TruncateForDisplay(body, cap);
+        // Same history-prefix strip as ToViewItem (expanded and copy paths
+        // keep the full text).
+        var displaySource = item.Kind == FeedBlockKind.Tool
+            && ConversationViewItem.HistoryToolPresentation(entry.Note, entry.Text) is { } historyStripped
+            ? historyStripped.DisplayBody
+            : body;
+        item.DisplayText = item.IsExpanded ? FeedEntry.TruncateExpanded(entry.Text) : FeedEntry.TruncateForDisplay(displaySource, cap);
         if (item.Kind == FeedBlockKind.Assistant && !entry.IsStreaming && entry.Text.Length > 0 && item.Markdown is null)
         {
             item.Markdown = MarkdownLite.Parse(entry.Text);
@@ -2168,6 +2174,13 @@ public partial class MainWindow : Window
     {
         var kind = KindOf(entry);
         var body = entry.IsStreaming && entry.Text.Length == 0 ? "Working…" : entry.Text;
+        // History tool rows render without their redundant first line (the
+        // name/outcome prefix promoted into the header above); truncation
+        // and copy still see the full text.
+        var displaySource = kind == FeedBlockKind.Tool
+            && ConversationViewItem.HistoryToolPresentation(entry.Note, entry.Text) is { } historyStripped
+            ? historyStripped.DisplayBody
+            : body;
         var cap = entry.IsStreaming ? LiveDisplayCap : HistoryDisplayCap;
         var brush = kind switch
         {
@@ -2179,7 +2192,7 @@ public partial class MainWindow : Window
             entry.Seq,
             entry.Role,
             BuildHeader(entry, kind),
-            FeedEntry.TruncateForDisplay(body, cap),
+            FeedEntry.TruncateForDisplay(displaySource, cap),
             entry.Text,
             kind,
             entry.IsStreaming,
@@ -2229,6 +2242,16 @@ public partial class MainWindow : Window
             "receipt" => "Run receipt",
             _ => entry.Role,
         };
+        // History-restored tool rows carry no Note: the name and outcome live
+        // in the body's first line. Promote them into the header so the row
+        // reads as one coherent unit ("powershell · finished #27") instead of
+        // echoing the seq ("[Tool #27] #27"). Full text and copy untouched.
+        if (entry.Note is null && kind == FeedBlockKind.Tool
+            && ConversationViewItem.HistoryToolPresentation(null, entry.Text) is { } history)
+        {
+            return $"[{label} #{entry.Seq}] {history.Note}";
+        }
+
         return entry.Note is null
             ? $"[{label} #{entry.Seq}]"
             : $"[{label} #{entry.Seq}] {entry.Note}";
@@ -2239,7 +2262,11 @@ public partial class MainWindow : Window
     /// and error flag the feed maintains.</summary>
     private static Avalonia.Media.IBrush ToolStateBrush(FeedEntry entry)
     {
-        if (entry.IsError)
+        // History-restored failures carry no error flag (only the "[tool X
+        // failed]" first line), so sniff the same presentation parse.
+        if (entry.IsError
+            || (entry.Note is null
+                && ConversationViewItem.HistoryToolPresentation(null, entry.Text) is { IsError: true }))
         {
             return ToolErrorBrush;
         }
@@ -2253,7 +2280,10 @@ public partial class MainWindow : Window
     /// instances so treatment switches propagate (see UserBlockBrush).
     private static Avalonia.Media.IBrush ToolEdgeBrush(FeedEntry entry)
     {
-        if (entry.IsError)
+        // Same history-failure sniff as the state brush (see above).
+        if (entry.IsError
+            || (entry.Note is null
+                && ConversationViewItem.HistoryToolPresentation(null, entry.Text) is { IsError: true }))
         {
             return AxTheme.RedBrush;
         }
@@ -3141,7 +3171,7 @@ public partial class MainWindow : Window
         {
             if (SelectedWorker is { } worker)
             {
-                DirectoryButton.Content = worker.ProjectRoot;
+                DirectoryButtonText.Text = worker.ProjectRoot;
                 return;
             }
 
@@ -3151,11 +3181,11 @@ public partial class MainWindow : Window
                 workspace = entry.ToWorkspace(ManagedRoot);
             }
 
-            DirectoryButton.Content = workspace?.WorkingDirectory ?? "Select a workspace…";
+            DirectoryButtonText.Text = workspace?.WorkingDirectory ?? "Select a workspace…";
         }
         catch
         {
-            DirectoryButton.Content = "Select a workspace…";
+            DirectoryButtonText.Text = "Select a workspace…";
         }
     }
 

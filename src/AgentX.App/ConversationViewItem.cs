@@ -159,6 +159,54 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
         return (header ?? "tool", $"#{seq}");
     }
 
+    /// Parse a history-restored tool row: Pi persists the tool name and
+    /// outcome only inside the body's first line ("[tool result: NAME]" /
+    /// "[tool NAME failed]", see PiConversation.FormatToolResult), with no
+    /// Note and no error flag. Returns the header note ("finished: NAME" /
+    /// "failed: NAME"), whether it failed, and the body with that redundant
+    /// first line removed for display. Live rows (Note != null) and unknown
+    /// shapes return null and render exactly as before. Never invents:
+    /// empty or bracketed names refuse. Copy always uses FullText, and the
+    /// expanded view keeps the original line, so nothing is lost.
+    internal static (string Note, bool IsError, string DisplayBody)? HistoryToolPresentation(string? note, string text)
+    {
+        if (note is not null || string.IsNullOrEmpty(text))
+        {
+            return null;
+        }
+
+        var cut = text.IndexOf((char)10);
+        var firstLine = (cut < 0 ? text : text[..cut]).TrimEnd('\r');
+        var rest = cut < 0 ? string.Empty : text[(cut + 1)..];
+
+        const string resultPrefix = "[tool result: ";
+        if (firstLine.StartsWith(resultPrefix, StringComparison.Ordinal) && firstLine.EndsWith("]", StringComparison.Ordinal))
+        {
+            var name = firstLine[resultPrefix.Length..^1].Trim();
+            if (name.Length == 0 || name.IndexOfAny(['[', ']']) >= 0)
+            {
+                return null;
+            }
+
+            return ($"finished: {name}", false, rest);
+        }
+
+        const string failPrefix = "[tool ";
+        const string failSuffix = " failed]";
+        if (firstLine.StartsWith(failPrefix, StringComparison.Ordinal) && firstLine.EndsWith(failSuffix, StringComparison.Ordinal))
+        {
+            var name = firstLine[failPrefix.Length..^failSuffix.Length].Trim();
+            if (name.Length == 0 || name.IndexOfAny(['[', ']']) >= 0)
+            {
+                return null;
+            }
+
+            return ($"failed: {name}", true, rest);
+        }
+
+        return null;
+    }
+
     public IBrush StateBrush
     {
         get;

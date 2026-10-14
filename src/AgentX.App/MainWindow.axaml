@@ -261,7 +261,7 @@
                        unboxed assistant Markdown (no header), coherent tool
                        blocks with Pi-style name headers and a 3px state
                        edge, quiet rows, violet compaction box. -->
-                  <StackPanel Spacing="2" Margin="8,6"
+                  <StackPanel Spacing="2" Margin="8,4"
                               AutomationProperties.Name="{Binding Header}">
                     <!-- User: tinted block with an accent edge. Body renders
                          through the same safe MarkdownLite parser as assistant
@@ -325,28 +325,25 @@
               </ListBox.ItemTemplate>
             </ListBox>
           </Border>
-          <!-- Inviting empty state, not a wizard. Auto-hides with content. -->
-          <Border x:Name="EmptyStatePanel" IsVisible="False" HorizontalAlignment="Center"
-                  VerticalAlignment="Center" Background="{DynamicResource Ax.Surface}"
-                  BorderBrush="{DynamicResource Ax.Border}"
-                  BorderThickness="1" CornerRadius="{DynamicResource Ax.Radius}"
-                  Padding="20" MaxWidth="520">
-            <StackPanel Spacing="8">
-              <TextBlock Text="Start with your project" FontSize="16" FontWeight="SemiBold"
-                         HorizontalAlignment="Center" />
-              <TextBlock x:Name="EmptyStateText" Text="Connect a workspace, then ask your first question."
-                         Foreground="{DynamicResource Ax.Muted}" FontSize="12" TextWrapping="Wrap"
-                         HorizontalAlignment="Center" TextAlignment="Center" />
+          <!-- Restrained empty state: one state-aware hint line plus the
+               composer-filling suggestions. No tutorial card; the composer
+               below stays the obvious starting point. -->
+          <StackPanel x:Name="EmptyStatePanel" IsVisible="False" HorizontalAlignment="Center"
+                      VerticalAlignment="Center" Spacing="10" MaxWidth="620">
+            <TextBlock x:Name="EmptyStateText" Text="Connect a workspace, then ask your first question."
+                       Foreground="{DynamicResource Ax.Muted}" FontSize="13" TextWrapping="Wrap"
+                       HorizontalAlignment="Center" TextAlignment="Center" />
+            <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center" ItemSpacing="8">
               <Button Content="List the top-level files and explain the layout"
                       Tag="List the top-level files in this project and explain the layout briefly."
-                      Click="Suggestion_OnClick" HorizontalAlignment="Stretch" />
+                      Click="Suggestion_OnClick" FontSize="12" />
               <Button Content="Summarise recent changes" Tag="Summarise the recent changes in this project."
-                      Click="Suggestion_OnClick" HorizontalAlignment="Stretch" />
+                      Click="Suggestion_OnClick" FontSize="12" />
               <Button Content="What tests exist and how do I run them"
                       Tag="What tests exist in this project and how do I run them?"
-                      Click="Suggestion_OnClick" HorizontalAlignment="Stretch" />
-            </StackPanel>
-          </Border>
+                      Click="Suggestion_OnClick" FontSize="12" />
+            </WrapPanel>
+          </StackPanel>
         </Grid>
 
         <Border Grid.Row="2" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="1"
@@ -452,12 +449,17 @@
                      FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" />
         </StackPanel>
         <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="8">
-          <Button x:Name="DirectoryButton" Grid.Column="0" Content="Select a workspace…"
+          <Button x:Name="DirectoryButton" Grid.Column="0"
                   Click="DirectoryButton_OnClick"
                   ToolTip.Tip="Working directory — opens the folder picker (guarded while connected)"
                   AutomationProperties.Name="Working directory"
                   Foreground="{DynamicResource Ax.Cyan}" Background="Transparent" BorderThickness="0"
-                  Padding="4,0" FontSize="12" VerticalAlignment="Center" />
+                  Padding="4,0" FontSize="12" VerticalAlignment="Center">
+            <!-- Trimmable path: long working directories ellipsize instead
+                 of crowding the status, connection and engine segments. -->
+            <TextBlock x:Name="DirectoryButtonText" Text="Select a workspace…"
+                       TextTrimming="CharacterEllipsis" MaxWidth="440" />
+          </Button>
           <TextBlock x:Name="StatusText" Grid.Column="1" Text="Select a workspace, then Connect."
                      Foreground="{DynamicResource Ax.Muted}" FontSize="12" TextWrapping="Wrap"
                      VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
