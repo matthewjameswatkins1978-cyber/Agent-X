@@ -186,7 +186,7 @@ public sealed class FeedBridge : IDisposable
             case ToolEnded ended:
                 if (Level >= VisibilityLevel.Detailed)
                 {
-                    _feed.AddSystemNotice(EndRow(ended));
+                    _feed.AddSystemNotice(EndRow(ended, CorrelationSuffix(ended.CallId)));
                 }
 
                 break;
@@ -217,8 +217,57 @@ public sealed class FeedBridge : IDisposable
     private static string ProgressRow(ToolProgress progress)
         => $"[progress {ToolCallAnnounced.ShortId(progress.CallId)}] {progress.ToolName}: {progress.PartialPreview}";
 
-    private static string EndRow(ToolEnded ended)
-        => $"[result {ToolCallAnnounced.ShortId(ended.CallId)}] {ended.Render(VisibilityLevel.Detailed) ?? string.Empty}";
+    private static string EndRow(ToolEnded ended, string correlationSuffix)
+        => $"[result {ToolCallAnnounced.ShortId(ended.CallId)}] {ended.Render(VisibilityLevel.Detailed) ?? string.Empty}{correlationSuffix}";
+
+    /// <summary>
+    /// Honest correlation suffix for an end row, derived from the bounded tap
+    /// store at row-creation time (rows are never rewritten later). Claims
+    /// "no observed start" ONLY when nothing was evicted — after eviction
+    /// the start may simply be gone, so the row stays silent instead of
+    /// guessing. Not a second log: a read-only query over tap events.
+    /// </summary>
+    private string CorrelationSuffix(string callId)
+    {
+        if (string.IsNullOrEmpty(callId))
+        {
+            return string.Empty;
+        }
+
+        PiEventTap? tap;
+        lock (_gate)
+        {
+            tap = _tap;
+        }
+
+        if (tap is null)
+        {
+            return string.Empty;
+        }
+
+        var started = false;
+        var ends = 0;
+        foreach (var e in tap.Events)
+        {
+            if (e is ToolStarted s && s.CallId == callId)
+            {
+                started = true;
+            }
+            else if (e is ToolEnded other && other.CallId == callId)
+            {
+                ends++;
+            }
+        }
+
+        // The current end is already stored (the tap enqueues before
+        // broadcasting), so ends >= 1 here; more than one is a repeated end.
+        if (!started && tap.DroppedEvents == 0)
+        {
+            return ends > 1 ? " (no observed start; repeated end)" : " (no observed start)";
+        }
+
+        return ends > 1 ? " (repeated end)" : string.Empty;
+    }
 
     public void Detach()
     {

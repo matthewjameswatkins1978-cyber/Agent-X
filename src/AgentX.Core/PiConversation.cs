@@ -207,7 +207,8 @@ public sealed class PiConversation : IAsyncDisposable
         }
 
         await RefreshHistoryAsync(cancellationToken).ConfigureAwait(false);
-        var state = await Client.GetStateAsync(cancellationToken).ConfigureAwait(false);
+        using var reconnectState = await Client.GetStateDocumentAsync(cancellationToken).ConfigureAwait(false);
+        var state = RecordStateResponse(_bridge, reconnectState) ?? PiEngineState.FromResponse(reconnectState);
         lock (_clientGate)
         {
             _reconnectCount++;
@@ -300,7 +301,8 @@ public sealed class PiConversation : IAsyncDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         await client.ConnectAsync(cancellationToken).ConfigureAwait(false);
         await RefreshHistoryAsync(cancellationToken).ConfigureAwait(false);
-        return await client.GetStateAsync(cancellationToken).ConfigureAwait(false);
+        using var connectState = await client.GetStateDocumentAsync(cancellationToken).ConfigureAwait(false);
+        return RecordStateResponse(_bridge, connectState) ?? PiEngineState.FromResponse(connectState);
     }
 
     public async Task RefreshHistoryAsync(CancellationToken cancellationToken = default)
@@ -342,8 +344,14 @@ public sealed class PiConversation : IAsyncDisposable
         client.EventReceived += Counter;
         try
         {
-            var (text, aborted) = await client.PromptAndWaitAsync(message, textProgress, cancellationToken).ConfigureAwait(false);
-            var state = await client.GetStateAsync(cancellationToken).ConfigureAwait(false);
+            // Prompt acceptance is a genuine poll response: record it through
+            // the bridge like stats/state. The hook runs synchronously on the
+            // live document before disposal; bridge recording never throws.
+            var bridge = _bridge;
+            var (text, aborted) = await client.PromptAndWaitAsync(message, textProgress, cancellationToken,
+                acceptance => bridge?.RecordResponse(acceptance)).ConfigureAwait(false);
+            using var receiptState = await client.GetStateDocumentAsync(cancellationToken).ConfigureAwait(false);
+            var state = RecordStateResponse(bridge, receiptState) ?? PiEngineState.FromResponse(receiptState);
             var receipt = new PiRunReceipt(
                 Settled: true,
                 Aborted: aborted,
@@ -423,9 +431,34 @@ public sealed class PiConversation : IAsyncDisposable
         return PiEventTap.DecodeDocument(response, DateTime.UtcNow) as StatsSnapshot;
     }
 
-    /// <summary>Engine state of the CURRENT process (model, thinking, session, counts).</summary>
-    public Task<PiEngineState> GetStateAsync(CancellationToken cancellationToken = default)
-        => Client.GetStateAsync(cancellationToken);
+    /// <summary>
+    /// Engine state of the CURRENT process (model, thinking, session, counts).
+    /// Records the raw response through the attached bridge's approved
+    /// boundary (same pattern as GetSessionStatsAsync); with no bridge
+    /// attached this is a pure read returning the same typed state.
+    /// </summary>
+    public async Task<PiEngineState> GetStateAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await Client.GetStateDocumentAsync(cancellationToken).ConfigureAwait(false);
+        var recorded = RecordStateResponse(_bridge, response);
+        return recorded is not null ? recorded : PiEngineState.FromResponse(response);
+    }
+
+    /// <summary>
+    /// Approved poll boundary shared by the live path and tests: refresh the
+    /// bridge binding when one is attached, then decode the same document
+    /// through the tap's redacting path. Pure read — the document is never
+    /// mutated and decode fails closed inside the tap. Null means the
+    /// response decoded but was not a state shape (a future Pi change), in
+    /// which case callers fall back to the direct typed parse of the same
+    /// observed document — never a hollow value.
+    /// </summary>
+    internal static PiEngineState? RecordStateResponse(FeedBridge? bridge, JsonDocument response)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        bridge?.RecordResponse(response);
+        return PiEventTap.DecodeDocument(response, DateTime.UtcNow) is EngineStateObserved observed ? observed.State : null;
+    }
 
     /// <summary>Models this connection reports selectable. Query per connection; never cache across processes.</summary>
     public Task<IReadOnlyList<PiModelOption>> GetAvailableModelsAsync(CancellationToken cancellationToken = default)

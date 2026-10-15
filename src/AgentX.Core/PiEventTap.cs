@@ -259,7 +259,11 @@ public sealed class PiEventTap : IDisposable
         var wireTruncated = false;
         var collectCapped = false;
         var outputTotal = 0;
-        if (root.TryGetProperty("result", out var result) && result.ValueKind == JsonValueKind.Object)
+        // A missing result object means the wire delivered no output at all:
+        // ResultPresent stays false so the render says "not captured"
+        // instead of passing an empty preview as complete evidence.
+        var resultPresent = root.TryGetProperty("result", out var result) && result.ValueKind == JsonValueKind.Object;
+        if (resultPresent)
         {
             var collected = CollectText(result, MaxOutputChars);
             text = collected.Kept;
@@ -282,7 +286,7 @@ public sealed class PiEventTap : IDisposable
         var kept = tapCut && redacted.Length > MaxOutputChars ? redacted[..MaxOutputChars] : redacted;
         var preview = Slice(kept, MaxOutputPreview);
         return new ToolEnded(observedAtUtc, callId, name, isError, duration, exit, wireTruncated, tapCut,
-            outputTotal, Encoding.UTF8.GetByteCount(kept), preview, kept);
+            outputTotal, Encoding.UTF8.GetByteCount(kept), preview, kept, resultPresent);
     }
 
     private static AgentXEvent DecodeResponse(JsonElement root, JsonDocument document, DateTime observedAtUtc)

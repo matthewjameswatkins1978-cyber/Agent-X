@@ -189,12 +189,15 @@ public sealed record ToolProgress(DateTime ObservedAtUtc, string CallId, string 
 /// the tool itself failed. A command can exit nonzero with IsError=false.
 /// OutputChars/RetainedBytes describe what the tap actually kept; the wire
 /// Truncated flag and the tap's own TapTruncated flag are reported
-/// separately so silent evidence loss is impossible.
+/// separately so silent evidence loss is impossible. ResultPresent tells a
+/// delivered-but-empty result apart from a missing one: absent output renders
+/// an explicit [result not captured] marker instead of passing as complete.
 /// </summary>
 public sealed record ToolEnded(
     DateTime ObservedAtUtc, string CallId, string ToolName, bool IsError,
     long? DurationMs, int? ExitCode, bool WireTruncated, bool TapTruncated,
-    int OutputChars, int RetainedBytes, string OutputPreview, string RetainedText)
+    int OutputChars, int RetainedBytes, string OutputPreview, string RetainedText,
+    bool ResultPresent)
     : AgentXEvent(ObservedAtUtc, "tool_execution_end")
 {
     internal override int RetainedChars() => RetainedText.Length;
@@ -207,13 +210,14 @@ public sealed record ToolEnded(
             : "ok";
         var timing = DurationMs is long ms ? $" in {ms} ms" : string.Empty;
         var marker = CutSuffix(WireTruncated || TapTruncated, Omitted(OutputChars, RetainedText.Length), Omitted(RetainedText.Length, OutputPreview.Length));
+        var missing = ResultPresent ? string.Empty : "…[result not captured]";
         return level switch
         {
             VisibilityLevel.Compact => $"Tool {ToolName}: {status}.{timing}",
-            VisibilityLevel.Detailed => $"Tool {ToolName}: {status}.{timing} {OutputPreview}{marker}",
+            VisibilityLevel.Detailed => $"Tool {ToolName}: {status}.{timing} {OutputPreview}{marker}{missing}",
             _ => $"Tool {ToolName} [{ToolCallAnnounced.ShortId(CallId)}]: {status}.{timing} " +
-                 $"(source {OutputChars} chars, stored {RetainedText.Length} chars / {RetainedBytes} UTF-8 bytes, wire-truncated: {WireTruncated}, tap-truncated: {TapTruncated}) " +
-                 $"{OutputPreview}{marker}",
+                 $"(source {OutputChars} chars, stored {RetainedText.Length} chars / {RetainedBytes} UTF-8 bytes, wire-truncated: {WireTruncated}, tap-truncated: {TapTruncated}, result-present: {ResultPresent}) " +
+                 $"{OutputPreview}{marker}{missing}",
         };
     }
 }
