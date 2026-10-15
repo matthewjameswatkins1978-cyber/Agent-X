@@ -4,11 +4,12 @@ namespace AgentX.Core.Tests;
 
 /// <summary>
 /// Beautiful Feed PR2 fidelity: these are the parser shapes the renderer
-/// sees. They pin the CommonMark-aligned corrections (strikethrough, ***bold
-/// italic***, __strong__, intraword underscores, backslash escapes,
+/// sees. They pin the deliberate-subset contract (strikethrough, ***bold
+/// italic***, __strong__, whole-run delimiter flanking, backslash escapes,
 /// double-backtick spans, autolink boundaries, nested-list depth and merged
 /// blockquotes) without needing a render platform - pixel rendering stays
-/// evidenced by the running-app screenshots.
+/// evidenced by the running-app screenshots. CommonMark is the reference, not
+/// the claim: these tests define exactly what the subset supports.
 /// </summary>
 public sealed class MarkdownLiteFidelityTests
 {
@@ -57,6 +58,65 @@ public sealed class MarkdownLiteFidelityTests
         var inlines = Inline("foo*bar*baz");
         var italic = Assert.Single(inlines, i => i.Kind == MdInlineKind.Italic);
         Assert.Equal("bar", italic.Text);
+    }
+
+    [Fact]
+    public void DoubleUnderscoreIntraword_StaysFullyLiteral()
+    {
+        // Lucy review counterexample: after a failed __ run the parser must
+        // not re-enter on a shifted underscore and pair from inside the run.
+        const string text = "foo__bar__baz";
+        var inlines = Inline(text);
+        Assert.DoesNotContain(inlines,
+            i => i.Kind is MdInlineKind.Italic or MdInlineKind.Bold or MdInlineKind.BoldItalic);
+        Assert.Equal(text, string.Concat(inlines.Select(i => i.Text)));
+    }
+
+    [Fact]
+    public void TripleUnderscoreIntraword_StaysFullyLiteral()
+    {
+        const string text = "foo___bar___baz";
+        var inlines = Inline(text);
+        Assert.DoesNotContain(inlines,
+            i => i.Kind is MdInlineKind.Italic or MdInlineKind.Bold or MdInlineKind.BoldItalic);
+        Assert.Equal(text, string.Concat(inlines.Select(i => i.Text)));
+    }
+
+    [Fact]
+    public void DoubleAsteriskIntraword_StillStrong()
+    {
+        // '*' keeps its intraword rule; only '_' is barred on both sides.
+        var inlines = Inline("foo**bar**baz");
+        var bold = Assert.Single(inlines, i => i.Kind == MdInlineKind.Bold);
+        Assert.Equal("bar", bold.Text);
+        Assert.Equal("foobarbaz", string.Concat(inlines.Select(i => i.Text)));
+    }
+
+    [Fact]
+    public void WhitespaceAfterOpeningRun_NeverEmphasises()
+    {
+        foreach (var text in new[] { "** bold**", "__ strong__", "* italic*" })
+        {
+            var inlines = Inline(text);
+            Assert.DoesNotContain(inlines,
+                i => i.Kind is MdInlineKind.Italic or MdInlineKind.Bold or MdInlineKind.BoldItalic);
+            Assert.Equal(text, string.Concat(inlines.Select(i => i.Text)));
+        }
+    }
+
+    [Fact]
+    public void ValidEmphasisForms_SurviveWholeRunFlanking()
+    {
+        Assert.Single(Inline("__strong__ text"),
+            i => i.Kind == MdInlineKind.Bold && i.Text == "strong");
+        Assert.Single(Inline("**bold** now"),
+            i => i.Kind == MdInlineKind.Bold && i.Text == "bold");
+        Assert.Single(Inline("***both ways***"),
+            i => i.Kind == MdInlineKind.BoldItalic && i.Text == "both ways");
+        Assert.Single(Inline("foo*bar*baz"),
+            i => i.Kind == MdInlineKind.Italic && i.Text == "bar");
+        Assert.Contains(Inline(@"\*literal\*"),
+            i => i.Kind == MdInlineKind.Text && i.Text == "*literal*");
     }
 
     [Fact]

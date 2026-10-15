@@ -14,9 +14,12 @@ Machine for every number and image below: `MATMUS69-SCUMPU`, Windows NT
 
 - Strikethrough (`~~del~~`) and `***bold italic***` inline kinds; `__strong__`
   parses as bold.
-- One delimiter run pairs as a whole; `_` emphasis never opens or closes inside
-  a word (`snake_case`, `file_name_with_underscores` stay literal), `*` keeps
-  CommonMark's looser intraword rule.
+- Whole-run delimiter flanking (deliberate subset, not full CommonMark —
+  see `docs/live-visual-grammar.md`): the entire run must open against
+  non-whitespace, `_` additionally at a word boundary on both sides
+  (`snake_case`, `foo__bar__baz`, `** bold**` stay literal), `*` keeps its
+  looser intraword rule (`foo*bar*baz`, `foo**bar**baz` still emphasise), and
+  an unmatched run stays literal as a whole — never re-paired from inside.
 - Backslash + ASCII punctuation escapes (`\*not emphasis\*`).
 - Double-backtick code spans (`` ` `` inside a span).
 - Autolinks require a word boundary (`xhttps://…` is text).
@@ -49,13 +52,16 @@ Machine for every number and image below: `MATMUS69-SCUMPU`, Windows NT
 
 ## Automated evidence
 
-`dotnet test AgentX.sln -c Release`: **447/447 green** (140 App + 307 Core;
-baseline was 129 + 293). New coverage:
+`dotnet test AgentX.sln -c Release`: **452/452 green** (140 App + 312 Core;
+baseline was 129 + 293). New coverage — round 1 delivered 447; round 2
+(Lucy's delimiter review) added 5 whole-run flanking regressions:
 
-- `tests/AgentX.Core.Tests/MarkdownLiteFidelityTests.cs` — 14 parser contracts
-  (strikethrough, bold-italic, `__strong__`, intraword underscores, escapes,
-  double-backtick spans, autolink boundaries, both nesting styles, quote
-  merging, content-preservation properties).
+- `tests/AgentX.Core.Tests/MarkdownLiteFidelityTests.cs` — 19 parser contracts
+  (strikethrough, bold-italic, `__strong__`, whole-run delimiter flanking:
+  `foo__bar__baz` / `foo___bar___baz` / `** bold**` stay literal while
+  `foo*bar*baz` / `foo**bar**baz` still emphasise; escapes, double-backtick
+  spans, autolink boundaries, both nesting styles, quote merging,
+  content-preservation properties).
 - `tests/AgentX.App.Tests/MarkdownViewTests.cs` — 9 renderer contracts asserted
   on the real `MarkdownView` inline tree (heading steps at 13/14/16, code in
   headings, strike decoration, muted link URLs, list indentation, bold-italic

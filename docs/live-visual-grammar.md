@@ -85,10 +85,14 @@ lightness intent, not claimed bit-exact terminal output.
   lookup needs a protocol-surface change, which is Agent ONE's domain.
 - No usage/cost figures anywhere: no host poll site exists (adding RPC
   surface is Agent ONE's domain), so none are shown rather than invented.
-- Markdown subset documented in `MarkdownLite`: GFM-flavoured (strikethrough,
-  `__strong__` / `***bold italic***`, backslash escapes, double-backtick code
-  spans, nested-list depth from an indent stack, merged blockquotes, intraword
-  `_` kept literal); unknown constructs (tables, footnotes, HTML, LaTeX) stay
+- Markdown subset documented in `MarkdownLite` — a deliberate subset, NOT
+  full CommonMark: strikethrough, `__strong__` / `***bold italic***`,
+  backslash escapes, double-backtick code spans, nested-list depth from an
+  indent stack, merged blockquotes. Emphasis uses simplified whole-run
+  flanking: `*` only opens against non-whitespace, `_` only at a word
+  boundary on both sides, and an unmatched delimiter run stays literal as a
+  whole (`foo__bar__baz` and `** bold**` never emphasise; `foo*bar*baz`
+  still does). Unknown constructs (tables, footnotes, HTML, LaTeX) stay
   literal, never dropped; links underline without navigating.
 - Glyph fallback (PR2): the bundled Geist/Monaspace faces are Latin-only, so
   missing glyphs fall back in a fixed order — Segoe UI Symbol (arrows, box

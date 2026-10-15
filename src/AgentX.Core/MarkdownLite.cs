@@ -43,10 +43,13 @@ public sealed record MdDocument(IReadOnlyList<MdBlock> Blocks)
 /// <summary>
 /// Restrained Markdown subset for assistant narrative (Pi-style: headings,
 /// bold / italic / bold-italic, strikethrough, code spans and fences, nested
-/// lists, links, quotes, rules, backslash escapes). Single-pass, no regex,
-/// never throws: unclosed or exotic markup degrades to literal text so no
-/// content is ever lost. Unknown constructs (tables, footnotes, HTML, LaTeX)
-/// stay literal — documented, not silently dropped.
+/// lists, links, quotes, rules, backslash escapes). Deliberate subset, NOT
+/// full CommonMark: emphasis uses simplified whole-run flanking ('*' only
+/// opens against non-whitespace, '_' only at word boundaries on both sides,
+/// an unmatched delimiter run stays literal as a whole). Single-pass, no
+/// regex, never throws: unclosed or exotic markup degrades to literal text so
+/// no content is ever lost. Unknown constructs (tables, footnotes, HTML,
+/// LaTeX) stay literal — documented, not silently dropped.
 /// </summary>
 public static class MarkdownLite
 {
@@ -276,8 +279,10 @@ public static class MarkdownLite
         return columns;
     }
 
-    /// <summary>Left-to-right inline scan. Code spans are opaque; unclosed markers stay literal;
-    /// '_' emphasis never starts or ends inside a word, so snake_case stays literal.</summary>
+    /// <summary>Left-to-right inline scan. Code spans are opaque; an unmatched delimiter
+    /// run stays literal as a whole (never re-paired one character at a time), and '_'
+    /// emphasis only opens or closes at a word boundary, so snake_case and
+    /// foo__bar__baz stay literal.</summary>
     public static IReadOnlyList<MdInline> ParseInline(string text)
     {
         var result = new List<MdInline>();
@@ -328,10 +333,14 @@ public static class MarkdownLite
 
             if (c is '*' or '_')
             {
-                // One delimiter run (*** / ** / * and ___ / __ / _) pairs as a
-                // whole, so ***bold italic*** and **strong** parse exactly;
-                // with no matching close, one delimiter falls through literal
-                // so a shorter run can still pair instead of losing content.
+                // Whole-run flanking (Lucy review): the ENTIRE delimiter run
+                // (*** / ** / * and ___ / __ / _) must pass the opener check —
+                // no shifted re-entry one character at a time. Simplified
+                // subset rule, not full CommonMark: the run must be followed by
+                // non-whitespace to open ('** bold**' stays literal), and '_'
+                // must additionally start at a word boundary ('foo__bar__baz'
+                // never emphasises). An unmatched run then stays literal in
+                // full, so no later delimiter can pair from inside it.
                 var run = 1;
                 while (i + run < text.Length && text[i + run] == c)
                 {
@@ -339,14 +348,13 @@ public static class MarkdownLite
                 }
 
                 var width = Math.Min(run, 3);
-                var opens = width > 1
-                    || (c == '*'
-                        ? i + 1 < text.Length && !char.IsWhiteSpace(text[i + 1])
-                        : i == 0 || !char.IsLetterOrDigit(text[i - 1]));
+                var opens = i + run < text.Length
+                    && !char.IsWhiteSpace(text[i + run])
+                    && (c == '*' || i == 0 || !char.IsLetterOrDigit(text[i - 1]));
 
-                // '_' never opens or closes inside a word, so snake_case and
-                // file_name_with_underscores stay literal; '*' keeps
-                // CommonMark's looser intraword rule.
+                // '_' also closes only at a word boundary (snake_case and
+                // file_name_with_underscores stay literal); '*' keeps its
+                // looser intraword rule, so foo*bar*baz still emphasises.
                 bool ClosesAt(int at)
                     => at > i + width
                         && !char.IsWhiteSpace(text[at - 1])
@@ -375,8 +383,9 @@ public static class MarkdownLite
                     continue;
                 }
 
-                literal.Append(c);
-                i++;
+                // Unmatched: the WHOLE run is literal and is skipped whole.
+                literal.Append(text, i, run);
+                i += run;
                 continue;
             }
 
