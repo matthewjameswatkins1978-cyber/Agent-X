@@ -84,6 +84,10 @@ public partial class MainWindow : Window
     // True while a connect or reconnect is underway: blocks re-entrant
     // Connect/Reconnect/switch transitions. Set alongside _piBusy on UI thread.
     private bool _connecting;
+    // Which legacy workspace the in-flight connect/reconnect belongs to:
+    // cards must show Connecting only on that entry, never on bystanders.
+    // Set and cleared together with _connecting, UI thread only.
+    private string? _connectingKey;
 
     // Genuine multiworker runtime (one manager per app): worker tabs render
     // worker.Feed; selection is a view pointer only — background workers are
@@ -1370,6 +1374,7 @@ public partial class MainWindow : Window
         finally
         {
             _connectingWorkers.Remove(id);
+            UpdateTabDots();
         }
     }
 
@@ -1458,6 +1463,7 @@ public partial class MainWindow : Window
         finally
         {
             _connectingWorkers.Remove(id);
+            UpdateTabDots();
         }
     }
 
@@ -1506,6 +1512,7 @@ public partial class MainWindow : Window
         }
 
         _connecting = true;
+        _connectingKey = choice.Key;
         PiConnectionState.Text = "Connecting…";
         // The factory captures each fresh client for the observability bridge
         // (initial connect AND every reconnect swap) without touching Core.
@@ -1562,6 +1569,11 @@ public partial class MainWindow : Window
         finally
         {
             _connecting = false;
+            _connectingKey = null;
+            // Cards and footer read the flags: refresh AFTER clearing, or a
+            // finished connect keeps showing Connecting (the mid-flight
+            // UpdateTabDots above runs while the flags are still set).
+            UpdateTabDots();
         }
     }
 
@@ -1615,6 +1627,7 @@ public partial class MainWindow : Window
         }
 
         _connecting = true;
+        _connectingKey = _connectedKey;
         PiConnectionState.Text = "Reconnecting…";
         // Owner lock: reconnect restores the workspace this conversation was
         // opened for, even if the picker selection moved meanwhile. A selection
@@ -1623,6 +1636,7 @@ public partial class MainWindow : Window
         if (owner is null)
         {
             _connecting = false;
+            _connectingKey = null;
             StatusText.Text = "No workspace owns this connection — disconnect and reconnect.";
             return;
         }
@@ -1652,6 +1666,8 @@ public partial class MainWindow : Window
         finally
         {
             _connecting = false;
+            _connectingKey = null;
+            UpdateTabDots();
         }
     }
 

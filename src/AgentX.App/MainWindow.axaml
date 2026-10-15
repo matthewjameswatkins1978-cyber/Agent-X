@@ -101,10 +101,17 @@
          left/right edges. Pages keep their controls so scroll, selection,
          composer input and feed survive page switches. -->
     <Grid Grid.Row="1" Grid.Column="1" RowDefinitions="Auto,Auto,*" RowSpacing="0" Margin="8,8,0,0">
-      <ScrollViewer Grid.Row="0" HorizontalScrollBarVisibility="Auto"
-                    VerticalScrollBarVisibility="Disabled">
-        <StackPanel x:Name="ContextCards" Orientation="Horizontal" Spacing="8" />
-      </ScrollViewer>
+      <Grid Grid.Row="0" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+        <ScrollViewer Grid.Column="0" x:Name="CardScroller" HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Disabled">
+          <StackPanel x:Name="ContextCards" Orientation="Horizontal" Spacing="8" />
+        </ScrollViewer>
+        <Button Grid.Column="1" x:Name="AddContextButton" Classes="AxIconBtn" Click="AddContextButton_OnClick"
+                ToolTip.Tip="Add project" AutomationProperties.Name="Add project"
+                VerticalAlignment="Center" MinWidth="32" MinHeight="40">
+          <app:AxIcon Kind="Add" />
+        </Button>
+      </Grid>
       <Border Grid.Row="1" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="0,0,0,1" Margin="0,8,0,0" />
       <Grid Grid.Row="2">
       <!-- Overview: real workspace state, activity, evidence. No invented cards. -->
@@ -441,15 +448,17 @@
     <Border Grid.Row="2" Grid.Column="1" BorderBrush="{DynamicResource Ax.Border}"
             BorderThickness="0,1,0,0" Padding="0,6,0,0" Background="Transparent">
       <StackPanel Spacing="2">
+        <StackPanel x:Name="FooterTransient" />
         <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
           <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
             <app:AxIcon Kind="Branch" Width="14" Height="14" VerticalAlignment="Center" />
             <TextBlock x:Name="FooterContextText" Text="Main" FontSize="12"
                        Foreground="{DynamicResource Ax.Muted}" VerticalAlignment="Center"
-                       TextTrimming="CharacterEllipsis" />
+                       TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
           </StackPanel>
           <TextBlock Grid.Column="1" x:Name="FooterEngineText" FontSize="12"
-                     Foreground="{DynamicResource Ax.Muted}" VerticalAlignment="Center" />
+                     Foreground="{DynamicResource Ax.Muted}" VerticalAlignment="Center"
+                     TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
           <Button Grid.Column="2" x:Name="NoticeToggle" Content="i" Width="20" Height="20"
                   FontSize="11" Padding="0" CornerRadius="10" BorderThickness="1"
                   BorderBrush="{DynamicResource Ax.Muted}" Background="Transparent"
@@ -457,7 +466,6 @@
                   IsVisible="False" Click="NoticeToggle_OnClick"
                   ToolTip.Tip="Show notice" AutomationProperties.Name="Show notice" />
         </Grid>
-        <StackPanel x:Name="FooterTransient" />
         <!-- Legacy footer segments: hidden write-model for Checkpoint A.
              StatusText is reparented into FooterTransient in code so all
              existing writes keep working; the compact row above is the

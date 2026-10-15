@@ -6,13 +6,77 @@ namespace AgentX.App.Tests;
 public sealed class ContextCardsTests
 {
     [Theory]
-    [InlineData(true, false, "Working")]
-    [InlineData(false, true, "Connecting")]
-    [InlineData(false, false, "Idle")]
-    [InlineData(true, true, "Working")]
-    public void StateWord_BusyBeatsConnecting_BeatsIdle(bool busy, bool connecting, string expected)
+    [InlineData(true, false, false, "Working")]
+    [InlineData(true, true, false, "Working")]
+    [InlineData(false, true, false, "Connecting")]
+    [InlineData(false, false, true, "Idle")]
+    [InlineData(false, false, false, "Not connected")]
+    [InlineData(true, false, true, "Working")]
+    public void StateWord_DistinguishesConnectionStates(bool busy, bool connecting, bool connected, string expected)
     {
-        Assert.Equal(expected, ContextCards.StateWordFor(busy, connecting));
+        Assert.Equal(expected, ContextCards.StateWordFor(busy, connecting, connected));
+    }
+
+    [Fact]
+    public void DisconnectedWorker_IsNeverShownAsIdle()
+    {
+        var card = ContextCards.WorkerCard("w1", "Agent ONE", "proj", false, false, false, true);
+
+        Assert.Equal("Not connected", card.StateWord);
+        Assert.Equal("Not connected · proj", card.StatusLine);
+    }
+
+    [Theory]
+    [InlineData(696, 1, 40, 648)]
+    [InlineData(696, 2, 40, 320)]
+    [InlineData(696, 6, 40, 200)]
+    [InlineData(0, 2, 40, 200)]
+    [InlineData(696, 0, 40, 200)]
+    public void CardWidth_BalancesAcrossViewport_FloorsAt200(double viewport, int count, double add, double expected)
+    {
+        Assert.Equal(expected, ContextCards.CardWidth(viewport, count, add));
+    }
+
+    [Fact]
+    public void CardsEqual_IgnoresNothing_ComparesOrderAndState()
+    {
+        var a = ContextCards.WorkerCard("w1", "Agent ONE", "p", true, false, false, true);
+        var b = ContextCards.WorkerCard("w1", "Agent ONE", "p", true, false, false, true);
+        var moved = ContextCards.WorkerCard("w1", "Agent ONE", "p", true, false, false, false);
+
+        var other = ContextCards.WorkerCard("w2", "Agent TWO", "q", false, false, false, false);
+
+        Assert.True(ContextCards.CardsEqual([a], [b]));
+        Assert.False(ContextCards.CardsEqual([a], [moved]));
+        Assert.False(ContextCards.CardsEqual([a], [a, b]));
+        Assert.False(ContextCards.CardsEqual([a, other], [other, a]));
+    }
+
+    [Theory]
+    [InlineData("Connection failed: timeout — nothing connected.", true)]
+    [InlineData("Workspace registry unreadable — registration disabled.", true)]
+    [InlineData("Cannot create worker: access denied.", true)]
+    [InlineData("Folder picker failed: cancelled.", true)]
+    [InlineData("Main selected — press Connect.", false)]
+    [InlineData("Copied message #5 (120 chars) byte-for-byte.", false)]
+    [InlineData("Pi replied with 258 characters — healthy run.", false)]
+    [InlineData("Streaming… 120 chars in 3 UI updates.", false)]
+    [InlineData("Worker 'x' never connected — press Connect first.", false)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    public void IsAlert_FlagsWarningsNotRoutine(string? text, bool expected)
+    {
+        Assert.Equal(expected, ContextCards.IsAlert(text));
+    }
+
+    [Fact]
+    public void BranchNeedsRefresh_NullOrStale_True_Fresh_False()
+    {
+        var now = DateTime.UtcNow;
+        Assert.True(ContextCards.BranchNeedsRefresh(null, now));
+        Assert.True(ContextCards.BranchNeedsRefresh(now - TimeSpan.FromMinutes(6), now));
+        Assert.False(ContextCards.BranchNeedsRefresh(now - TimeSpan.FromMinutes(4), now));
+        Assert.False(ContextCards.BranchNeedsRefresh(now, now));
     }
 
     [Fact]
@@ -31,7 +95,7 @@ public sealed class ContextCardsTests
         var card = ContextCards.WorkspaceCard("legacy", "Main", string.Empty, false, false, false, true);
 
         Assert.False(card.IsWorker);
-        Assert.Equal("Idle", card.StatusLine);
+        Assert.Equal("Not connected", card.StatusLine);
     }
 
     [Fact]

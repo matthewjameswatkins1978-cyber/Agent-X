@@ -21,7 +21,7 @@ namespace AgentX.App;
 /// </summary>
 public partial class MainWindow
 {
-    private readonly Dictionary<string, string?> _gitBranchCache = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (string? Branch, DateTime CheckedUtc)> _gitBranchCache = new(StringComparer.Ordinal);
     private CancellationTokenSource? _gitBranchCts;
 
     /// One-time shell wiring after the handle exists.
@@ -46,19 +46,36 @@ public partial class MainWindow
             }
         };
         SyncRailSelection();
+        CardScroller.GetObservable(Visual.BoundsProperty).Subscribe(new CardWidthWatcher(this));
         RebuildContextCards();
         RefreshCompactFooter();
     }
 
-    // Expandable notice (Lucy Checkpoint A): normal operation shows exactly
-    // one footer line. A message lights the toggle; the text opens only on
-    // demand and never persists as a second strip. No severity guessing.
+    // Expandable notice (Lucy corrective pass): normal operation shows exactly
+    // one footer line. Routine information never lights the toggle; genuine
+    // warning/error language (ShellCards.IsAlert, tested both ways) greens it
+    // and opens the text on arrival. Writers are untouched; the full text is
+    // always one click away.
     private bool _noticeOpen;
+    private string? _lastNoticeText;
 
     private void SyncTransientVisibility()
     {
-        var hasNotice = !string.IsNullOrEmpty(StatusText.Text);
+        var text = StatusText.Text;
+        var hasNotice = !string.IsNullOrEmpty(text);
+        var alert = ShellCards.IsAlert(text);
+        if (hasNotice && alert && text != _lastNoticeText)
+        {
+            _noticeOpen = true;
+        }
+
+        if (hasNotice)
+        {
+            _lastNoticeText = text;
+        }
+
         NoticeToggle.IsVisible = hasNotice;
+        NoticeToggle.Foreground = alert ? AxTheme.GreenBrush : AxTheme.MutedBrush;
         FooterTransient.IsVisible = hasNotice && _noticeOpen;
         NoticeToggle.SetValue(AutomationProperties.NameProperty, _noticeOpen ? "Hide notice" : "Show notice");
         ToolTip.SetTip(NoticeToggle, _noticeOpen ? "Hide notice" : "Show notice");
@@ -72,13 +89,14 @@ public partial class MainWindow
 
     // --- Worker cards ----------------------------------------------------------
 
-    /// Rebuild the card strip from the tab-strip model (workers then legacy
-    /// entries, in tab order) plus the add-context button. Called from
-    /// UpdateTabDots, which already fans out to every selection, busy and
-    /// connection change.
+    /// Rebuild the card strip from the tab-strip model with minimal churn:
+    /// identical strips skip entirely (focus, scroll and selection
+    /// untouched); otherwise buttons are updated in place, added, moved or
+    /// removed by key, so a state change never destroys the focused
+    /// control. The Add button lives outside the strip in XAML.
     private void RebuildContextCards()
     {
-        ContextCards.Children.Clear();
+        var fresh = new List<ContextCardData>();
         var selectedKey = SelectedWorker?.Id ?? SelectedEntry?.Key;
         foreach (var item in WorkspaceTabs.Items)
         {
@@ -89,38 +107,64 @@ public partial class MainWindow
 
             if (tab.Tag is PiWorker worker)
             {
-                AddWorkerCard(worker, worker.Id == selectedKey);
+                fresh.Add(WorkerCardData(worker, worker.Id == selectedKey));
             }
             else if (tab.Tag is CatalogEntry entry)
             {
-                AddWorkspaceCard(entry, entry.Key == selectedKey);
+                fresh.Add(WorkspaceCardData(entry, entry.Key == selectedKey));
             }
         }
 
-        var add = new Button
+        var strip = ContextCards.Children;
+        var current = strip.OfType<Button>().Select(b => (b.Tag as CardView)?.Data).ToList();
+        if (current.All(d => d is not null) && ShellCards.CardsEqual(current!, fresh))
         {
-            Content = new AxIcon { Kind = AxIconKind.Add, Width = 14, Height = 14 },
-            Background = Brushes.Transparent,
-            BorderBrush = AxTheme.BorderBrush,
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(8),
-            Padding = new Thickness(10, 8),
-            VerticalAlignment = VerticalAlignment.Stretch,
-            };
-        add.SetValue(ToolTip.TipProperty, "Add project");
-        add.SetValue(AutomationProperties.NameProperty, "Add project");
-        add.Click += (_, _) => AddWorkspace_OnClick(add, new RoutedEventArgs());
-        ContextCards.Children.Add(add);
+            ApplyCardWidths();
+            return;
+        }
+
+        var byKey = strip.OfType<Button>()
+            .Where(b => (b.Tag as CardView)?.Data is not null)
+            .ToDictionary(
+                b => ((CardView)b.Tag!).Data.Key,
+                b => (CardView)b.Tag!,
+                StringComparer.Ordinal);
+        foreach (var key in byKey.Keys.Where(k => fresh.All(f => f.Key != k)).ToList())
+        {
+            strip.Remove(byKey[key].Button);
+        }
+
+        for (var i = 0; i < fresh.Count; i++)
+        {
+            var data = fresh[i];
+            if (!byKey.TryGetValue(data.Key, out var view) || !strip.Contains(view.Button))
+            {
+                view = CreateCardButton(data);
+                byKey[data.Key] = view;
+                strip.Insert(Math.Min(i, strip.Count), view.Button);
+            }
+            else
+            {
+                UpdateCardButton(view, data);
+                var at = strip.IndexOf(view.Button);
+                if (at != i)
+                {
+                    strip.Move(at, i);
+                }
+            }
+        }
+
+        ApplyCardWidths();
     }
 
-    private void AddWorkerCard(PiWorker worker, bool selected)
+    private ContextCardData WorkerCardData(PiWorker worker, bool selected)
     {
         var busy = _busyWorkers.Contains(worker.Id);
         var connecting = _connectingWorkers.Contains(worker.Id);
         var detail = busy
             ? "run in progress"
             : FolderShortName(worker.ProjectRoot, worker.Label);
-        var data = ShellCards.WorkerCard(
+        return ShellCards.WorkerCard(
             worker.Id,
             WorkerViewKey.DisplayLabel(worker.Id, worker.Label),
             detail,
@@ -128,10 +172,9 @@ public partial class MainWindow
             busy,
             connecting,
             selected);
-        AddCardButton(data, WorkerDotFill(worker.IsConnected, busy), () => SelectContextCard(worker.Id));
     }
 
-    private void AddWorkspaceCard(CatalogEntry entry, bool selected)
+    private ContextCardData WorkspaceCardData(CatalogEntry entry, bool selected)
     {
         var connected = entry.Key == _connectedKey && _conversation?.IsConnected == true;
         var busy = connected && _piBusy;
@@ -145,15 +188,14 @@ public partial class MainWindow
             root = string.Empty;
         }
 
-        var data = ShellCards.WorkspaceCard(
+        return ShellCards.WorkspaceCard(
             entry.Key,
             AxTheme.WorkspaceTabLabel(entry.IsLegacy, entry.Label),
             FolderShortName(root, entry.Label),
             connected,
             busy,
-            _connecting && !connected,
+            entry.Key == _connectingKey,
             selected);
-        AddCardButton(data, WorkerDotFill(connected, busy), () => SelectContextCard(entry.Key));
     }
 
     private static string FolderShortName(string root, string fallback)
@@ -167,13 +209,20 @@ public partial class MainWindow
         return string.IsNullOrWhiteSpace(name) ? fallback : name;
     }
 
-    private void AddCardButton(ContextCardData data, IBrush dotFill, Action onClick)
+    private sealed record CardView(
+        Button Button,
+        Avalonia.Controls.Shapes.Ellipse Dot,
+        TextBlock Name,
+        TextBlock Status,
+        ContextCardData Data);
+
+    private CardView CreateCardButton(ContextCardData data)
     {
         var dot = new Avalonia.Controls.Shapes.Ellipse
         {
             Width = 8,
             Height = 8,
-            Fill = dotFill,
+            Fill = WorkerDotFill(data.IsConnected, data.IsBusy),
             VerticalAlignment = VerticalAlignment.Center,
         };
         var name = new TextBlock
@@ -206,9 +255,73 @@ public partial class MainWindow
             MinWidth = 200,
         };
         button.SetValue(AutomationProperties.NameProperty, $"Select {data.Name}");
-        button.Click += (_, _) => onClick();
-        ContextCards.Children.Add(button);
+        button.Click += (_, _) => SelectContextCard(data.Key);
+        var view = new CardView(button, dot, name, status, data);
+        button.Tag = view;
+        return view;
     }
+
+    private void UpdateCardButton(CardView view, ContextCardData data)
+    {
+        var updated = view with { Data = data };
+        var index = ContextCards.Children.IndexOf(view.Button);
+        if (index >= 0)
+        {
+            view.Button.Tag = updated;
+        }
+
+        updated.Dot.Fill = WorkerDotFill(data.IsConnected, data.IsBusy);
+        updated.Name.Text = data.Name;
+        updated.Status.Text = data.StatusLine;
+        updated.Button.Background = data.IsSelected ? AxTheme.Surface2Brush : Brushes.Transparent;
+        updated.Button.BorderBrush = data.IsSelected ? AxTheme.BorderStrongBrush : AxTheme.BorderBrush;
+        updated.Button.SetValue(AutomationProperties.NameProperty, $"Select {data.Name}");
+    }
+
+    /// Share the viewport across cards (single card fills the strip so its
+    /// edges meet the page below; overflow scrolls past the 200px floor).
+    private void ApplyCardWidths()
+    {
+        var cards = ContextCards.Children.OfType<Button>()
+            .Where(b => b.Tag is CardView)
+            .ToList();
+        if (cards.Count == 0)
+        {
+            return;
+        }
+
+        var viewport = CardScroller.Bounds.Width;
+        if (viewport <= 0)
+        {
+            return;
+        }
+
+        var width = ShellCards.CardWidth(viewport, cards.Count, 44);
+        foreach (var card in cards)
+        {
+            if (double.IsNaN(card.Width) || Math.Abs(card.Width - width) >= 0.5)
+            {
+                card.Width = width;
+            }
+        }
+    }
+
+    /// Bounds subscription needs an observer, not a lambda.
+    private sealed class CardWidthWatcher(MainWindow window) : IObserver<Rect>
+    {
+        public void OnCompleted()
+        {
+        }
+
+        public void OnError(Exception error)
+        {
+        }
+
+        public void OnNext(Rect value) => window.ApplyCardWidths();
+    }
+
+    private void AddContextButton_OnClick(object? sender, RoutedEventArgs e)
+        => AddWorkspace_OnClick(sender, e);
 
     /// Drive the hidden tab strip: the existing SelectionChanged path owns
     /// the switch (coordinator guards, view save/restore, feed rebind).
@@ -276,7 +389,12 @@ public partial class MainWindow
         string? branch = null;
         if (!string.IsNullOrWhiteSpace(root))
         {
-            if (!_gitBranchCache.TryGetValue(root, out branch))
+            if (_gitBranchCache.TryGetValue(root, out var cached)
+                && !ShellCards.BranchNeedsRefresh(cached.CheckedUtc, DateTime.UtcNow))
+            {
+                branch = cached.Branch;
+            }
+            else
             {
                 RefreshGitBranchAsync(root);
             }
@@ -329,7 +447,8 @@ public partial class MainWindow
                     return;
                 }
 
-                _gitBranchCache[root] = branch;
+                _gitBranchCache[root] = (branch, DateTime.UtcNow);
+                RefreshCompactFooter();
                 RefreshCompactFooter();
             });
         }, cts.Token);
