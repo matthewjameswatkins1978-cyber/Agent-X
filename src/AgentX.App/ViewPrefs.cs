@@ -20,6 +20,13 @@ public sealed class ViewPrefs
     /// Unknown values fall back on load; Core preferences are untouched.
     public string Treatment { get; set; } = "Pi Faithful";
 
+    /// Beautiful Feed appearance display name ("Studio" default) and feed
+    /// prose size in px. Both validate on load and persist like Treatment;
+    /// Core preferences are untouched.
+    public string FeedAppearance { get; set; } = "Studio";
+
+    public double FeedFontSize { get; set; } = AxFeed.DefaultSize;
+
     public Dictionary<string, string> Drafts { get; set; } = new();
 
     /// True when the file existed but could not be parsed or read: the
@@ -78,6 +85,8 @@ public sealed class ViewPrefs
 
             prefs.Drafts ??= new Dictionary<string, string>();
             prefs.Treatment = AxTreatments.DisplayName(AxTreatments.Parse(prefs.Treatment));
+            prefs.FeedAppearance = AxFeed.DisplayName(AxFeed.Parse(prefs.FeedAppearance));
+            prefs.FeedFontSize = AxFeed.ClampSize(prefs.FeedFontSize);
             return prefs;
         }
         catch (JsonException ex)
@@ -149,6 +158,8 @@ public sealed class ViewPrefs
             {
                 RailExpanded = RailExpanded,
                 Treatment = Treatment,
+                FeedAppearance = FeedAppearance,
+                FeedFontSize = FeedFontSize,
                 Drafts = drafts,
             }));
             File.Move(tmp, path, overwrite: true);

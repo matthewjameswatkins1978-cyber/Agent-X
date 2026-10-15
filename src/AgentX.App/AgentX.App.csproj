@@ -18,6 +18,13 @@
     <ProjectReference Include="..\AgentX.Core\AgentX.Core.csproj" />
   </ItemGroup>
 
+  <!-- Beautiful Feed: bundled OFL statics (Geist + Monaspace, required faces only). -->
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\Fonts\**\*.otf" />
+    <!-- OFL texts travel inside the assembly next to the fonts they cover. -->
+    <AvaloniaResource Include="Assets\Fonts\*.txt" />
+  </ItemGroup>
+
   <!-- Focused unit tests cover the internal presentation helpers. -->
   <ItemGroup>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">

@@ -71,6 +71,11 @@ if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed." }
 Copy-Item (Join-Path (Join-Path $repo "packaging") "NOTICE.txt") (Join-Path $portableDir "NOTICE.txt")
 Copy-Item (Join-Path (Join-Path $repo "packaging") "THIRD-PARTY-NOTICES.txt") (Join-Path $portableDir "THIRD-PARTY-NOTICES.txt")
 Copy-Item (Join-Path (Join-Path $repo "packaging") "README-portable.txt") (Join-Path $portableDir "README.txt")
+# OFL texts accompany the embedded fonts: canonical copies live with the font
+# resources (src/AgentX.App/Assets/Fonts/); the portable root carries the same
+# bytes next to the notices that point at them.
+Copy-Item (Join-Path (Join-Path (Join-Path (Join-Path $repo "src") "AgentX.App") "Assets") "Fonts\OFL-Geist.txt") (Join-Path $portableDir "OFL-Geist.txt")
+Copy-Item (Join-Path (Join-Path (Join-Path (Join-Path $repo "src") "AgentX.App") "Assets") "Fonts\OFL-Monaspace.txt") (Join-Path $portableDir "OFL-Monaspace.txt")
 
 $sdk = (dotnet --version).Trim()
 $nodeVer = ""
@@ -109,7 +114,7 @@ Write-Utf8NoBom $manifestPath "$zipHash  $zipName"
 #    re-hash the zip.
 $verifyDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ax-dist-verify-" + [Guid]::NewGuid().ToString("N"))
 Expand-Archive -Path $zipPath -DestinationPath $verifyDir
-foreach ($rel in @("app\AgentX.App.exe", "app\AgentX.Core.dll", "README.txt", "NOTICE.txt", "THIRD-PARTY-NOTICES.txt", "version.txt")) {
+foreach ($rel in @("app\AgentX.App.exe", "app\AgentX.Core.dll", "README.txt", "NOTICE.txt", "THIRD-PARTY-NOTICES.txt", "version.txt", "OFL-Geist.txt", "OFL-Monaspace.txt")) {
     if (-not (Test-Path -LiteralPath (Join-Path $verifyDir $rel) -PathType Leaf)) {
         throw "Verification failed: exact path '$rel' missing after extraction -- README instructions would not match the layout."
     }

@@ -47,7 +47,28 @@ public static class AxTheme
     public static SolidColorBrush VioletBrush { get; } = New(PiPalette.Violet);
     public static SolidColorBrush CyanBrush { get; } = New(PiPalette.Cyan);
 
-    public static FontFamily MonoFont { get; } = new("Cascadia Code,Consolas,monospace");
+    // Beautiful Feed typography: bundled OFL families (see AxFeed). Chrome
+    // stays Geist Sans in both appearances; prose/mono/voice follow the
+    // feed appearance. Replaced (never mutated) on ApplyAppearance, then
+    // re-registered as Ax.* resources; feed rows rebuild through the
+    // existing RebuildConversationList path, so no new render machinery.
+    public static AxFeedAppearance CurrentAppearance { get; private set; } = AxFeedAppearance.Studio;
+
+    public static double FeedFontSize { get; private set; } = AxFeed.DefaultSize;
+
+    public static double FeedMonoSize => AxFeed.MonoSize(FeedFontSize);
+
+    public static double FeedLineHeight => AxFeed.LineHeight(FeedFontSize);
+
+    public static FontFamily ChromeFont { get; private set; } = NewFamily(AxFeed.ChromeSource);
+
+    public static FontFamily ProseFont { get; private set; } = NewFamily(AxFeed.ProseSource(AxFeedAppearance.Studio));
+
+    public static FontFamily VoiceFont { get; private set; } = NewFamily(AxFeed.VoiceSource(AxFeedAppearance.Studio));
+
+    public static FontFamily MonoFont { get; private set; } = NewFamily(AxFeed.MonoSource(AxFeedAppearance.Studio));
+
+    private static FontFamily NewFamily(string source) => new(source);
 
     private static SolidColorBrush New(string hex) => new(Color.Parse(hex));
 
@@ -156,6 +177,31 @@ public static class AxTheme
         }
 
         return $"Agent {id[..Math.Min(4, id.Length)]}";
+    }
+
+    /// Apply a feed appearance + size: repoint the font families, clamp the
+    /// size to AxFeed.Sizes, and (re)register the Ax.* font keys. Callers
+    /// rebuild the conversation list through the existing
+    /// RebuildConversationList path so already-rendered mono runs pick up
+    /// the new faces. Idempotent; safe before App resources exist.
+    public static void ApplyAppearance(AxFeedAppearance appearance, double fontSize)
+    {
+        CurrentAppearance = appearance;
+        FeedFontSize = AxFeed.ClampSize(fontSize);
+        ProseFont = NewFamily(AxFeed.ProseSource(appearance));
+        VoiceFont = NewFamily(AxFeed.VoiceSource(appearance));
+        MonoFont = NewFamily(AxFeed.MonoSource(appearance));
+
+        if (Application.Current is { } app)
+        {
+            app.Resources["Ax.ChromeFont"] = ChromeFont;
+            app.Resources["Ax.ProseFont"] = ProseFont;
+            app.Resources["Ax.VoiceFont"] = VoiceFont;
+            app.Resources["Ax.MonoFont"] = MonoFont;
+            app.Resources["Ax.FeedFontSize"] = FeedFontSize;
+            app.Resources["Ax.FeedMonoFontSize"] = FeedMonoSize;
+            app.Resources["Ax.FeedLineHeight"] = FeedLineHeight;
+        }
     }
 
     // --- Native dark title bar (Windows only, no custom chrome). ---

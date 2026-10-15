@@ -21,6 +21,15 @@ BUNDLED (.NET packages restored from nuget.org at build time)
    given build is the publish output plus `dotnet list package`. No
    copyleft (GPL/AGPL) components are expected; re-check before any RC.
 
+BUNDLED (font resources embedded in app/)
+--------------------------------------------------------------
+7. Geist + Monaspace static OTF (13 faces) embedded as Avalonia resources
+   in app/AgentX.App.dll from src/AgentX.App/Assets/Fonts/.
+   License: SIL Open Font License 1.1 for both families. Complete texts:
+   OFL-Geist.txt (upstream vercel/geist-font OFL.txt) and
+   OFL-Monaspace.txt (upstream githubnext/monaspace LICENSE),
+   present at the portable distribution root next to this file.
+
 NOT BUNDLED (external prerequisites, separate owners/licenses)
 --------------------------------------------------------------
 4. Pi coding agent 1.1.0 (@earendil-works/pi-coding-agent, npm)

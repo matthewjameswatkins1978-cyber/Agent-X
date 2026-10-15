@@ -204,7 +204,10 @@ public partial class MainWindow : Window
         ApplyTheme();
         ThemeCombo.ItemsSource = AgentXPreferences.KnownThemes;
         TreatmentCombo.ItemsSource = AxTreatments.Names;
+        FeedCombo.ItemsSource = AxFeed.Names;
+        FeedSizeCombo.ItemsSource = AxFeed.Sizes;
         AxTheme.Apply(AxTreatments.Parse(_viewPrefs.Treatment));
+        AxTheme.ApplyAppearance(AxFeed.Parse(_viewPrefs.FeedAppearance), _viewPrefs.FeedFontSize);
         _syncingPrefs = true;
         try
         {
@@ -2768,6 +2771,8 @@ public partial class MainWindow : Window
             VisibilityCombo.SelectedItem = _prefs.Visibility;
             ThemeCombo.SelectedItem = _prefs.Theme;
             TreatmentCombo.SelectedItem = AxTreatments.DisplayName(AxTreatments.Parse(_viewPrefs.Treatment));
+            FeedCombo.SelectedItem = AxFeed.DisplayName(AxFeed.Parse(_viewPrefs.FeedAppearance));
+            FeedSizeCombo.SelectedItem = AxFeed.ClampSize(_viewPrefs.FeedFontSize);
             ManagedPathsText.Text =
                 $"Sessions: {Path.Combine(ManagedRoot, "sessions")}\n" +
                 $"Registry: {WorkspaceRegistry.RegistryPath(ManagedRoot)}\n" +
@@ -2895,6 +2900,48 @@ public partial class MainWindow : Window
         {
             StatusText.Text = $"Could not save view preferences: {ex.Message}";
         }
+    }
+
+    /// Beautiful Feed appearance + size: same content and Pi colours, only
+    /// the voice changes. Fonts repoint live; rows rebuild through the
+    /// existing RebuildConversationList path (same cost profile as a tab
+    /// switch — a rare explicit action, never the streaming path). The
+    /// choice persists in view prefs (Core preferences untouched).
+    private void FeedCombo_OnChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingPrefs || FeedCombo.SelectedItem is not string name)
+        {
+            return;
+        }
+
+        ApplyFeedAppearance(AxFeed.Parse(name), _viewPrefs.FeedFontSize);
+    }
+
+    private void FeedSizeCombo_OnChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (_syncingPrefs || FeedSizeCombo.SelectedItem is not double size)
+        {
+            return;
+        }
+
+        ApplyFeedAppearance(AxFeed.Parse(_viewPrefs.FeedAppearance), size);
+    }
+
+    private void ApplyFeedAppearance(AxFeedAppearance appearance, double fontSize)
+    {
+        AxTheme.ApplyAppearance(appearance, fontSize);
+        _viewPrefs.FeedAppearance = AxFeed.DisplayName(appearance);
+        _viewPrefs.FeedFontSize = AxTheme.FeedFontSize;
+        try
+        {
+            SaveViewPrefs();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            StatusText.Text = $"Could not save view preferences: {ex.Message}";
+        }
+
+        RebuildConversationList();
     }
 
     /// Native dark title bar once the handle exists; all window behaviour
