@@ -1,0 +1,334 @@
+{
+  "machine": "MATMUS69-SCUMPU",
+  "os": "Microsoft Windows NT 10.0.26220.0",
+  "cores": 24,
+  "messages": 500,
+  "iters": 9,
+  "viewportRows": 40,
+  "results": [
+    {
+      "scenario": "parse-cold",
+      "n": 500,
+      "iter": 0,
+      "ms": 15.472
+    },
+    {
+      "scenario": "parse-cold",
+      "n": 500,
+      "iter": 1,
+      "ms": 7.858
+    },
+    {
+      "scenario": "parse-cold",
+      "n": 500,
+      "iter": 2,
+      "ms": 7.476
+    },
+    {
+      "scenario": "parse-cold",
+      "n": 500,
+      "iter": 3,
+      "ms": 7.317
+    },
+    {
+      "scenario": "parse-cold",
+      "n": 500,
+      "iter": 4,
+      "ms": 6.983
+    },
+    {
+      "scenario": "parse-cold",
+      "n": 500,
+      "iter": 5,
+      "ms": 7.065
+    },
+    {
+      "scenario": "parse-cold",
+      "n": 500,
+      "iter": 6,
+      "ms": 7.022
+    },
+    {
+      "scenario": "parse-cold",
+      "n": 500,
+      "iter": 7,
+      "ms": 7.762
+    },
+    {
+      "scenario": "parse-cold",
+      "n": 500,
+      "iter": 8,
+      "ms": 6.928
+    },
+    {
+      "scenario": "parse-warm",
+      "n": 500,
+      "iter": 0,
+      "ms": 7.22
+    },
+    {
+      "scenario": "parse-warm",
+      "n": 500,
+      "iter": 1,
+      "ms": 6.869
+    },
+    {
+      "scenario": "parse-warm",
+      "n": 500,
+      "iter": 2,
+      "ms": 6.956
+    },
+    {
+      "scenario": "parse-warm",
+      "n": 500,
+      "iter": 3,
+      "ms": 6.89
+    },
+    {
+      "scenario": "parse-warm",
+      "n": 500,
+      "iter": 4,
+      "ms": 6.722
+    },
+    {
+      "scenario": "parse-warm",
+      "n": 500,
+      "iter": 5,
+      "ms": 6.939
+    },
+    {
+      "scenario": "parse-warm",
+      "n": 500,
+      "iter": 6,
+      "ms": 6.986
+    },
+    {
+      "scenario": "parse-warm",
+      "n": 500,
+      "iter": 7,
+      "ms": 7.009
+    },
+    {
+      "scenario": "parse-warm",
+      "n": 500,
+      "iter": 8,
+      "ms": 6.887
+    },
+    {
+      "scenario": "rebuild-view",
+      "n": 1125,
+      "iter": 0,
+      "ms": 49.081
+    },
+    {
+      "scenario": "rebuild-view",
+      "n": 1125,
+      "iter": 1,
+      "ms": 7.81
+    },
+    {
+      "scenario": "rebuild-view",
+      "n": 1125,
+      "iter": 2,
+      "ms": 9.857
+    },
+    {
+      "scenario": "rebuild-view",
+      "n": 1125,
+      "iter": 3,
+      "ms": 10.854
+    },
+    {
+      "scenario": "rebuild-view",
+      "n": 1125,
+      "iter": 4,
+      "ms": 11.336
+    },
+    {
+      "scenario": "rebuild-view",
+      "n": 1125,
+      "iter": 5,
+      "ms": 10.112
+    },
+    {
+      "scenario": "rebuild-view",
+      "n": 1125,
+      "iter": 6,
+      "ms": 10.516
+    },
+    {
+      "scenario": "rebuild-view",
+      "n": 1125,
+      "iter": 7,
+      "ms": 7
+    },
+    {
+      "scenario": "rebuild-view",
+      "n": 1125,
+      "iter": 8,
+      "ms": 8.056
+    },
+    {
+      "scenario": "inline-rows",
+      "n": 40,
+      "iter": 0,
+      "ms": 99.809
+    },
+    {
+      "scenario": "inline-rows",
+      "n": 40,
+      "iter": 1,
+      "ms": 24.059
+    },
+    {
+      "scenario": "inline-rows",
+      "n": 40,
+      "iter": 2,
+      "ms": 25.691
+    },
+    {
+      "scenario": "inline-rows",
+      "n": 40,
+      "iter": 3,
+      "ms": 20.648
+    },
+    {
+      "scenario": "inline-rows",
+      "n": 40,
+      "iter": 4,
+      "ms": 20.01
+    },
+    {
+      "scenario": "inline-rows",
+      "n": 40,
+      "iter": 5,
+      "ms": 19.434
+    },
+    {
+      "scenario": "inline-rows",
+      "n": 40,
+      "iter": 6,
+      "ms": 19.373
+    },
+    {
+      "scenario": "inline-rows",
+      "n": 40,
+      "iter": 7,
+      "ms": 19.613
+    },
+    {
+      "scenario": "inline-rows",
+      "n": 40,
+      "iter": 8,
+      "ms": 19.517
+    },
+    {
+      "scenario": "appearance-sim",
+      "n": 1125,
+      "iter": 0,
+      "ms": 39.896
+    },
+    {
+      "scenario": "appearance-sim",
+      "n": 1125,
+      "iter": 1,
+      "ms": 32.813
+    },
+    {
+      "scenario": "appearance-sim",
+      "n": 1125,
+      "iter": 2,
+      "ms": 30.238
+    },
+    {
+      "scenario": "appearance-sim",
+      "n": 1125,
+      "iter": 3,
+      "ms": 29.171
+    },
+    {
+      "scenario": "appearance-sim",
+      "n": 1125,
+      "iter": 4,
+      "ms": 29.683
+    },
+    {
+      "scenario": "appearance-sim",
+      "n": 1125,
+      "iter": 5,
+      "ms": 38.846
+    },
+    {
+      "scenario": "appearance-sim",
+      "n": 1125,
+      "iter": 6,
+      "ms": 35.999
+    },
+    {
+      "scenario": "appearance-sim",
+      "n": 1125,
+      "iter": 7,
+      "ms": 25.775
+    },
+    {
+      "scenario": "appearance-sim",
+      "n": 1125,
+      "iter": 8,
+      "ms": 26.914
+    },
+    {
+      "scenario": "streaming",
+      "n": 2000,
+      "iter": 0,
+      "ms": 29.028
+    },
+    {
+      "scenario": "streaming",
+      "n": 2000,
+      "iter": 1,
+      "ms": 26.111
+    },
+    {
+      "scenario": "streaming",
+      "n": 2000,
+      "iter": 2,
+      "ms": 40.253
+    },
+    {
+      "scenario": "streaming",
+      "n": 2000,
+      "iter": 3,
+      "ms": 31.191
+    },
+    {
+      "scenario": "streaming",
+      "n": 2000,
+      "iter": 4,
+      "ms": 30.578
+    },
+    {
+      "scenario": "streaming",
+      "n": 2000,
+      "iter": 5,
+      "ms": 27.132
+    },
+    {
+      "scenario": "streaming",
+      "n": 2000,
+      "iter": 6,
+      "ms": 30.941
+    },
+    {
+      "scenario": "streaming",
+      "n": 2000,
+      "iter": 7,
+      "ms": 30.443
+    },
+    {
+      "scenario": "streaming",
+      "n": 2000,
+      "iter": 8,
+      "ms": 31.244
+    }
+  ]
+}

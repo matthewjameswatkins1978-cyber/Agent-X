@@ -1,0 +1,85 @@
+{
+  "tag": "baseline",
+  "app": "D:\\Projects\\wt-feed-baseline\\src\\AgentX.App\\bin\\Release\\net10.0\\AgentX.App.exe",
+  "managedRoot": "D:\\Projects\\wt-agent-x-feed-pr2\\.scratch\\profile",
+  "started": "2026-10-15T07:45:47.7165847+01:00",
+  "pid": 612,
+  "windowHandle": {
+    "value": 45091608
+  },
+  "captureMethod": "PrintWindow PW_RENDERFULLCONTENT (screen CopyFromScreen unavailable in this session)",
+  "connectMs": 3962.9,
+  "connectionState": "Connected",
+  "restoredRows": 1,
+  "statusAfterConnect": "Pi runs in D:\\Projects\\wt-agent-x-feed-pr2\\.scratch\\profile\\agent-cwd with your user authority.",
+  "switches": [
+    {
+      "control": "FeedCombo",
+      "value": "Studio",
+      "handlerMs": 22.1
+    },
+    {
+      "control": "FeedSizeCombo",
+      "value": "14",
+      "handlerMs": 0.7
+    },
+    {
+      "control": "FeedCombo",
+      "value": "Operator",
+      "handlerMs": 5.8
+    },
+    {
+      "control": "FeedSizeCombo",
+      "value": "14",
+      "handlerMs": 0.7
+    }
+  ],
+  "switchHandlerMs": [
+    22.1,
+    0.7,
+    5.8,
+    0.7
+  ],
+  "copyCheck": {
+    "matched": true,
+    "listItemIndex": 0,
+    "chars": 1222,
+    "byteExact": true,
+    "normalizedNewlines": false,
+    "statusText": "Copied message #1 (1,222 chars) byte-for-byte.",
+    "elapsedMs": 738.0
+  },
+  "shots": [
+    {
+      "name": "baseline-studio-14.png",
+      "w": 1200,
+      "h": 800
+    },
+    {
+      "name": "baseline-operator-14.png",
+      "w": 1200,
+      "h": 800
+    },
+    {
+      "name": "baseline-studio-14-tall.png",
+      "w": 1200,
+      "h": 1460
+    },
+    {
+      "name": "baseline-operator-14-tall.png",
+      "w": 1200,
+      "h": 1460
+    },
+    {
+      "name": "baseline-settings.png",
+      "w": 1200,
+      "h": 800
+    },
+    {
+      "name": "baseline-copy-footer.png",
+      "w": 1200,
+      "h": 800
+    }
+  ],
+  "finished": "2026-10-15T07:46:10.4111124+01:00"
+}
