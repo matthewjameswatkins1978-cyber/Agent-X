@@ -183,12 +183,34 @@ public sealed class PiRpcClient : IAsyncDisposable
         _connection.Start(); // Idempotent: loopback tests may already have started it.
     }
 
+    /// <summary>
+    /// Raw get_state response for the host's approved record boundary
+    /// (EventReceived never sees it); the CALLER owns disposal. GetStateAsync
+    /// delegates to this, so recorded and returned state always derive from
+    /// the same observed document. On command failure the typed exception
+    /// throws AFTER the failed document is disposed — a rejected poll never
+    /// leaks (same policy as SendStatsPollAsync).
+    /// </summary>
+    public async Task<JsonDocument> GetStateDocumentAsync(CancellationToken cancellationToken = default)
+    {
+        var connection = RequireConnection();
+        var response = await connection.SendCommandAsync("get_state", null, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowOnCommandError(response);
+            return response;
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
+        }
+    }
+
     /// <summary>Inspect current engine state (model, streaming flags, session).</summary>
     public async Task<PiEngineState> GetStateAsync(CancellationToken cancellationToken = default)
     {
-        var connection = RequireConnection();
-        using var response = await connection.SendCommandAsync("get_state", null, cancellationToken).ConfigureAwait(false);
-        ThrowOnCommandError(response);
+        using var response = await GetStateDocumentAsync(cancellationToken).ConfigureAwait(false);
         return PiEngineState.FromResponse(response);
     }
 
@@ -325,34 +347,64 @@ public sealed class PiRpcClient : IAsyncDisposable
     }
 
     /// <summary>
+    /// Send a prompt and return the raw acceptance response for the host's
+    /// approved record boundary (EventReceived never sees it); the CALLER
+    /// owns disposal. The returned disposition (started/queued/handled) only
+    /// means the prompt was accepted. Never confuse it with completion.
+    /// Disposition extraction is shared via <see cref="DispositionOf"/> so
+    /// the recorded and returned acceptance always agree. Same dispose-on-
+    /// failure policy as the other document-returning polls.
+    /// </summary>
+    public async Task<JsonDocument> SendPromptDocumentAsync(string message, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(message);
+        var connection = RequireConnection();
+        var response = await connection
+            .SendCommandAsync("prompt", new Dictionary<string, object?> { ["message"] = message }, cancellationToken)
+            .ConfigureAwait(false);
+        try
+        {
+            ThrowOnCommandError(response);
+            return response;
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
+        }
+    }
+
+    internal static string DispositionOf(JsonDocument response)
+        => response.RootElement.TryGetProperty("data", out var data)
+            && data.TryGetProperty("disposition", out var disposition)
+            ? disposition.GetString() ?? string.Empty
+            : string.Empty;
+
+    /// <summary>
     /// Send a prompt. The returned disposition (started/queued/handled) only
-    /// means the prompt was accepted — never confuse it with completion.
+    /// means the prompt was accepted. Never confuse it with completion.
     /// Subscribe to events (or use PromptAndWaitAsync) and wait for
     /// agent_settled to detect completion.
     /// </summary>
     public async Task<string> SendPromptAsync(string message, CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrEmpty(message);
-        var connection = RequireConnection();
-        using var response = await connection
-            .SendCommandAsync("prompt", new Dictionary<string, object?> { ["message"] = message }, cancellationToken)
-            .ConfigureAwait(false);
-        ThrowOnCommandError(response);
-        return response.RootElement.TryGetProperty("data", out var data)
-            && data.TryGetProperty("disposition", out var disposition)
-            ? disposition.GetString() ?? string.Empty
-            : string.Empty;
+        using var response = await SendPromptDocumentAsync(message, cancellationToken).ConfigureAwait(false);
+        return DispositionOf(response);
     }
 
     /// <summary>
     /// Send a prompt, stream text deltas to progress, and resolve with the full
     /// streamed text once agent_settled arrives. Event subscription happens
     /// before the prompt is sent so a fast completion cannot be missed.
+    /// <paramref name="onPromptAccepted"/> (optional) observes the live
+    /// acceptance document synchronously after send; see the body for the
+    /// ownership rules.
     /// </summary>
     public async Task<(string Text, bool Aborted)> PromptAndWaitAsync(
         string message,
         IProgress<string>? textProgress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<JsonDocument>? onPromptAccepted = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(message);
         var connection = RequireConnection();
@@ -388,7 +440,14 @@ public sealed class PiRpcClient : IAsyncDisposable
         connection.TransportFailed += Fault;
         try
         {
-            var disposition = await SendPromptAsync(message, cancellationToken).ConfigureAwait(false);
+            // The acceptance document stays alive for the hook, then is
+            // disposed here: the hook must decode synchronously and must
+            // neither dispose nor retain the document. A throwing hook aborts
+            // the wait loudly — acceptance recording is host telemetry, and
+            // a broken host hook must not pass as a settled run.
+            using var acceptance = await SendPromptDocumentAsync(message, cancellationToken).ConfigureAwait(false);
+            onPromptAccepted?.Invoke(acceptance);
+            var disposition = DispositionOf(acceptance);
             if (disposition == "handled")
             {
                 // No run will follow this prompt; do not wait for agent_settled.

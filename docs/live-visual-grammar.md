@@ -83,8 +83,8 @@ lightness intent, not claimed bit-exact terminal output.
 - `GetRetainedText` stays unwired at UI level: full-output inspection
   flows through history-reconciled feed text instead. Per-call-id retained
   lookup needs a protocol-surface change, which is Agent ONE's domain.
-- No usage/cost figures anywhere: no host poll site exists (adding RPC
-  surface is Agent ONE's domain), so none are shown rather than invented.
+- No usage/cost figures shown anywhere: Core records stats/state polls at
+  connect/settle/prompt, but GUI status binding stays unwired (Agent ONE UI ownership).
 - Markdown subset documented in `MarkdownLite` — a deliberate subset, NOT
   full CommonMark: strikethrough, `__strong__` / `***bold italic***`,
   backslash escapes, double-backtick code spans, nested-list depth from an

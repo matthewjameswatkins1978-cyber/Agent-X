@@ -76,8 +76,24 @@ The tap sees STREAMED session events automatically. Correlated poll
 responses (`get_session_stats`, direct `bash`, `prompt`, `get_state`) bypass
 the subscriber inside `PiRpcConnection` and are captured ONLY when the host
 passes them to `PiEventTap.RecordResponse` — proven by a test with a
-genuinely pending request. The tap never claims pollables it was not handed;
-`StatsSnapshot` in the GUI contract requires the host to record its polls.
+genuinely pending request. The tap never claims pollables it was not handed.
+
+Host sites implemented (Gate C, `PiConversation`, same approved boundary as
+stats): `get_state` on connect, reconnect, every settled receipt and the
+public `GetStateAsync` (`GetStateDocumentAsync` + `RecordStateResponse`);
+prompt acceptance inside `SendAsync` (`SendPromptDocumentAsync` + hook in
+`PromptAndWaitAsync`). `LatestStats` / `LatestEngine` therefore populate on
+real runs (GUI binding still unwired — see below), verified against real Pi
+(`ToolEvidenceLiveTests`: state on connect, stats after settle, one fully
+correlated announced/start/end tool call with retained output).
+
+Still honestly NOT captured: `get_messages` history (conversation-owned by
+design — recording it would duplicate the conversation path, not evidence
+it); direct-`bash` results (no production host issues direct bash; the
+`BashResult` decode path is unit-covered and any host may pass one through
+`RecordResponse`); prompt acceptance in streamed taps (bypass is protocol
+design — the hook plus the loopback test is the proof, live stats/state the
+live corroboration).
 
 ## Redaction policy (fail-closed, decode-time)
 
@@ -147,6 +163,14 @@ verbatim fixture taken from the live capture (`Fixtures/obs-sample.jsonl`).
   the same short id as their start detail rows. Retained output is
   retrievable per call id via `GetRetainedText` — the supported route to
   inspect folded content.
+- Invocation/result correlation is a derived view, not a second log:
+  `ToolCallCorrelation.Summarize` pairs announced/start/progress/end per
+  observed call id (orphans, duplicates and unfinished calls flagged, never
+  hidden). End detail rows add `(no observed start)` ONLY when nothing was
+  evicted and `(repeated end)` on duplicate ends — silence instead of
+  guesses after eviction. A missing result object renders
+  `[result not captured]`, distinct from `[truncated]` / omitted markers; a
+  delivered-but-empty result renders complete with no marker.
 - The base tool path (`ParseToolActivity`, summaries, tool names, tool-role
   history rows) is redacted at emission with the same shapes. User and
   assistant rows stay byte-exact by boundary — including when the model
@@ -155,20 +179,22 @@ verbatim fixture taken from the live capture (`Fixtures/obs-sample.jsonl`).
   limits from the tap contract apply unchanged.
 - Correlated poll responses bypass subscribers; the host passes received
   documents to `FeedBridge.RecordResponse`, which updates `LatestStats` /
-  site exists yet — polled stats are unit-covered, live-UNVERIFIED (NOT
-  IMPLEMENTED in any host).
-  site exists yet — polled stats are unit-covered, live-unverified.
+  `LatestEngine` with NO fabricated feed rows. Host sites: post-settle
+  stats refresh in `SendAsync`, state on connect/reconnect/settle, prompt
+  acceptance in `SendAsync` -- unit-covered AND live-verified
+  (`ToolEvidenceLiveTests`).
 - Bounded and non-blocking: at most ~3 small rows per tool call, capped
   call-id map, tap-owned store bounds, synchronous fast handlers only
   (GUI marshaling stays with the host, as before).
 
 ## UI binding contract for the Live surface (NOT IMPLEMENTED)
 
-Status: Core bridge delivered and tested; MainWindow host attachment,
-visibility selector, live stats poll site, and inspector actions are NOT
-IMPLEMENTED in this diff (Agent TWO UI ownership) and live polled stats
-are NOT VERIFIED (no host poll site exists yet). The contract below is the
-precise binding surface for that follow-up.
+Status: Core bridge delivered and tested; host poll sites implemented in
+Core and live-verified (`LatestStats` / `LatestEngine` populate on real
+runs — connect/settle/prompt recordings; no periodic status-strip poll
+exists yet). MainWindow host attachment, visibility selector, and inspector
+actions are NOT IMPLEMENTED (Agent ONE UI ownership). The contract below is
+the precise binding surface for that follow-up.
 
 Without touching the existing panel or navigation: bind the feed as today;
 set `FeedBridge.Level` from the visibility selector (default Detailed);
