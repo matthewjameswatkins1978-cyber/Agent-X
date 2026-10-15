@@ -113,7 +113,18 @@ public partial class MainWindow : Window
     // modal pickers). Set on UI thread around OpenFolderPickerAsync.
     private bool _pickingWorkspace;
 
-    private static string ManagedRoot => PiSessionOptions.Default().ManagedRoot;
+    /// <summary>
+    /// Where the app keeps sessions, view prefs, catalog and workers.
+    /// AGENTX_MANAGED_ROOT (process-scoped, rooted paths only) redirects them
+    /// to an isolated directory, so automated evidence runs and smoke tests
+    /// never touch the real %LocalAppData%/AgentX profile. Unset - the normal
+    /// case - is exactly PiSessionOptions.Default().
+    /// </summary>
+    private static string ManagedRoot
+        => Environment.GetEnvironmentVariable("AGENTX_MANAGED_ROOT") is { Length: > 0 } root
+            && Path.IsPathRooted(root)
+            ? root
+            : PiSessionOptions.Default().ManagedRoot;
 
     // Conversation feed: the Core feed owns the exact text; the observable
     // collection is only the bounded display view. Streamed deltas buffer in

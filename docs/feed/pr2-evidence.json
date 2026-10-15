@@ -1,0 +1,255 @@
+{
+  "tag": "pr2",
+  "app": "D:\\Projects\\wt-agent-x-feed-pr2\\src\\AgentX.App\\bin\\Release\\net10.0\\AgentX.App.exe",
+  "managedRoot": "D:\\Projects\\wt-agent-x-feed-pr2\\.scratch\\profile",
+  "started": "2026-10-15T07:40:38.8186826+01:00",
+  "pid": 48012,
+  "windowHandle": {
+    "value": 71701350
+  },
+  "captureMethod": "PrintWindow PW_RENDERFULLCONTENT (screen CopyFromScreen unavailable in this session)",
+  "connectMs": 4019.7,
+  "connectionState": "Connected",
+  "restoredRows": 1,
+  "statusAfterConnect": "Pi runs in D:\\Projects\\wt-agent-x-feed-pr2\\.scratch\\profile\\agent-cwd with your user authority.",
+  "switches": [
+    {
+      "control": "FeedCombo",
+      "value": "Studio",
+      "handlerMs": 23.2
+    },
+    {
+      "control": "FeedSizeCombo",
+      "value": "13",
+      "handlerMs": 4.8
+    },
+    {
+      "control": "FeedCombo",
+      "value": "Studio",
+      "handlerMs": 0.8
+    },
+    {
+      "control": "FeedSizeCombo",
+      "value": "14",
+      "handlerMs": 5.1
+    },
+    {
+      "control": "FeedCombo",
+      "value": "Studio",
+      "handlerMs": 0.6
+    },
+    {
+      "control": "FeedSizeCombo",
+      "value": "15",
+      "handlerMs": 5.3
+    },
+    {
+      "control": "FeedCombo",
+      "value": "Studio",
+      "handlerMs": 0.5
+    },
+    {
+      "control": "FeedSizeCombo",
+      "value": "16",
+      "handlerMs": 5.6
+    },
+    {
+      "control": "FeedCombo",
+      "value": "Operator",
+      "handlerMs": 5.1
+    },
+    {
+      "control": "FeedSizeCombo",
+      "value": "13",
+      "handlerMs": 3.9
+    },
+    {
+      "control": "FeedCombo",
+      "value": "Operator",
+      "handlerMs": 0.6
+    },
+    {
+      "control": "FeedSizeCombo",
+      "value": "14",
+      "handlerMs": 4.8
+    },
+    {
+      "control": "FeedCombo",
+      "value": "Operator",
+      "handlerMs": 0.5
+    },
+    {
+      "control": "FeedSizeCombo",
+      "value": "15",
+      "handlerMs": 4.4
+    },
+    {
+      "control": "FeedCombo",
+      "value": "Operator",
+      "handlerMs": 0.6
+    },
+    {
+      "control": "FeedSizeCombo",
+      "value": "16",
+      "handlerMs": 4.6
+    },
+    {
+      "control": "FeedCombo",
+      "value": "Studio",
+      "handlerMs": 4.8
+    },
+    {
+      "control": "FeedSizeCombo",
+      "value": "13",
+      "handlerMs": 4.2
+    },
+    {
+      "control": "FeedCombo",
+      "value": "Studio",
+      "handlerMs": 0.6
+    },
+    {
+      "control": "FeedSizeCombo",
+      "value": "16",
+      "handlerMs": 4.5
+    },
+    {
+      "control": "FeedCombo",
+      "value": "Operator",
+      "handlerMs": 4.8
+    },
+    {
+      "control": "FeedSizeCombo",
+      "value": "13",
+      "handlerMs": 3.7
+    },
+    {
+      "control": "FeedCombo",
+      "value": "Operator",
+      "handlerMs": 0.5
+    },
+    {
+      "control": "FeedSizeCombo",
+      "value": "16",
+      "handlerMs": 4.6
+    }
+  ],
+  "switchHandlerMs": [
+    23.2,
+    4.8,
+    0.8,
+    5.1,
+    0.6,
+    5.3,
+    0.5,
+    5.6,
+    5.1,
+    3.9,
+    0.6,
+    4.8,
+    0.5,
+    4.4,
+    0.6,
+    4.6,
+    4.8,
+    4.2,
+    0.6,
+    4.5,
+    4.8,
+    3.7,
+    0.5,
+    4.6
+  ],
+  "copyCheck": {
+    "matched": true,
+    "listItemIndex": 0,
+    "chars": 1222,
+    "byteExact": true,
+    "normalizedNewlines": false,
+    "statusText": "Copied message #1 (1,222 chars) byte-for-byte.",
+    "elapsedMs": 773.8
+  },
+  "shots": [
+    {
+      "name": "pr2-studio-13.png",
+      "w": 1200,
+      "h": 800
+    },
+    {
+      "name": "pr2-studio-14.png",
+      "w": 1200,
+      "h": 800
+    },
+    {
+      "name": "pr2-studio-15.png",
+      "w": 1200,
+      "h": 800
+    },
+    {
+      "name": "pr2-studio-16.png",
+      "w": 1200,
+      "h": 800
+    },
+    {
+      "name": "pr2-operator-13.png",
+      "w": 1200,
+      "h": 800
+    },
+    {
+      "name": "pr2-operator-14.png",
+      "w": 1200,
+      "h": 800
+    },
+    {
+      "name": "pr2-operator-15.png",
+      "w": 1200,
+      "h": 800
+    },
+    {
+      "name": "pr2-operator-16.png",
+      "w": 1200,
+      "h": 800
+    },
+    {
+      "name": "pr2-studio-13-720.png",
+      "w": 736,
+      "h": 800
+    },
+    {
+      "name": "pr2-studio-16-720.png",
+      "w": 736,
+      "h": 800
+    },
+    {
+      "name": "pr2-operator-13-720.png",
+      "w": 736,
+      "h": 800
+    },
+    {
+      "name": "pr2-operator-16-720.png",
+      "w": 736,
+      "h": 800
+    },
+    {
+      "name": "pr2-studio-14-tall.png",
+      "w": 1200,
+      "h": 1460
+    },
+    {
+      "name": "pr2-operator-14-tall.png",
+      "w": 1200,
+      "h": 1460
+    },
+    {
+      "name": "pr2-settings.png",
+      "w": 1200,
+      "h": 800
+    },
+    {
+      "name": "pr2-copy-footer.png",
+      "w": 1200,
+      "h": 800
+    }
+  ],
+  "finished": "2026-10-15T07:41:37.4842461+01:00"
+}

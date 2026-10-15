@@ -30,10 +30,13 @@ lightness intent, not claimed bit-exact terminal output.
 
 - **User packet:** blue block, exact submitted text (never trimmed),
   selectable, wrappable. Small dim header keeps the `#seq` evidence link.
-- **Assistant:** unboxed Markdown flow — yellow bold headings (17/15/13.5),
-  violet code spans, green fenced code, violet bullets / numbered lists,
-  blue underlined links (no navigation), muted italic quotes, muted rules.
-  Parsed once when the turn settles; streaming shows plain text.
+- **Assistant:** unboxed Markdown flow — yellow bold headings that scale with
+  the feed size (body+2/+1/+0.5; exactly 16/15/14.5 at the 14px default),
+  violet code spans, green fenced code, violet bullets / numbered lists with
+  source indentation kept, blue underlined links with the target shown muted
+  beside the label (no navigation), muted italic quotes (consecutive `>` lines
+  are ONE block), muted rules, strikethrough, bold-italic. Parsed once when
+  the turn settles; streaming shows plain text.
 - **Tool operation:** ONE coherent block per call, paired by Pi's observed
   tool-call ID (order-independent, so interleaved same-name calls cannot
   swap outcomes). Ends without a proven start — unknown ID, ambiguous
@@ -82,5 +85,16 @@ lightness intent, not claimed bit-exact terminal output.
   lookup needs a protocol-surface change, which is Agent ONE's domain.
 - No usage/cost figures anywhere: no host poll site exists (adding RPC
   surface is Agent ONE's domain), so none are shown rather than invented.
-- Markdown subset documented in `MarkdownLite`: unknown constructs stay
+- Markdown subset documented in `MarkdownLite` — a deliberate subset, NOT
+  full CommonMark: strikethrough, `__strong__` / `***bold italic***`,
+  backslash escapes, double-backtick code spans, nested-list depth from an
+  indent stack, merged blockquotes. Emphasis uses simplified whole-run
+  flanking: `*` only opens against non-whitespace, `_` only at a word
+  boundary on both sides, and an unmatched delimiter run stays literal as a
+  whole (`foo__bar__baz` and `** bold**` never emphasise; `foo*bar*baz`
+  still does). Unknown constructs (tables, footnotes, HTML, LaTeX) stay
   literal, never dropped; links underline without navigating.
+- Glyph fallback (PR2): the bundled Geist/Monaspace faces are Latin-only, so
+  missing glyphs fall back in a fixed order — Segoe UI Symbol (arrows, box
+  drawing, blocks), Microsoft YaHei (CJK), Malgun Gothic (hangul); see
+  `AxFontFallback`. Screenshots and `docs/feed/feed-pr2.md` carry the evidence.
