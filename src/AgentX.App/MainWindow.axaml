@@ -37,86 +37,76 @@
     <Style Selector="ToggleButton.NavBtn">
       <Setter Property="Background" Value="Transparent" />
       <Setter Property="BorderThickness" Value="0" />
-      <Setter Property="Padding" Value="8,6" />
-      <Setter Property="CornerRadius" Value="4" />
-      <Setter Property="HorizontalAlignment" Value="Stretch" />
-      <Setter Property="HorizontalContentAlignment" Value="Left" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="CornerRadius" Value="10" />
+      <Setter Property="HorizontalAlignment" Value="Center" />
+      <Setter Property="VerticalAlignment" Value="Top" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+      <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
     <Style Selector="ToggleButton.NavBtn:checked">
-      <Setter Property="Background" Value="{DynamicResource Ax.Surface2}" />
+      <Setter Property="Background" Value="{DynamicResource Ax.RailSelected}" />
     </Style>
-    <Style Selector="ToggleButton.NavBtn:pointerover">
+    <Style Selector="ToggleButton.NavBtn:pointerover:not(:checked)">
       <Setter Property="Background" Value="{DynamicResource Ax.Surface2}" />
     </Style>
     <!-- Selection fills are driven by the Fluent theme resource overrides in
          AxTheme.Apply (verified at runtime: template-child selectors do not
          beat the v12.1.4 ControlTheme). Root setters above remain. -->
   </Window.Styles>
-  <Grid Margin="8" RowSpacing="6" ColumnDefinitions="Auto,*" RowDefinitions="Auto,*,Auto">
-    <!-- Top row: compact worker tabs + add. Display labels only (Main,
-         Agent ONE…): storage identity and session ids stay in tooltips. -->
-    <Grid Grid.Row="0" Grid.ColumnSpan="2" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-      <ScrollViewer Grid.Column="0" HorizontalScrollBarVisibility="Auto"
-                    VerticalScrollBarVisibility="Disabled">
-        <TabStrip x:Name="WorkspaceTabs" SelectionChanged="WorkspaceTabs_OnChanged" />
-      </ScrollViewer>
-      <Button Grid.Column="1" Classes="AxIconBtn" Click="AddWorkspace_OnClick"
-              ToolTip.Tip="Add project" AutomationProperties.Name="Add project"
-              VerticalAlignment="Center">
-        <app:AxIcon Kind="Add" />
-      </Button>
+  <Grid Margin="12,10,12,8" RowSpacing="0" ColumnDefinitions="Auto,*" RowDefinitions="Auto,*,Auto">
+    <!-- Identity header (approved shell). WorkspaceTabs stays in the tree,
+         invisible, as the single selection model behind the worker cards. -->
+    <TabStrip x:Name="WorkspaceTabs" SelectionChanged="WorkspaceTabs_OnChanged" IsVisible="False" />
+    <Grid Grid.Row="0" Grid.ColumnSpan="2" RowDefinitions="Auto,Auto">
+      <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8">
+        <app:AxIcon x:Name="BrandIcon" Kind="Rabbit" Width="20" Height="20" VerticalAlignment="Center" />
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+          <TextBlock Text="Agent X" FontWeight="Bold" FontSize="15" VerticalAlignment="Center" />
+          <TextBlock Text="/ Biscuit Logic" Foreground="{DynamicResource Ax.Muted}" FontSize="13" VerticalAlignment="Center" />
+        </StackPanel>
+        <Button Grid.Column="3" Classes="AxIconBtn" Click="SearchButton_OnClick"
+                ToolTip.Tip="Find in conversation" AutomationProperties.Name="Find in conversation">
+          <app:AxIcon Kind="Search" />
+        </Button>
+      </Grid>
+      <Border Grid.Row="1" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="0,0,0,1" Margin="0,8,0,0" />
     </Grid>
 
-    <!-- Left rail: vector icon navigation (Live default, Overview, Settings
-         anchored at the bottom). Collapsed 52px, expanded 180px. -->
-    <Border Grid.Row="1" Grid.Column="0" BorderBrush="{DynamicResource Ax.Border}"
-            BorderThickness="0,0,1,0" Padding="0,4,4,4" Margin="0,0,8,0">
-      <DockPanel x:Name="NavRail" Width="52" LastChildFill="False">
-        <StackPanel DockPanel.Dock="Top" Spacing="4">
-          <ToggleButton x:Name="NavLive" Classes="NavBtn" Click="Nav_OnClick"
-                        ToolTip.Tip="Live conversation" AutomationProperties.Name="Live">
-            <StackPanel Orientation="Horizontal" Spacing="10">
-              <app:AxIcon Kind="Live" Width="16" Height="16" VerticalAlignment="Center" />
-              <TextBlock x:Name="NavLiveLabel" Text="Live" FontSize="13"
-                         VerticalAlignment="Center" />
-            </StackPanel>
-          </ToggleButton>
-          <ToggleButton x:Name="NavOverview" Classes="NavBtn" Click="Nav_OnClick"
+    <!-- Left rail: icon-only destinations (Overview, Feed, Settings bottom). -->
+    <!-- Approved shell: narrow, shared icon size, selected pill + green icon. -->
+    <Border Grid.Row="1" Grid.Column="0" Padding="0,8,8,0" Width="48">
+      <DockPanel x:Name="NavRail" LastChildFill="False">
+        <StackPanel DockPanel.Dock="Top" Spacing="8">
+          <ToggleButton x:Name="NavOverview" Classes="NavBtn" Click="Nav_OnClick" Width="40" Height="40"
                         ToolTip.Tip="Overview" AutomationProperties.Name="Overview">
-            <StackPanel Orientation="Horizontal" Spacing="10">
-              <app:AxIcon Kind="Overview" Width="16" Height="16" VerticalAlignment="Center" />
-              <TextBlock x:Name="NavOverviewLabel" Text="Overview" FontSize="13"
-                         VerticalAlignment="Center" />
-            </StackPanel>
+            <app:AxIcon x:Name="NavOverviewIcon" Kind="Grid" Width="18" Height="18" />
+          </ToggleButton>
+          <ToggleButton x:Name="NavLive" Classes="NavBtn" Click="Nav_OnClick" Width="40" Height="40"
+                        ToolTip.Tip="Feed" AutomationProperties.Name="Feed">
+            <app:AxIcon x:Name="NavLiveIcon" Kind="Chat" Width="18" Height="18" />
           </ToggleButton>
         </StackPanel>
-        <StackPanel DockPanel.Dock="Bottom" Spacing="4">
-          <ToggleButton x:Name="NavSettings" Classes="NavBtn" Click="Nav_OnClick"
+        <StackPanel DockPanel.Dock="Bottom" Spacing="8">
+          <ToggleButton x:Name="NavSettings" Classes="NavBtn" Click="Nav_OnClick" Width="40" Height="40"
                         ToolTip.Tip="Settings" AutomationProperties.Name="Settings">
-            <StackPanel Orientation="Horizontal" Spacing="10">
-              <app:AxIcon Kind="Settings" Width="16" Height="16" VerticalAlignment="Center" />
-              <TextBlock x:Name="NavSettingsLabel" Text="Settings" FontSize="13"
-                         VerticalAlignment="Center" />
-            </StackPanel>
+            <app:AxIcon x:Name="NavSettingsIcon" Kind="Settings" Width="18" Height="18" />
           </ToggleButton>
-          <Button x:Name="NavCollapse" Classes="NavBtn" Click="NavCollapse_OnClick"
-                  ToolTip.Tip="Expand navigation" AutomationProperties.Name="Expand navigation">
-            <StackPanel Orientation="Horizontal" Spacing="10">
-              <TextBlock x:Name="NavCollapseGlyph" Text="&#xBB;" FontSize="16" Width="16"
-                         TextAlignment="Center" VerticalAlignment="Center"
-                         Foreground="{DynamicResource Ax.Muted}" />
-              <TextBlock x:Name="NavCollapseLabel" Text="Expand" FontSize="13"
-                         VerticalAlignment="Center" />
-            </StackPanel>
-          </Button>
         </StackPanel>
       </DockPanel>
     </Border>
 
-    <!-- Pages. Only one visible; controls persist so scroll, selection,
+    <!-- Content column: worker cards, divider, then the pages. Cards,
+         divider, page content and (on Feed) the composer share the same
+         left/right edges. Pages keep their controls so scroll, selection,
          composer input and feed survive page switches. -->
-    <!-- Centre: the Pi conversation takes the remaining room. -->
-    <Grid Grid.Row="1" Grid.Column="1">
+    <Grid Grid.Row="1" Grid.Column="1" RowDefinitions="Auto,Auto,*" RowSpacing="0" Margin="8,8,0,0">
+      <ScrollViewer Grid.Row="0" HorizontalScrollBarVisibility="Auto"
+                    VerticalScrollBarVisibility="Disabled">
+        <StackPanel x:Name="ContextCards" Orientation="Horizontal" Spacing="8" />
+      </ScrollViewer>
+      <Border Grid.Row="1" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="0,0,0,1" Margin="0,8,0,0" />
+      <Grid Grid.Row="2">
       <!-- Overview: real workspace state, activity, evidence. No invented cards. -->
       <ScrollViewer x:Name="OverviewPanel" IsVisible="False"
                     VerticalScrollBarVisibility="Auto"
@@ -175,10 +165,22 @@
       </ScrollViewer>
 
       <!-- Live: contextual toolbar + dominant conversation + anchored composer. -->
-      <Grid x:Name="LivePanel" RowDefinitions="Auto,*,Auto" RowSpacing="6">
+      <Grid x:Name="LivePanel" RowDefinitions="Auto,Auto,*,Auto" RowSpacing="6">
+        <Border Grid.Row="0" x:Name="FindBar" IsVisible="False" BorderBrush="{DynamicResource Ax.Border}"
+                BorderThickness="1" CornerRadius="{DynamicResource Ax.Radius}" Padding="8,4"
+                Background="{DynamicResource Ax.Surface}">
+          <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+            <app:AxIcon Kind="Search" Width="14" Height="14" VerticalAlignment="Center" />
+            <TextBox x:Name="FindBox" PlaceholderText="Find in conversation" MinWidth="200"
+                     KeyDown="FindBox_OnKeyDown" />
+            <Button Content="Previous" Click="FindPrev_OnClick" FontSize="12" />
+            <Button Content="Next" Click="FindNext_OnClick" FontSize="12" />
+            <Button Content="Close" Click="FindClose_OnClick" FontSize="12" />
+          </StackPanel>
+        </Border>
         <!-- Contextual actions: frequent actions as icons, occasional or
              destructive ones in the overflow menu. No dead buttons. -->
-        <DockPanel Grid.Row="0" LastChildFill="False" MinHeight="32">
+        <DockPanel Grid.Row="1" LastChildFill="False" MinHeight="32">
           <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Spacing="2">
             <Button x:Name="ConnectButton" Classes="AxIconBtn" Click="ConnectPi_OnClick"
                     ToolTip.Tip="Connect the selected worker or workspace"
@@ -224,7 +226,7 @@
           </Button>
         </DockPanel>
 
-        <Grid Grid.Row="1">
+        <Grid Grid.Row="2">
           <Border BorderBrush="{DynamicResource Ax.Border}" BorderThickness="1"
                   CornerRadius="{DynamicResource Ax.Radius}" Padding="4"
                   Background="{DynamicResource Ax.Bg}">
@@ -331,7 +333,7 @@
           </StackPanel>
         </Grid>
 
-        <Border Grid.Row="2" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="1"
+        <Border Grid.Row="3" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="1"
                 CornerRadius="{DynamicResource Ax.Radius}" Padding="8"
                 Background="{DynamicResource Ax.Surface}">
           <StackPanel Spacing="6">
@@ -431,14 +433,36 @@
                      FontSize="12" TextWrapping="Wrap" />
         </StackPanel>
       </ScrollViewer>
+      </Grid>
     </Grid>
 
     <!-- Pi-style footer: working indicator, clickable directory, genuine
          status, usage, and engine segments. Full width, all pages. -->
-    <Border Grid.Row="2" Grid.ColumnSpan="2" BorderBrush="{DynamicResource Ax.Border}"
-            BorderThickness="1" CornerRadius="{DynamicResource Ax.Radius}" Padding="8,6"
-            Background="{DynamicResource Ax.Surface}">
+    <Border Grid.Row="2" Grid.Column="1" BorderBrush="{DynamicResource Ax.Border}"
+            BorderThickness="0,1,0,0" Padding="0,6,0,0" Background="Transparent">
       <StackPanel Spacing="2">
+        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+          <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+            <app:AxIcon Kind="Branch" Width="14" Height="14" VerticalAlignment="Center" />
+            <TextBlock x:Name="FooterContextText" Text="Main" FontSize="12"
+                       Foreground="{DynamicResource Ax.Muted}" VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis" />
+          </StackPanel>
+          <TextBlock Grid.Column="1" x:Name="FooterEngineText" FontSize="12"
+                     Foreground="{DynamicResource Ax.Muted}" VerticalAlignment="Center" />
+          <Button Grid.Column="2" x:Name="NoticeToggle" Content="i" Width="20" Height="20"
+                  FontSize="11" Padding="0" CornerRadius="10" BorderThickness="1"
+                  BorderBrush="{DynamicResource Ax.Muted}" Background="Transparent"
+                  Foreground="{DynamicResource Ax.Muted}" VerticalAlignment="Center"
+                  IsVisible="False" Click="NoticeToggle_OnClick"
+                  ToolTip.Tip="Show notice" AutomationProperties.Name="Show notice" />
+        </Grid>
+        <StackPanel x:Name="FooterTransient" />
+        <!-- Legacy footer segments: hidden write-model for Checkpoint A.
+             StatusText is reparented into FooterTransient in code so all
+             existing writes keep working; the compact row above is the
+             only other visible footer. -->
+        <StackPanel IsVisible="False">
         <StackPanel x:Name="WorkingRow" IsVisible="False" Orientation="Horizontal" Spacing="8">
           <TextBlock Text="Working" Foreground="{DynamicResource Ax.Blue}" FontSize="12"
                      FontWeight="SemiBold" />
@@ -487,6 +511,7 @@
                   Foreground="{DynamicResource Ax.Muted}" Background="Transparent" BorderThickness="0"
                   Padding="4,0" FontSize="12" VerticalAlignment="Center" />
         </Grid>
+        </StackPanel>
       </StackPanel>
     </Border>
   </Grid>

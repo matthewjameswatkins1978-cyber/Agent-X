@@ -20,6 +20,12 @@ public enum AxIconKind
     Add,
     Collapse,
     Remove,
+    Rabbit,
+    Search,
+    Sliders,
+    Grid,
+    Chat,
+    Branch,
 }
 
 /// <summary>
@@ -58,6 +64,18 @@ public static class AxIcons
 
     public const string Remove = "M10 11v6 M14 11v6 M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6 M3 6h18 M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2";
 
+    public const string Rabbit = "M6 15a6 6 0 1 0 12 0 6 6 0 1 0-12 0 M9.5 9.5Q8.5 5 9 2.5 M14.5 9.5Q15.5 5 15 2.5";
+
+    public const string Search = "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z M21 21l-4.3-4.3";
+
+    public const string Sliders = "M21 4h-7 M10 4H3 M21 12h-9 M8 12H3 M21 20h-5 M12 20H3 M14 2v4 M8 10v4 M16 18v4";
+
+    public const string Grid = "M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M13 13h7v7h-7z";
+
+    public const string Chat = "M7.9 20A9 9 0 1 0 4 16.1L2 22Z";
+
+    public const string Branch = "M6 3v12 M18 9a9 9 0 0 1-9 9 M15 6a3 3 0 1 0 6 0 3 3 0 1 0-6 0 M3 18a3 3 0 1 0 6 0 3 3 0 1 0-6 0";
+
     public static string DataFor(AxIconKind kind) => kind switch
     {
         AxIconKind.Connect => Connect,
@@ -73,6 +91,12 @@ public static class AxIcons
         AxIconKind.Add => Add,
         AxIconKind.Collapse => Collapse,
         AxIconKind.Remove => Remove,
+        AxIconKind.Rabbit => Rabbit,
+        AxIconKind.Search => Search,
+        AxIconKind.Sliders => Sliders,
+        AxIconKind.Grid => Grid,
+        AxIconKind.Chat => Chat,
+        AxIconKind.Branch => Branch,
         _ => More,
     };
 }

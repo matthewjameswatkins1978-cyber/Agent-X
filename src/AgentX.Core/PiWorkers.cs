@@ -884,6 +884,16 @@ public sealed class PiWorker : IAsyncDisposable
         return await conversation.GetSessionStatsAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Last polled session stats for status binding, or null when no host
+    /// poll has been recorded yet. Read-only view over the worker's bridge
+    /// binding (post-settle refresh or explicit polls); never polls live.
+    /// </summary>
+    public StatsSnapshot? LatestStats
+    {
+        get { lock (_gate) { return _bridge?.LatestStats; } }
+    }
+
     private async Task<PiEngineState> RefreshStateAsync(PiConversation conversation, CancellationToken ct)
     {
         var state = await conversation.GetStateAsync(ct).ConfigureAwait(false);

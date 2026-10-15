@@ -37,6 +37,7 @@ public static class AxTheme
     public static SolidColorBrush ToolPendingBgBrush { get; } = New("#22262E");
     public static SolidColorBrush ToolSuccessBgBrush { get; } = New("#1D3A2F");
     public static SolidColorBrush ToolErrorBgBrush { get; } = New("#3D2422");
+    public static SolidColorBrush RailSelectedBrush { get; } = New("#17352C");
 
     // Pi semantic hues are treatment-independent (evidence never changes
     // meaning): one shared instance each, matching PiPalette / dark.json.
@@ -105,6 +106,7 @@ public static class AxTheme
         Set(ToolPendingBgBrush, t.ToolPendingBg);
         Set(ToolSuccessBgBrush, t.ToolSuccessBg);
         Set(ToolErrorBgBrush, t.ToolErrorBg);
+        Set(RailSelectedBrush, t.RailSelected);
 
         if (Application.Current is { } app)
         {
@@ -123,6 +125,7 @@ public static class AxTheme
             app.Resources["Ax.ToolPendingBg"] = ToolPendingBgBrush;
             app.Resources["Ax.ToolSuccessBg"] = ToolSuccessBgBrush;
             app.Resources["Ax.ToolErrorBg"] = ToolErrorBgBrush;
+            app.Resources["Ax.RailSelected"] = RailSelectedBrush;
             app.Resources["Ax.Blue"] = BlueBrush;
             app.Resources["Ax.Green"] = GreenBrush;
             app.Resources["Ax.Red"] = RedBrush;

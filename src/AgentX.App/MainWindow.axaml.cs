@@ -178,7 +178,6 @@ public partial class MainWindow : Window
         _prefs = prefs;
         ApplyVisibility();
         _viewPrefs = ViewPrefs.Load(ManagedRoot);
-        ApplyRailWidth();
         _coordinator = new WorkspaceSessionCoordinator(_feed, WorkspaceCatalog.LegacyKey);
         // One worker manager per app; persisted workers become real tabs
         // below. A corrupt workers.json fails closed (file preserved, worker
@@ -745,6 +744,10 @@ public partial class MainWindow : Window
         }
 
         RefreshConnectionButtons();
+        // Approved shell mirrors: worker cards and the compact footer follow
+        // every selection, busy and connection change through this fan-out.
+        RebuildContextCards();
+        RefreshCompactFooter();
     }
 
     /// Working indicator follows the VIEWED run only — never another
@@ -2474,9 +2477,18 @@ public partial class MainWindow : Window
     /// destination gets the surface pill; the others stay transparent.
     private void SyncRailSelection()
     {
-        NavLive.Background = _page == AppPage.Live ? AxTheme.Surface2Brush : Avalonia.Media.Brushes.Transparent;
-        NavOverview.Background = _page == AppPage.Overview ? AxTheme.Surface2Brush : Avalonia.Media.Brushes.Transparent;
-        NavSettings.Background = _page == AppPage.Settings ? AxTheme.Surface2Brush : Avalonia.Media.Brushes.Transparent;
+        PaintRailButton(NavOverview, NavOverviewIcon, _page == AppPage.Overview);
+        PaintRailButton(NavLive, NavLiveIcon, _page == AppPage.Live);
+        PaintRailButton(NavSettings, NavSettingsIcon, _page == AppPage.Settings);
+    }
+
+    /// Approved shell selection: dark-teal pill plus the green icon.
+    /// Painted in code (Fluent checked styles lose to the theme); icon
+    /// strokes persist because AxIcon only refreshes on Kind/Filled change.
+    private static void PaintRailButton(Avalonia.Controls.Primitives.ToggleButton button, AxIcon icon, bool selected)
+    {
+        button.Background = selected ? AxTheme.RailSelectedBrush : Avalonia.Media.Brushes.Transparent;
+        icon.Stroke = selected ? AxTheme.GreenBrush : AxTheme.IconBrush;
     }
 
     private void Nav_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -2504,41 +2516,9 @@ public partial class MainWindow : Window
         }
     }
 
-    private void NavCollapse_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-    {
-        _viewPrefs.RailExpanded = !_viewPrefs.RailExpanded;
-        ApplyRailWidth();
-        try
-        {
-            SaveViewPrefs();
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            StatusText.Text = $"Could not save view preferences: {ex.Message}";
-        }
-    }
-
-    /// <summary>
-    /// Rail geometry: 56px icon rail collapsed (the default — transcript
-    /// keeps the room), 180px with labels expanded. Instant switch, no
-    /// animation, never on hover. Expansion never touches the feed or any
-    /// live process; it only reclaims label space from the centre.
-    /// </summary>
-    private void ApplyRailWidth()
-    {
-        var expanded = _viewPrefs.RailExpanded;
-        NavRail.Width = expanded ? 180 : 56;
-        NavLiveLabel.IsVisible = expanded;
-        NavOverviewLabel.IsVisible = expanded;
-        NavSettingsLabel.IsVisible = expanded;
-        NavCollapseLabel.IsVisible = expanded;
-        NavCollapseLabel.Text = expanded ? "Collapse" : "Expand";
-        NavCollapseGlyph.Text = expanded ? "\u00AB" : "\u00BB";
-        Avalonia.Controls.ToolTip.SetTip(NavCollapse,
-            expanded ? "Collapse navigation" : "Expand navigation");
-        NavCollapse.SetValue(Avalonia.Automation.AutomationProperties.NameProperty,
-            expanded ? "Collapse navigation" : "Expand navigation");
-    }
+    // Checkpoint A shell: the rail is fixed icon-only (Overview / Feed /
+    // Settings); the expandable labeled rail and its preference are gone.
+    // ViewPrefs.RailExpanded stays persisted but unused.
 
     /// Persist view preferences. Prunes drafts ONLY against healthy sources:
     /// a degraded catalog or an unavailable worker store must never delete
@@ -2961,7 +2941,11 @@ public partial class MainWindow : Window
     /// Opened: DWM attributes proved flaky across identical runs (bright
     /// system-blue captions in some captures), consistent with a handle that
     /// is not ready yet or attributes dropped on re-activation.
-    private void MainWindow_OnOpened(object? sender, EventArgs e) => ApplyTitleBar();
+    private void MainWindow_OnOpened(object? sender, EventArgs e)
+    {
+        ApplyTitleBar();
+        InitApprovedShell();
+    }
 
     private void MainWindow_OnActivated(object? sender, EventArgs e)
         => AxTheme.EnsureDarkTitleBar(this);
