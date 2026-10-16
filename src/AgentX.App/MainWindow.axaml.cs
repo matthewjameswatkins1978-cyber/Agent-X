@@ -1132,9 +1132,10 @@ public partial class MainWindow : Window
         _pendingWorkspacePath = path;
         _addConfirmPath.Text = path;
         Avalonia.Controls.ToolTip.SetTip(_addConfirmPath, path);
-        _addConfirmNote.Text = IsAlreadyRegistered(path)
+        _addConfirmNote.Text = (IsAlreadyRegistered(path)
             ? "Already registered — confirming selects the existing project. Nothing is duplicated."
-            : "Nothing has been registered yet. Confirm to continue, or close to cancel.";
+            : "Nothing has been registered yet. Confirm to continue, or close to cancel.")
+            + " " + DescribeStagedProject(path);
         StatusText.Text = "Confirm at the Add panel — nothing has been registered yet.";
         _addConfirmFlyout.ShowAt(AddContextButton);
         return;
@@ -1165,6 +1166,10 @@ public partial class MainWindow : Window
 
     private TextBlock _addConfirmNote = null!;
 
+    private TextBox _quickNameBox = null!;
+
+    private StackPanel _quickSetupRow = null!;
+
     /// Inline Add confirmation (repair gate): code-built so the window
     /// owns every control — XAML flyout content is outside the window
     /// name-scope and cannot be wired by name. Charcoal AxAction buttons
@@ -1192,8 +1197,24 @@ public partial class MainWindow : Window
         var quickButton = new Button { Content = "Quick setup…" };
         quickButton.Classes.Add("AxAction");
         Avalonia.Controls.ToolTip.SetTip(quickButton,
-            "New folder with a generated name + local git init, then the same register/worker path");
-        quickButton.Click += QuickSetup_OnClick;
+            "New folder under the projects root + local git init (name editable below), then the same worker path");
+        quickButton.Click += QuickSetupReveal_OnClick;
+        _quickNameBox = new TextBox
+        {
+            FontSize = 12,
+            PlaceholderText = "Project name (editable)",
+            MinWidth = 200,
+        };
+        Avalonia.Controls.ToolTip.SetTip(_quickNameBox,
+            "Editable project name; blank generates one (Core NewProject; no remote, no commit)");
+        var quickCreateButton = new Button { Content = "Create project" };
+        quickCreateButton.Classes.Add("AxAction");
+        Avalonia.Controls.ToolTip.SetTip(quickCreateButton,
+            "Create the named folder with git init and open its worker");
+        quickCreateButton.Click += QuickSetupCreate_OnClick;
+        _quickSetupRow = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8, IsVisible = false };
+        _quickSetupRow.Children.Add(_quickNameBox);
+        _quickSetupRow.Children.Add(quickCreateButton);
         var registerButton = new Button { Content = "Register project" };
         registerButton.Classes.Add("AxAction");
         registerButton.Click += ConfirmWorkspace_OnClick;
@@ -1209,6 +1230,7 @@ public partial class MainWindow : Window
         body.Children.Add(new TextBlock { Text = "Add project", FontWeight = Avalonia.Media.FontWeight.SemiBold, FontSize = 13 });
         body.Children.Add(_addConfirmPath);
         body.Children.Add(_addConfirmNote);
+        body.Children.Add(_quickSetupRow);
         body.Children.Add(actions);
         _addConfirmFlyout = new Flyout
         {
@@ -1233,6 +1255,7 @@ public partial class MainWindow : Window
     /// clear the staging first, so their own flyout close is a no-op.
     private void AddConfirmFlyout_OnClosed(object? sender, EventArgs e)
     {
+        _quickSetupRow.IsVisible = false;
         if (_pendingWorkspacePath is not null)
         {
             _pendingWorkspacePath = null;
@@ -1240,12 +1263,21 @@ public partial class MainWindow : Window
         }
     }
 
-    /// Quick Setup: generated name, new folder, local git init, then the
-    /// same register/worker path as Existing Project. Parent defaults to
-    /// Documents/AgentX Projects (created on demand); git absence is an
-    /// honest note, never a failure — the folder is still ready to connect.
-    private async void QuickSetup_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    /// Quick Setup (Core NewProject): an editable name, a new folder under
+    /// the projects root, local git init — no remote, no commit. Then the
+    /// same worker path as Existing Project. Partial states report the
+    /// folder path; existing work is never overwritten (Core suffixes -2…).
+    private void QuickSetupReveal_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
+        _quickNameBox.Text ??= NewProject.GenerateName();
+        _quickSetupRow.IsVisible = true;
+        _addConfirmNote.Text = $"New folder under {ProjectSetupFacts.DefaultProjectsParent()} + local git init (no remote, no commit). Edit the name, then Create project — or close to cancel.";
+        _quickNameBox.Focus();
+    }
+
+    private async void QuickSetupCreate_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        var hint = _quickNameBox.Text;
         _pendingWorkspacePath = null;
         _addConfirmFlyout.Hide();
         if (_manager is null)
@@ -1254,7 +1286,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var parent = QuickSetup.DefaultParent();
+        var parent = ProjectSetupFacts.DefaultProjectsParent();
         try
         {
             Directory.CreateDirectory(parent);
@@ -1265,37 +1297,72 @@ public partial class MainWindow : Window
             return;
         }
 
-        var name = QuickSetup.GenerateName();
-        string path;
+        string created;
         try
         {
-            path = QuickSetup.EnsureProjectFolder(parent, name);
+            created = await Task.Run(() => NewProject.Create(parent, hint)).ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is ArgumentException or DirectoryNotFoundException or IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException)
         {
-            StatusText.Text = $"Cannot create project folder: {ex.Message}";
+            await Dispatcher.UIThread.InvokeAsync(() => StatusText.Text = $"Quick setup failed — nothing registered: {ex.Message}");
             return;
         }
 
-        var git = await QuickSetup.TryGitInitAsync(path).ConfigureAwait(false);
-        var gitNote = git.Created ? "git init done" : $"folder ready ({git.Output})";
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             try
             {
-                var folder = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                var worker = _manager.CreateWorker(path, Path.GetFileName(folder));
+                var worker = _manager.CreateWorker(created, Path.GetFileName(created));
                 SaveWorkerViewState(_lastViewKey);
                 _manager.SelectWorker(worker.Id);
                 SelectWorkerTab(worker.Id);
                 SwitchToWorker(worker);
-                StatusText.Text = $"Quick setup '{name}' ready at {path} ({gitNote}) — session {worker.SessionId}. Press Connect.";
+                StatusText.Text = $"Quick setup '{Path.GetFileName(created)}' ready at {created} (git init done, no remote/commit) — session {worker.SessionId}. Press Connect.";
             }
             catch (Exception ex) when (ex is ArgumentException or DirectoryNotFoundException or IOException or UnauthorizedAccessException or InvalidOperationException)
             {
-                StatusText.Text = $"Quick setup folder created at {path} ({gitNote}) but worker failed: {ex.Message}";
+                StatusText.Text = $"Quick setup folder created at {created} but worker failed: {ex.Message}";
             }
         });
+    }
+
+    /// Git + instruction facts for the staged folder (Existing Project).
+    /// A missing git binary or timeout is reported, never guessed; a
+    /// non-repo is stated plainly and never initialised here.
+    private static string DescribeStagedProject(string path)
+    {
+        ProjectGitState git;
+        try
+        {
+            git = ProjectGit.ReadState(path);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or TimeoutException or ArgumentException)
+        {
+            return $"Git state unavailable ({ex.Message}) — confirm anyway or cancel.";
+        }
+
+        return ProjectSetupFacts.Describe(git, ProjectSetupFacts.InstructionFiles(git.ProjectRoot));
+    }
+
+    /// Git tooltip for the footer directory button: branch + dirty state
+    /// for the viewed worker, or honest unavailability. Never blocks.
+    private static string GitTooltipFor(string projectRoot)
+    {
+        try
+        {
+            var git = ProjectGit.ReadState(projectRoot);
+            if (!git.IsGitRepo)
+            {
+                return $"{projectRoot} (not a Git repository)";
+            }
+
+            var branch = git.Branch ?? "detached HEAD";
+            return $"{projectRoot} • {branch} • {(git.IsDirty ? "uncommitted changes" : "clean")}";
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or TimeoutException or ArgumentException)
+        {
+            return $"{projectRoot} (Git state unavailable: {ex.Message})";
+        }
     }
 
     /// Create a worker for the staged folder (the Add flow's explicit
@@ -1414,6 +1481,20 @@ public partial class MainWindow : Window
                 : _conversation is not null && workspace.Slug != _connectedKey
                     ? $"Workspace '{workspace.Slug}' registered — disconnect from '{_connectedLabel}' to open it."
                     : $"Workspace '{workspace.Slug}' ready — session {workspace.SessionId}. Press Connect.";
+            // Same normal experience: a worker already bound to this root
+            // is selected instead of duplicated (the registry stays the
+            // identity anchor; the worker owns the live session).
+            var existingId = _manager is null ? null : ProjectSetupFacts.FindWorkerIdByRoot(
+                _manager.Workers.Select(w => (w.Id, w.ProjectRoot)), workspace.ProjectRoot);
+            if (existingId is not null && _manager is not null)
+            {
+                SaveWorkerViewState(_lastViewKey);
+                var existing = _manager.SelectWorker(existingId);
+                SelectWorkerTab(existing.Id);
+                SwitchToWorker(existing);
+                StatusText.Text = $"Workspace '{workspace.Slug}' ready — worker '{WorkerViewKey.DisplayLabel(existing.Id, existing.Label)}' already exists here; selected it.";
+            }
+
             // The visible card strip is not part of LoadWorkspaceTabs:
             // without this fan-out the new card never appears (registration
             // persisted, UI stale). Selection already moved; just mirror.
@@ -4147,6 +4228,7 @@ public partial class MainWindow : Window
             if (SelectedWorker is { } worker)
             {
                 DirectoryButtonText.Text = worker.ProjectRoot;
+                Avalonia.Controls.ToolTip.SetTip(DirectoryButton, GitTooltipFor(worker.ProjectRoot));
                 return;
             }
 
