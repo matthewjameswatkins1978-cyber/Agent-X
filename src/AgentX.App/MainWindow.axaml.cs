@@ -46,14 +46,11 @@ public partial class MainWindow : Window
     private readonly WorkerViewLifecycle _viewLifecycle = new();
     private ViewPrefs _viewPrefs = new();
     // Engine settings boundary (Agent ONE owns the Core contract): model
-    // and thinking selection flow ONLY through this adapter. Core ships
-    // CoreEngineSettingsRuntime (issue #23 Core half); swapping this line to
-    //   new CoreEngineSettingsRuntime(() => SelectedWorker is { } w ? new PiWorkerEngineSettings(w) : null)
-    // activates it, but ONLY together with Muse's native chooser that renders
-    // the real lists — otherwise CanConfigure flips true while the flyout shows
-    // "Choose:" with no choices. Activation is Muse's; the footer states the
-    // pending reason explicitly until then.
-    private readonly IEngineSettingsRuntime _settingsRuntime = new PendingEngineSettingsRuntime();
+    // and thinking selection flow ONLY through this adapter. Activated:
+    // CoreEngineSettingsRuntime over the validated PiWorker operations
+    // (issue #23 Core half) with the native chooser below rendering the
+    // real lists. Availability and reasons are live per call, never cached.
+    private readonly IEngineSettingsRuntime _settingsRuntime;
     // Last genuine engine values (from get_state on connect/reconnect).
     // Usage shows messages only: token/cost context does not exist here.
     private string? _knownProvider;
@@ -158,6 +155,8 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        _settingsRuntime = new CoreEngineSettingsRuntime(
+            () => SelectedWorker is { } w ? new PiWorkerEngineSettings(w) : null);
         InitializeComponent();
         ConversationList.ItemsSource = _conversationItems;
         // Empty state follows the collection itself: any add/clear on the UI
@@ -1185,6 +1184,11 @@ public partial class MainWindow : Window
         Avalonia.Controls.ToolTip.SetTip(workerButton,
             "Create an independent Pi worker for the staged folder (separate process and session)");
         workerButton.Click += CreateWorker_OnClick;
+        var quickButton = new Button { Content = "Quick setup…" };
+        quickButton.Classes.Add("AxAction");
+        Avalonia.Controls.ToolTip.SetTip(quickButton,
+            "New folder with a generated name + local git init, then the same register/worker path");
+        quickButton.Click += QuickSetup_OnClick;
         var registerButton = new Button { Content = "Register project" };
         registerButton.Classes.Add("AxAction");
         registerButton.Click += ConfirmWorkspace_OnClick;
@@ -1193,6 +1197,7 @@ public partial class MainWindow : Window
         cancelButton.Click += CancelWorkspace_OnClick;
         var actions = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8 };
         actions.Children.Add(workerButton);
+        actions.Children.Add(quickButton);
         actions.Children.Add(registerButton);
         actions.Children.Add(cancelButton);
         var body = new StackPanel { Spacing = 8, MinWidth = 320, MaxWidth = 460 };
@@ -1228,6 +1233,64 @@ public partial class MainWindow : Window
             _pendingWorkspacePath = null;
             StatusText.Text = "Registration cancelled — nothing changed.";
         }
+    }
+
+    /// Quick Setup: generated name, new folder, local git init, then the
+    /// same register/worker path as Existing Project. Parent defaults to
+    /// Documents/AgentX Projects (created on demand); git absence is an
+    /// honest note, never a failure — the folder is still ready to connect.
+    private async void QuickSetup_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        _pendingWorkspacePath = null;
+        _addConfirmFlyout.Hide();
+        if (_manager is null)
+        {
+            StatusText.Text = $"Workers unavailable ({_managerError ?? "store failed to load"}) — nothing created.";
+            return;
+        }
+
+        var parent = QuickSetup.DefaultParent();
+        try
+        {
+            Directory.CreateDirectory(parent);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            StatusText.Text = $"Cannot create projects folder {parent}: {ex.Message} — nothing created.";
+            return;
+        }
+
+        var name = QuickSetup.GenerateName();
+        string path;
+        try
+        {
+            path = QuickSetup.EnsureProjectFolder(parent, name);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            StatusText.Text = $"Cannot create project folder: {ex.Message}";
+            return;
+        }
+
+        var git = await QuickSetup.TryGitInitAsync(path).ConfigureAwait(false);
+        var gitNote = git.Created ? "git init done" : $"folder ready ({git.Output})";
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            try
+            {
+                var folder = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                var worker = _manager.CreateWorker(path, Path.GetFileName(folder));
+                SaveWorkerViewState(_lastViewKey);
+                _manager.SelectWorker(worker.Id);
+                SelectWorkerTab(worker.Id);
+                SwitchToWorker(worker);
+                StatusText.Text = $"Quick setup '{name}' ready at {path} ({gitNote}) — session {worker.SessionId}. Press Connect.";
+            }
+            catch (Exception ex) when (ex is ArgumentException or DirectoryNotFoundException or IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                StatusText.Text = $"Quick setup folder created at {path} ({gitNote}) but worker failed: {ex.Message}";
+            }
+        });
     }
 
     /// Create a worker for the staged folder (the Add flow's explicit
@@ -4117,12 +4180,11 @@ public partial class MainWindow : Window
     private Avalonia.Controls.Flyout? _thinkingFlyout;
 
     /// <summary>
-    /// Honest engine flyout: today's values are real (get_state); selection
-    /// itself is pending the Core contract, stated plainly instead of
-    /// presented as functional. When CanConfigure flips true, the
-    /// adapter's real lists render in this same surface. One Flyout per
-    /// button, content refreshed on every open — repeated clicks never
-    /// stack popups (screen readers would hear each copy).
+    /// Real engine flyout: current value is genuine (get_state); when the
+    /// Core runtime reports configurable, the live lists render as real
+    /// choices in this same surface. Otherwise the honest Core reason is
+    /// shown instead of a nonfunctional picker. One Flyout per button,
+    /// content refreshed on every open — repeated clicks never stack popups.
     /// </summary>
     private Avalonia.Controls.StackPanel BuildEngineFlyoutPanel(string title, string current)
     {
@@ -4142,7 +4204,7 @@ public partial class MainWindow : Window
         panel.Children.Add(new Avalonia.Controls.TextBlock
         {
             Text = _settingsRuntime.CanConfigure
-                ? "Choose:"
+                ? "Loading options…"
                 : _settingsRuntime.UnavailableReason,
             Foreground = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#82889A")),
             FontSize = 12,
@@ -4151,22 +4213,129 @@ public partial class MainWindow : Window
         return panel;
     }
 
-    private void ModelButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private async void ModelButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         _modelFlyout ??= new Avalonia.Controls.Flyout();
+        var engine = ActiveEngine();
         _modelFlyout.Content = BuildEngineFlyoutPanel("Engine model",
-            ActiveEngine().Model is null
+            engine.Model is null
                 ? "No engine connected."
-                : $"Current: ({ActiveEngine().Provider ?? "?"}) {ActiveEngine().Model}");
+                : $"Current: ({engine.Provider ?? "?"}) {engine.Model}");
         _modelFlyout.ShowAt(ModelButton);
+        if (!_settingsRuntime.CanConfigure)
+        {
+            return;
+        }
+
+        try
+        {
+            var models = await _settingsRuntime.ListModelsAsync(CancellationToken.None).ConfigureAwait(false);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                var panel = BuildEngineFlyoutPanel("Engine model",
+                    engine.Model is null ? "No engine connected." : $"Current: ({engine.Provider ?? "?"}) {engine.Model}");
+                // Replace the trailing "Loading…" row with the real choices.
+                panel.Children.RemoveAt(panel.Children.Count - 1);
+                if (models.Count == 0)
+                {
+                    panel.Children.Add(new Avalonia.Controls.TextBlock { Text = "This connection reported no models.", FontSize = 12 });
+                }
+
+                foreach (var m in models)
+                {
+                    var caption = $"({m.Provider}) {m.DisplayName}";
+                    var item = new Button { Content = caption };
+                    item.Classes.Add("AxAction");
+                    var provider = m.Provider;
+                    var modelId = m.ModelId;
+                    item.Click += async (_, _) =>
+                    {
+                        try
+                        {
+                            await _settingsRuntime.SelectModelAsync(provider, modelId, CancellationToken.None).ConfigureAwait(false);
+                            await Dispatcher.UIThread.InvokeAsync(() =>
+                            {
+                                _modelFlyout.Hide();
+                                RefreshEngineSegments();
+                                RefreshOverviewAndSettings();
+                                StatusText.Text = $"Model switched to ({provider}) {modelId} — confirmed by engine state.";
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            await Dispatcher.UIThread.InvokeAsync(() => StatusText.Text = $"Model switch failed: {ex.Message}");
+                        }
+                    };
+                    panel.Children.Add(item);
+                }
+
+                _modelFlyout.Content = panel;
+            });
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Cannot list models: {ex.Message}";
+        }
     }
 
-    private void ThinkingButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private async void ThinkingButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         _thinkingFlyout ??= new Avalonia.Controls.Flyout();
+        var engine = ActiveEngine();
         _thinkingFlyout.Content = BuildEngineFlyoutPanel("Thinking level",
-            ActiveEngine().Thinking is null ? "No engine connected." : $"Current: {ActiveEngine().Thinking}");
+            engine.Thinking is null ? "No engine connected." : $"Current: {engine.Thinking}");
         _thinkingFlyout.ShowAt(ThinkingButton);
+        if (!_settingsRuntime.CanConfigure)
+        {
+            return;
+        }
+
+        try
+        {
+            var levels = await _settingsRuntime.ListThinkingLevelsAsync(CancellationToken.None).ConfigureAwait(false);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                var panel = BuildEngineFlyoutPanel("Thinking level",
+                    engine.Thinking is null ? "No engine connected." : $"Current: {engine.Thinking}");
+                panel.Children.RemoveAt(panel.Children.Count - 1);
+                if (levels.Count == 0)
+                {
+                    panel.Children.Add(new Avalonia.Controls.TextBlock { Text = "This model reported no thinking levels.", FontSize = 12 });
+                }
+
+                foreach (var level in levels)
+                {
+                    var item = new Button { Content = level };
+                    item.Classes.Add("AxAction");
+                    var captured = level;
+                    item.Click += async (_, _) =>
+                    {
+                        try
+                        {
+                            await _settingsRuntime.SelectThinkingLevelAsync(captured, CancellationToken.None).ConfigureAwait(false);
+                            await Dispatcher.UIThread.InvokeAsync(() =>
+                            {
+                                _thinkingFlyout.Hide();
+                                RefreshEngineSegments();
+                                RefreshOverviewAndSettings();
+                                StatusText.Text = $"Thinking level switched to {captured} — confirmed by engine state.";
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            await Dispatcher.UIThread.InvokeAsync(() => StatusText.Text = $"Thinking switch failed: {ex.Message}");
+                        }
+                    };
+                    panel.Children.Add(item);
+                }
+
+                _thinkingFlyout.Content = panel;
+            });
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Cannot list thinking levels: {ex.Message}";
+        }
     }
 
     private async Task DisconnectPiAsync()
