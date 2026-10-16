@@ -346,9 +346,9 @@
                  content (Auto row at the page bottom); the send chord stays
                  visible at the right, muted. -->
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-              <TextBox Grid.Column="0" x:Name="PiPromptBox" PlaceholderText="Ask Pi anything…"
+              <TextBox Grid.Column="0" x:Name="PiPromptBox" PlaceholderText="Ask Pi anything…" TextChanged="PiPromptBox_OnTextChanged"
                      AcceptsReturn="True" TextWrapping="Wrap" MinHeight="28" MaxHeight="220"
-                     ScrollViewer.VerticalScrollBarVisibility="Auto" BorderThickness="0"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto"
                      Background="Transparent" VerticalContentAlignment="Center"
                      ContextRequested="ComposerMenu_OnContextRequested">
               <TextBox.ContextFlyout>
@@ -368,8 +368,19 @@
                 </MenuFlyout>
               </TextBox.ContextFlyout>
               </TextBox>
-              <TextBlock Grid.Column="1" Text="Ctrl+Enter" Foreground="{DynamicResource Ax.Muted}"
-                         FontSize="11" VerticalAlignment="Center" />
+              <!-- Send/Stop composer button (B1): one control, two modes. Idle
+                   it sends through the single tested path (disabled unless the
+                   guards pass); during a run it becomes Stop, so a click can
+                   never send and cancel at once. The chord stays discoverable
+                   in the tooltip and the context menu. Bottom-aligned so
+                   composer growth never knocks it loose. -->
+              <Button Grid.Column="1" x:Name="ComposerSendButton" Classes="AxIconBtn"
+                      Click="ComposerSendButton_OnClick" Width="32" Height="32"
+                      VerticalAlignment="Bottom" Margin="0,0,0,2" IsEnabled="False"
+                      ToolTip.Tip="Send message (Ctrl+Enter)"
+                      AutomationProperties.Name="Send message">
+                <app:AxIcon x:Name="ComposerSendIcon" Kind="Send" Width="16" Height="16" />
+              </Button>
             </Grid>
           </StackPanel>
         </Border>

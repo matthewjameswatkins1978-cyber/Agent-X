@@ -48,6 +48,7 @@ public sealed class AxDesignTests
     [InlineData(AxIconKind.Grid)]
     [InlineData(AxIconKind.Chat)]
     [InlineData(AxIconKind.Branch)]
+    [InlineData(AxIconKind.Send)]
     public void EveryIconGeometryParses(AxIconKind kind)
     {
         // Geometry.Parse needs a render platform, which headless unit

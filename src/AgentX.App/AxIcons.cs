@@ -26,6 +26,7 @@ public enum AxIconKind
     Grid,
     Chat,
     Branch,
+    Send,
 }
 
 /// <summary>
@@ -76,6 +77,8 @@ public static class AxIcons
 
     public const string Branch = "M6 3v12 M18 9a9 9 0 0 1-9 9 M15 6a3 3 0 1 0 6 0 3 3 0 1 0-6 0 M3 18a3 3 0 1 0 6 0 3 3 0 1 0-6 0";
 
+    public const string Send = "M3.714 3.048a.498.498 0 0 0-.683.627l2.843 7.627a2 2 0 0 1 0 1.396l-2.842 7.627a.498.498 0 0 0 .682.627l18-8.5a.5.5 0 0 0 0-.904z M6 12h16";
+
     public static string DataFor(AxIconKind kind) => kind switch
     {
         AxIconKind.Connect => Connect,
@@ -97,6 +100,7 @@ public static class AxIcons
         AxIconKind.Grid => Grid,
         AxIconKind.Chat => Chat,
         AxIconKind.Branch => Branch,
+        AxIconKind.Send => Send,
         _ => More,
     };
 }

@@ -763,6 +763,7 @@ public partial class MainWindow : Window
         // The toolbar Stop icon exists only while the VIEWED run is active —
         // never a permanent button, never for another worker's run.
         StopButton.IsVisible = viewedBusy;
+        RefreshComposerSendButton();
     }
 
     /// Button states follow the selection: Disconnect stops the workspace
@@ -777,6 +778,7 @@ public partial class MainWindow : Window
             ? "Workers have no disconnect — Remove worker stops the selected worker's process."
             : "Disconnect the workspace session.");
         RemoveWorkerMenuItem.IsEnabled = workerSelected && _manager is not null;
+        RefreshComposerSendButton();
         // B1: the empty composer names its destination (approved Feed design).
         PiPromptBox.PlaceholderText = ComposerPlaceholder.For(
             SelectedWorker is { } worker ? WorkerViewKey.DisplayLabel(worker.Id, worker.Label) : null,
@@ -2056,6 +2058,52 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
+    /// Send/Stop composer button (B1): one control, two modes. Enablement
+    /// mirrors the context-menu guards exactly (ComposerActionPolicy); the
+    /// click reuses the single tested handlers, so the button, the menu and
+    /// the chords share one execution path. Refreshed on text, selection,
+    /// connection and run-state changes.
+    private void RefreshComposerSendButton()
+    {
+        var (connected, busy) = SelectedWorker is { } worker
+            ? (worker.IsConnected, _busyWorkers.Contains(worker.Id))
+            : (_conversation?.IsConnected == true, _piBusy);
+        var canSend = ComposerActionPolicy.CanSend(connected, busy, PiPromptBox.Text);
+        ComposerSendButton.IsEnabled = canSend || ComposerActionPolicy.CanStop(busy);
+        if (busy)
+        {
+            ComposerSendIcon.Kind = AxIconKind.Stop;
+            ComposerSendIcon.Filled = true;
+            Avalonia.Controls.ToolTip.SetTip(ComposerSendButton, "Stop current run (Escape)");
+            ComposerSendButton.SetValue(Avalonia.Automation.AutomationProperties.NameProperty, "Stop current run");
+        }
+        else
+        {
+            ComposerSendIcon.Kind = AxIconKind.Send;
+            ComposerSendIcon.Filled = false;
+            Avalonia.Controls.ToolTip.SetTip(ComposerSendButton, "Send message (Ctrl+Enter)");
+            ComposerSendButton.SetValue(Avalonia.Automation.AutomationProperties.NameProperty, "Send message");
+        }
+    }
+
+    private void ComposerSendButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        var busy = SelectedWorker is { } worker ? _busyWorkers.Contains(worker.Id) : _piBusy;
+        if (busy)
+        {
+            ComposerStop_OnClick(sender, e);
+        }
+        else
+        {
+            ComposerSend_OnClick(sender, e);
+        }
+    }
+
+    private void PiPromptBox_OnTextChanged(object? sender, Avalonia.Controls.TextChangedEventArgs e)
+    {
+        RefreshComposerSendButton();
+    }
+
     private void ComposerCut_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => PiPromptBox.Cut();
 
     private void ComposerCopy_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => PiPromptBox.Copy();
@@ -2753,6 +2801,11 @@ public partial class MainWindow : Window
 
     private void ApplyTheme()
     {
+        // The composer carries no focus adorner (FocusAdorner unset in
+        // XAML): the caret and the composer border carry focus state, so
+        // the system-blue ring never appears. The Fluent focus visual
+        // lives in the adorner layer, where element resources cannot
+        // reach it — hence removal, not recolouring.
         if (Avalonia.Application.Current is { } app)
         {
             app.RequestedThemeVariant = _prefs.Theme switch

@@ -4,6 +4,21 @@
              RequestedThemeVariant="Default">
              <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
 
+    <Application.Resources>
+        <!-- Charcoal focus edge (B1): implicit ControlTheme override. The
+             Fluent :focus rule paints PART_BorderElement from a
+             variant-scoped accent key that later overrides cannot reach;
+             this BasedOn theme wins the nested-style tie instead, and the
+             DynamicResource keeps every treatment correct. (Overriding the
+             SystemAccentColor key itself crashes startup; benign keys are
+             fine — both verified.) -->
+        <ControlTheme x:Key="{x:Type TextBox}" TargetType="TextBox"
+                      BasedOn="{StaticResource {x:Type TextBox}}">
+            <Style Selector="^:focus /template/ Border#PART_BorderElement">
+                <Setter Property="BorderBrush" Value="{DynamicResource Ax.BorderStrong}" />
+            </Style>
+        </ControlTheme>
+    </Application.Resources>
     <Application.Styles>
         <FluentTheme />
     </Application.Styles>
