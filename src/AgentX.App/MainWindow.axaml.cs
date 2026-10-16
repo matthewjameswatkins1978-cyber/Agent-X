@@ -163,6 +163,17 @@ public partial class MainWindow : Window
         // Empty state follows the collection itself: any add/clear on the UI
         // thread updates it, on every page, with no scattered call sites.
         _conversationItems.CollectionChanged += (_, _) => UpdateEmptyState();
+        // The run-status line vacates the composer when empty: one
+        // watcher covers every writer, so the empty composer stays
+        // compact with no scattered visibility calls.
+        PiRunStatus.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == TextBlock.TextProperty)
+            {
+                PiRunStatus.IsVisible = !string.IsNullOrEmpty(PiRunStatus.Text);
+            }
+        };
+        PiRunStatus.IsVisible = !string.IsNullOrEmpty(PiRunStatus.Text);
         _feed.Changed += FeedChanged;
         _syncCoalescer = new FeedEventCoalescer(work => Dispatcher.UIThread.Post(work));
         _bridge = new FeedBridge(_feed);
@@ -178,6 +189,20 @@ public partial class MainWindow : Window
             new EventHandler<Avalonia.Input.KeyEventArgs>(PiPromptBox_OnKeyDown),
             Avalonia.Interactivity.RoutingStrategies.Tunnel,
             handledEventsToo: true);
+        SizeChanged += (_, _) =>
+        {
+            if (LayoutOverlay.IsVisible)
+            {
+                PostLayoutRefresh();
+            }
+        };
+        // Developer Layout Inspector (B2): F12 toggles the guide overlay.
+        // Tunnel so the key works from anywhere, including the composer;
+        // the handler only ever acts on F12 itself.
+        AddHandler(
+            InputElement.KeyDownEvent,
+            new EventHandler<Avalonia.Input.KeyEventArgs>(Window_OnPreviewKeyDown),
+            Avalonia.Interactivity.RoutingStrategies.Tunnel);
         var (prefs, note) = AgentXPreferences.Load(ManagedRoot);
         _prefs = prefs;
         ApplyVisibility();
@@ -1533,6 +1558,11 @@ public partial class MainWindow : Window
         conversation.ActivityChanged += Conversation_ActivityChanged;
         conversation.ToolActivityChanged += Conversation_ToolActivityChanged;
         conversation.ConnectionLost += Conversation_ConnectionLost;
+        // Complete the observability binding: post-settle stats/state polls
+        // record through the conversation side (the tap side attaches in the
+        // factory above). Without this, LatestStats stays null and Usage
+        // telemetry never reaches the Overview.
+        conversation.AttachBridge(_bridge);
         try
         {
             // This workspace's Pi-native session, resumed by stable session id.
@@ -2575,6 +2605,198 @@ public partial class MainWindow : Window
         icon.Stroke = selected ? AxTheme.GreenBrush : AxTheme.IconBrush;
     }
 
+    /// Developer Layout Inspector (B2): F12 toggles the guide overlay.
+    /// No chord conflicts (Ctrl+Enter/Escape/find are untouched); the
+    /// overlay is hit-test invisible, so Pi operation is unaffected.
+    private void Window_OnPreviewKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
+    {
+        if (e.Key == Avalonia.Input.Key.F12)
+        {
+            LayoutOverlay.IsVisible = !LayoutOverlay.IsVisible;
+            if (LayoutOverlay.IsVisible)
+            {
+                PostLayoutRefresh();
+            }
+
+            e.Handled = true;
+        }
+    }
+
+    /// Measure the registered regions in overlay coordinates and draw the
+    /// datum guides plus the pass/fail readout. Overlay-only: no control
+    /// is moved, resized or restyled. Refreshed on toggle, resize and page
+    /// switch — never continuously, so it cannot drive a layout loop.
+    private void RefreshLayoutOverlay()
+    {
+        LayoutOverlay.Children.Clear();
+        var rects = new Dictionary<string, Avalonia.Rect>();
+        void Add(string name, Avalonia.Controls.Control? element)
+        {
+            if (element is null)
+            {
+                return;
+            }
+
+            rects[name] = new Avalonia.Rect(ToOverlay(element), element.Bounds.Size);
+        }
+
+        Add("cards", CardStrip);
+        Add("cardsDiv", CardsDivider);
+        Add("feed", ConversationList);
+        Add("composer", ComposerBox);
+        Add("footer", FooterBar);
+        Add("rabbit", BrandIcon);
+        Add("nav", NavLiveIcon);
+        Add("brand", BrandText);
+        Add("send", ComposerSendButton);
+        Add("input", PiPromptBox);
+        Add("headerDiv", HeaderDivider);
+        rects["overlay"] = new Avalonia.Rect(new Avalonia.Point(0, 0), LayoutOverlay.Bounds.Size);
+
+        var deviations = LayoutAudit.Check(rects);
+        foreach (var region in new[] { "cards", "feed", "composer", "footer", "rabbit", "send", "input" })
+        {
+            if (rects.TryGetValue(region, out var frame))
+            {
+                Frame(frame, AxTheme.DimBrush);
+            }
+        }
+
+        GuideFor("content-left", deviations, rects);
+        GuideFor("content-right", deviations, rects);
+        GuideFor("rail-brand", deviations, rects);
+        GuideFor("send-input", deviations, rects);
+
+        var lines = deviations.Select(d =>
+            $"{(d.Delta <= LayoutAudit.Tolerance ? "PASS" : "FAIL")} {d.Name} Δ{d.Delta:F1}");
+        var report = new TextBlock
+        {
+            Text = "Guides (F12)\n" + string.Join("\n", lines),
+            FontFamily = AxTheme.MonoFont,
+            FontSize = 11,
+            Foreground = AxTheme.TextBrush,
+            Background = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromArgb(210, 10, 14, 20)),
+            Padding = new Avalonia.Thickness(8),
+        };
+        Canvas.SetLeft(report, Math.Max(8, LayoutOverlay.Bounds.Width - 330));
+        Canvas.SetTop(report, 8);
+        LayoutOverlay.Children.Add(report);
+    }
+
+    /// One datum guide per check: verticals for column edges and the rail
+    /// datum, a horizontal for the Send/input centres. Colour carries the
+    /// verdict (green within tolerance, red beyond).
+    /// Origin of an element in overlay coordinates: sum layout bounds to
+    /// the visual root for both the element and the overlay, then take
+    /// the difference (window screen offset cancels). All registered
+    /// targets are non-scrolling containers with no render transforms, so
+    /// the sum is exact.
+    private Avalonia.Point ToOverlay(Avalonia.Controls.Control element)
+    {
+        var e = ToRoot(element);
+        var o = ToRoot(LayoutOverlay);
+        return new Avalonia.Point(e.X - o.X, e.Y - o.Y);
+    }
+
+    private static Avalonia.Point ToRoot(Avalonia.Visual node)
+    {
+        var x = 0.0;
+        var y = 0.0;
+        Avalonia.Visual? current = node;
+        while (current is not null)
+        {
+            x += current.Bounds.X;
+            y += current.Bounds.Y;
+            current = current.GetVisualParent();
+        }
+
+        return new Avalonia.Point(x, y);
+    }
+
+    private void GuideFor(
+        string name,
+        IReadOnlyList<GuideDeviation> deviations,
+        IReadOnlyDictionary<string, Avalonia.Rect> rects)
+    {
+        var deviation = deviations.FirstOrDefault(d => d.Name == name);
+        if (deviation is null)
+        {
+            return;
+        }
+
+        var ok = deviation.Delta <= LayoutAudit.Tolerance;
+        var brush = ok ? AxTheme.GreenBrush : AxTheme.RedBrush;
+        switch (name)
+        {
+            case "content-left":
+            case "content-right":
+                Guide(deviation.Expected, TopOf(rects, "cards"), deviation.Expected, BottomOf(rects, "footer"), brush);
+                break;
+            case "rail-brand":
+                Guide(deviation.Expected, TopOf(rects, "rabbit"), deviation.Expected, BottomOf(rects, "nav"), brush);
+                break;
+            case "send-input":
+                Guide(LeftOf(rects, "input"), deviation.Expected, RightOf(rects, "send"), deviation.Expected, brush);
+                break;
+        }
+    }
+
+    private void Guide(double x1, double y1, double x2, double y2, Avalonia.Media.IBrush brush)
+    {
+        LayoutOverlay.Children.Add(new Avalonia.Controls.Shapes.Line
+        {
+            StartPoint = new Avalonia.Point(x1, y1),
+            EndPoint = new Avalonia.Point(x2, y2),
+            Stroke = brush,
+            StrokeThickness = 1,
+            Opacity = 0.85,
+        });
+    }
+
+    private void Frame(Avalonia.Rect frame, Avalonia.Media.IBrush brush)
+    {
+        var box = new Avalonia.Controls.Shapes.Rectangle
+        {
+            Width = frame.Width,
+            Height = frame.Height,
+            Stroke = brush,
+            StrokeThickness = 1,
+            Opacity = 0.45,
+        };
+        Canvas.SetLeft(box, frame.X);
+        Canvas.SetTop(box, frame.Y);
+        LayoutOverlay.Children.Add(box);
+    }
+
+    private static double TopOf(IReadOnlyDictionary<string, Avalonia.Rect> rects, string name)
+        => rects.TryGetValue(name, out var r) ? r.Top : 0;
+
+    private static double BottomOf(IReadOnlyDictionary<string, Avalonia.Rect> rects, string name)
+        => rects.TryGetValue(name, out var r) ? r.Bottom : LayoutOverlayFallbackHeight(rects);
+
+    private static double LeftOf(IReadOnlyDictionary<string, Avalonia.Rect> rects, string name)
+        => rects.TryGetValue(name, out var r) ? r.Left : 0;
+
+    private static double RightOf(IReadOnlyDictionary<string, Avalonia.Rect> rects, string name)
+        => rects.TryGetValue(name, out var r) ? r.Right : 0;
+
+    /// Measure after the layout pass: a synchronous refresh would read
+    /// zero bounds from just-shown or just-switched panels (the overlay
+    /// itself included). Posted work is dropped when the window is gone.
+    private void PostLayoutRefresh()
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (!_closed && LayoutOverlay.IsVisible)
+            {
+                RefreshLayoutOverlay();
+            }
+        });
+    }
+
+    private static double LayoutOverlayFallbackHeight(IReadOnlyDictionary<string, Avalonia.Rect> rects)
+        => rects.TryGetValue("overlay", out var o) ? o.Height : 0;
+
     private void Nav_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (_syncingRail)
@@ -2631,6 +2853,10 @@ public partial class MainWindow : Window
         SettingsPanel.IsVisible = index == 2;
         // B1: the temporary rail action group is Feed-only.
         FeedActions.IsVisible = index == 1;
+        if (LayoutOverlay.IsVisible)
+        {
+            PostLayoutRefresh();
+        }
         if (index == 0)
         {
             RebuildOverview();
@@ -2642,51 +2868,23 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Overview shows only observed worker facts: identity, connection,
-    /// session file, map-derived counts and milestones. Nothing invented;
-    /// model/thinking show the last confirmed values (selection pending).
+    /// Overview dashboard (B2): every control shows observed values only —
+    /// identity, connection, attention, milestones, engine, telemetry and
+    /// activity. Quiet states wherever data is absent; nothing invented.
+    /// </summary>
     private void RebuildWorkerOverview(PiWorker worker)
     {
         var label = WorkerViewKey.DisplayLabel(worker.Id, worker.Label);
-        WorkspaceDetailText.Text = WorkerViewKey.Tooltip(worker.Id, worker.Label, worker.SessionId, worker.ProjectRoot);
         var state = worker.LastConfirmedState;
-        OverviewConnectionText.Text = worker.IsConnected && state is not null
-            ? $"Worker '{label}' connected. {EngineSummary()}"
-            : $"Worker '{label}' not connected. Press Connect on the Live page.";
-        var sessionFile = state?.SessionFile;
-        OverviewSessionFileText.Text = sessionFile is not null && File.Exists(sessionFile)
-            ? $"{sessionFile} ({new FileInfo(sessionFile).Length:N0} bytes)"
-            : "No session file yet — Pi persists on the first completed run.";
-        var map = ActiveFeed.BuildMap();
-        var changed = map.ChangedFiles.Count == 0 ? "none observed" : string.Join(", ", map.ChangedFiles);
-        var tests = map.TestCommands.Count == 0 ? "none observed" : string.Join(" | ", map.TestCommands);
-        OverviewFactsText.Text =
-            $"Entries: {ActiveFeed.Count} · error events: {map.ErrorCount} · " +
-            $"changed files: {changed} · test commands (heuristic): {tests} · " +
-            $"last run: {map.LastReceipt ?? "none"} · view syncs: {_syncRuns:N0}.";
-        OverviewMilestones.Children.Clear();
-        if (map.Milestones.Count == 0)
-        {
-            OverviewMilestones.Children.Add(new TextBlock
-            {
-                Text = "No milestones yet — they appear as you work.",
-                Foreground = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#AAB2BF")),
-                FontSize = 12,
-            });
-        }
-
-        foreach (var milestone in map.Milestones.TakeLast(8))
-        {
-            var button = new Button
-            {
-                Content = $"[#{milestone.Seq} {milestone.Kind}] {milestone.Title}",
-                Tag = milestone.Seq,
-                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
-            };
-            button.Click += Milestone_OnClick;
-            OverviewMilestones.Children.Add(button);
-        }
-
+        string? sessionFile = state?.SessionFile is { } file && File.Exists(file) ? file : null;
+        FillOverview(
+            label,
+            worker.IsConnected && state is not null,
+            _busyWorkers.Contains(worker.Id),
+            ActiveFeed,
+            sessionFile,
+            ActiveEngine(),
+            worker.LatestStats);
         RebuildSessionMap();
     }
 
@@ -2707,57 +2905,179 @@ public partial class MainWindow : Window
             return;
         }
 
-        WorkspaceDetailText.Text = entry.Detail;
         var viewingOwn = _conversation is null || entry.Key == _connectedKey;
-        OverviewConnectionText.Text = _conversation?.IsConnected == true
-            ? viewingOwn
-                ? $"Connected to '{_connectedLabel}'. {EngineSummary()}"
-                : $"Connected to '{_connectedLabel}' — viewing '{entry.Label}' (connect it to work here)."
-            : $"Not connected. {(viewingOwn ? "Press Connect on the Live page." : "This is not the connected workspace.")}";
+        var sessionFile = SessionFileFor(entry);
+        var name = AxTheme.WorkspaceTabLabel(entry.IsLegacy, entry.Label);
+        FillOverview(
+            name,
+            viewingOwn && _conversation?.IsConnected == true,
+            viewingOwn && _piBusy,
+            _feed,
+            sessionFile,
+            ActiveEngine(),
+            _bridge.LatestStats);
+        RebuildSessionMap();
+    }
+
+    /// Session file path for an entry, or null when absent or unreadable.
+    /// The card shows the file name plus size; lookup noise stays out.
+    private string? SessionFileFor(CatalogEntry entry)
+    {
         try
         {
-            var workspace = entry.ToWorkspace(ManagedRoot);
-            var sessionFile = workspace.FindSessionFile();
-            OverviewSessionFileText.Text = sessionFile is { } found
-                ? $"{found.Path} ({found.Bytes:N0} bytes)"
-                : "No session file yet — Pi persists on the first completed run.";
+            return entry.ToWorkspace(ManagedRoot).FindSessionFile()?.Path;
         }
-        catch (Exception ex)
+        catch
         {
-            OverviewSessionFileText.Text = $"Session file lookup failed: {ex.Message}";
+            return null;
+        }
+    }
+
+    /// Fill every Overview control from observed values. Telemetry comes
+    /// from the post-settle poll Core already runs (never a new RPC here);
+    /// without a snapshot the Usage card says so instead of inventing.
+    private void FillOverview(
+        string label,
+        bool connected,
+        bool busy,
+        ConversationFeed feed,
+        string? sessionFile,
+        (string? Provider, string? Model, string? Thinking, int? Messages) engine,
+        StatsSnapshot? stats)
+    {
+        OvStateText.Text = connected
+            ? (busy ? $"Working · {label}" : $"Idle · {label}")
+            : $"Not connected · {label}";
+        OvStateDot.Fill = connected
+            ? (busy ? AxTheme.YellowBrush : AxTheme.GreenBrush)
+            : AxTheme.MutedBrush;
+
+        var entries = feed.Snapshot();
+        var map = feed.BuildMap();
+        var attention = OverviewSummary.AttentionFor(connected, busy, entries, map.ErrorCount);
+        OvAttentionText.Text = attention.Text;
+        OvAttentionText.Foreground = attention.Level switch
+        {
+            AttentionLevel.Warning => AxTheme.YellowBrush,
+            AttentionLevel.Guidance => AxTheme.MutedBrush,
+            _ => AxTheme.GreenBrush,
+        };
+
+        // Receipts and compactions are outcomes, not missions: the card
+        // shows the latest work-driving milestone, or stays quiet.
+        var milestone = map.Milestones.LastOrDefault(m => m.Kind is not ("receipt" or "compaction"));
+        if (milestone is null)
+        {
+            OvMissionTitle.Text = "No mission data yet.";
+            OvMissionDetail.Text = "Milestones appear as you work.";
+        }
+        else
+        {
+            OvMissionTitle.Text = milestone.Title;
+            var evidence = new List<string>();
+            if (map.ChangedFiles.Count > 0)
+            {
+                evidence.Add($"changed: {string.Join(", ", map.ChangedFiles)}");
+            }
+
+            if (map.TestCommands.Count > 0)
+            {
+                evidence.Add($"tests (heuristic): {string.Join(" | ", map.TestCommands)}");
+            }
+
+            OvMissionDetail.Text = $"[#{milestone.Seq} {milestone.Kind}]" +
+                (evidence.Count == 0 ? " No file changes observed yet." : $" {string.Join(" · ", evidence)}");
         }
 
-        var map = _feed.BuildMap();
-        var changed = map.ChangedFiles.Count == 0 ? "none observed" : string.Join(", ", map.ChangedFiles);
-        var tests = map.TestCommands.Count == 0 ? "none observed" : string.Join(" | ", map.TestCommands);
-        OverviewFactsText.Text =
-            $"Entries: {_feed.Count} · error events: {map.ErrorCount} · " +
-            $"changed files: {changed} · test commands (heuristic): {tests} · " +
-            $"last run: {map.LastReceipt ?? "none"} · view syncs: {_syncRuns:N0}.";
-        OverviewMilestones.Children.Clear();
-        if (map.Milestones.Count == 0)
+        OvMissionEvidence.Children.Clear();
+        if (milestone is not null)
         {
-            OverviewMilestones.Children.Add(new TextBlock
+            OvMissionEvidence.Children.Add(JumpButton($"Evidence #{milestone.Seq}", milestone.Seq));
+        }
+
+        OvModelName.Text = engine.Model ?? "—";
+        OvModelDetail.Text = engine.Model is null
+            ? "Pi engine not connected."
+            : $"({engine.Provider ?? "?"}) · thinking {engine.Thinking ?? "?"} · messages {engine.Messages?.ToString("N0") ?? "?"}";
+        if (sessionFile is null)
+        {
+            OvSessionName.Text = "No session file yet.";
+            Avalonia.Controls.ToolTip.SetTip(OvSessionName, "Pi persists the session on the first completed run.");
+        }
+        else
+        {
+            OvSessionName.Text = $"{System.IO.Path.GetFileName(sessionFile)} ({new FileInfo(sessionFile).Length:N0} bytes)";
+            Avalonia.Controls.ToolTip.SetTip(OvSessionName, sessionFile);
+        }
+
+        var receipt = entries.LastOrDefault(e => e.Role == "receipt");
+        if (receipt is null)
+        {
+            OvVerifyTitle.Text = "Awaiting evidence";
+            OvVerifyDetail.Text = map.TestCommands.Count == 0
+                ? "No latest verified run."
+                : $"No latest verified run. Test commands (heuristic): {string.Join(" | ", map.TestCommands)}";
+        }
+        else
+        {
+            var healthy = !receipt.IsError && receipt.Note != "needs review";
+            OvVerifyTitle.Text = healthy ? "Latest run healthy" : "Run needs review";
+            OvVerifyDetail.Text = receipt.Text;
+        }
+
+        if (stats is null)
+        {
+            OvUsageLine.Text = "Awaiting first settled run — Pi reports telemetry after a run completes.";
+            OvContextBar.IsVisible = false;
+            OvCostLine.Text = "Est. cost: not available.";
+        }
+        else
+        {
+            OvUsageLine.Text = $"Context {stats.ContextPercent:F1}% · {stats.TotalTokens:N0} tokens · {stats.ToolCalls} tool calls.";
+            OvContextBar.Value = Math.Clamp(stats.ContextPercent, 0, 100);
+            OvContextBar.IsVisible = true;
+            OvCostLine.Text = stats.Cost > 0
+                ? $"Est. cost (Pi-reported): ${stats.Cost:F4}."
+                : "Est. cost: not available.";
+        }
+
+        OvActivityList.Children.Clear();
+        var activity = OverviewSummary.RecentActivity(entries);
+        if (activity.Count == 0)
+        {
+            OvActivityList.Children.Add(new TextBlock
             {
-                Text = "No milestones yet — they appear as you work.",
-                Foreground = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#AAB2BF")),
+                Text = "No activity yet.",
+                Foreground = AxTheme.MutedBrush,
                 FontSize = 12,
             });
         }
 
-        foreach (var milestone in map.Milestones.TakeLast(8))
+        foreach (var item in activity)
         {
-            var button = new Button
-            {
-                Content = $"[#{milestone.Seq} {milestone.Kind}] {milestone.Title}",
-                Tag = milestone.Seq,
-                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
-            };
-            button.Click += Milestone_OnClick;
-            OverviewMilestones.Children.Add(button);
+            var (rowLabel, rowDetail) = OverviewSummary.Summarize(item);
+            var jump = JumpButton(rowLabel, item.Seq);
+            Avalonia.Controls.ToolTip.SetTip(jump, rowDetail);
+            OvActivityList.Children.Add(jump);
         }
+    }
 
-        RebuildSessionMap();
+    /// Quiet evidence-jump link: transparent, left-aligned, opens the feed
+    /// row on click (Milestone_OnClick jumps by evidence seq).
+    private Button JumpButton(string label, long seq)
+    {
+        var jump = new Button
+        {
+            Content = label,
+            Tag = seq,
+            Background = Avalonia.Media.Brushes.Transparent,
+            BorderThickness = new Avalonia.Thickness(0),
+            Foreground = AxTheme.BlueBrush,
+            Padding = new Avalonia.Thickness(4, 2, 4, 2),
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+        };
+        jump.Click += Milestone_OnClick;
+        return jump;
     }
 
     private void Milestone_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

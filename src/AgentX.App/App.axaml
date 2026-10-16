@@ -18,6 +18,19 @@
                 <Setter Property="BorderBrush" Value="{DynamicResource Ax.BorderStrong}" />
             </Style>
         </ControlTheme>
+        <!-- Charcoal checkbox (B2): the checked glyph and box fill come
+             from accent keys with the same reach problem. Green glyph on
+             a charcoal box keeps the success voice without Windows blue. -->
+        <ControlTheme x:Key="{x:Type CheckBox}" TargetType="CheckBox"
+                      BasedOn="{StaticResource {x:Type CheckBox}}">
+            <Style Selector="^:checked /template/ Path#CheckGlyph">
+                <Setter Property="Fill" Value="{DynamicResource Ax.Green}" />
+            </Style>
+            <Style Selector="^:checked /template/ Border#NormalRectangle">
+                <Setter Property="Background" Value="{DynamicResource Ax.BorderStrong}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource Ax.BorderStrong}" />
+            </Style>
+        </ControlTheme>
     </Application.Resources>
     <Application.Styles>
         <FluentTheme />
