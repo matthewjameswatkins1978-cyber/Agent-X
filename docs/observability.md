@@ -66,7 +66,11 @@ from docs alone; doc-shaped claims are marked "documented, not observed".
   observed `tool_execution_start` records.
 - Per-tool stderr, cwd, and timeouts on the wire; `partialResult` replace-vs-
   extend semantics (per-tool contract).
-- Retry, queue, compaction, and extension shapes in small runs: documented in
+- Retry, compaction, and session-rename shapes: verified against Pi 1.3.0
+  (`auto_retry_start/end`, `compaction_start/end`, `session_info_changed`)
+  and decoded as typed events with Detailed feed rows. Queue, extension,
+  and unknown shapes stay `OtherEvent` (extension errors additionally
+  surface as Full-level error rows via the bridge).
   `json.md`, not observed here. The tap preserves them as `OtherEvent` when
   they appear.
 

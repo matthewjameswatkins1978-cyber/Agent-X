@@ -664,6 +664,18 @@ public sealed class PiConversation : IAsyncDisposable
                     }
 
                     break;
+                case "compaction_end":
+                    // Pi reports compaction failure with an error message
+                    // (its TUI enters error state); aborted/finished compactions
+                    // are not run failures.
+                    if (root.TryGetProperty("errorMessage", out var compactionError)
+                        && compactionError.ValueKind == JsonValueKind.String
+                        && !string.IsNullOrWhiteSpace(compactionError.GetString()))
+                    {
+                        errors++;
+                    }
+
+                    break;
             }
         }
         catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or JsonException)
@@ -737,7 +749,7 @@ public sealed class PiConversation : IAsyncDisposable
         {
             "system" => null, // Prompt boilerplate; not conversation.
             "user" => new ConversationMessage("user", ExtractContentText(message)),
-            "assistant" => new ConversationMessage("assistant", ExtractAssistantText(message)),
+            "assistant" => ParseAssistant(message),
             "toolResult" => new ConversationMessage("tool", FormatToolResult(message), HistoryCallId(message), IsErrorProp(message)),
             "bashExecution" => new ConversationMessage("tool", FormatBashExecution(message), HistoryCallId(message), IsErrorProp(message)),
             "custom" => message.TryGetProperty("display", out var display)
@@ -849,7 +861,8 @@ public sealed class PiConversation : IAsyncDisposable
     /// </summary>
     /// Pi's own persisted failure flag on a history message (observed
     /// evidence: a literal boolean property, never inferred from text).
-    /// Absent or non-boolean reads as no observed failure.
+    /// Absent or non-boolean reads as no observed failure. A stopReason of
+    /// "error" on an assistant message counts the same way (see ParseAssistant).
     internal static bool IsErrorProp(JsonElement message)
     {
         return message.TryGetProperty("isError", out var e) && e.ValueKind == JsonValueKind.True;
@@ -875,13 +888,75 @@ public sealed class PiConversation : IAsyncDisposable
         return string.IsNullOrEmpty(body) ? header : header + "\n" + PiRedaction.Redact(body);
     }
 
+    /// <summary>
+    /// Restored assistant message. Pi persists failed and aborted turns with
+    /// an empty body and the story in <c>errorMessage</c> (verified against
+    /// Pi 1.3.0's own message constructors). An empty body with an
+    /// error/abort stop reason restores as an explicit Core-authored marker
+    /// — never as a blank clean row — carrying the redacted error text. A
+    /// stopReason of "error" is Pi's own persisted failure flag, so the row
+    /// counts like a live failure; "aborted" stays non-error exactly like
+    /// live aborts. Non-empty bodies are never rewritten.
+    /// </summary>
+    private static ConversationMessage ParseAssistant(JsonElement message)
+    {
+        var text = ExtractAssistantText(message);
+        var stop = message.TryGetProperty("stopReason", out var s) && s.ValueKind == JsonValueKind.String
+            ? s.GetString()
+            : null;
+        var failed = string.Equals(stop, "error", StringComparison.Ordinal);
+        if (string.IsNullOrEmpty(text)
+            && (failed || string.Equals(stop, "aborted", StringComparison.Ordinal))
+            && message.TryGetProperty("errorMessage", out var em)
+            && em.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(em.GetString()))
+        {
+            var kind = failed ? "error" : "aborted";
+            text = $"[Pi {kind}: {AgentXEvent.PreviewForTap(PiRedaction.Redact(em.GetString()), 500)}]";
+        }
+
+        return new ConversationMessage("assistant", text, IsError: failed);
+    }
+
+    /// <summary>
+    /// Observed outcome markers for a restored direct-bash execution.
+    /// Success-shaped and field-absent rows render exactly as before (no
+    /// marker); only an observed cancel, nonzero exit, or truncation adds
+    /// one. Exit codes come from Pi's own persisted record — never inferred.
+    /// </summary>
+    private static string BashOutcomeMarker(JsonElement message)
+    {
+        if (message.TryGetProperty("cancelled", out var cancelled)
+            && cancelled.ValueKind == JsonValueKind.True)
+        {
+            return " [cancelled]";
+        }
+
+        var marker = string.Empty;
+        if (message.TryGetProperty("exitCode", out var exit)
+            && exit.ValueKind == JsonValueKind.Number
+            && exit.TryGetInt32(out var code) && code != 0)
+        {
+            marker += $" [exit {code}]";
+        }
+
+        if (message.TryGetProperty("truncated", out var truncated)
+            && truncated.ValueKind == JsonValueKind.True)
+        {
+            marker += " [truncated]";
+        }
+
+        return marker;
+    }
+
     internal static string FormatBashExecution(JsonElement message)
     {
         var command = message.TryGetProperty("command", out var c) ? c.GetString() ?? string.Empty : string.Empty;
         var output = message.TryGetProperty("output", out var o) ? o.GetString() ?? string.Empty : string.Empty;
         var safeCommand = PiRedaction.Redact(command);
         var safeOutput = PiRedaction.Redact(output);
-        return string.IsNullOrEmpty(output) ? $"Ran `{safeCommand}`" : $"Ran `{safeCommand}`\n{safeOutput}";
+        var head = $"Ran `{safeCommand}`{BashOutcomeMarker(message)}";
+        return string.IsNullOrEmpty(output) ? head : $"{head}\n{safeOutput}";
     }
 
     public static string FormatHistoryForDisplay(IReadOnlyList<ConversationMessage> history, int perMessageChars = 2000)

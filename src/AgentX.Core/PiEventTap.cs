@@ -166,6 +166,11 @@ public sealed class PiEventTap : IDisposable
             "bash_execution_update" => new BashChunk(
                 observedAtUtc, PiRedaction.Id(Str(root, "id")),
                 Head(Str(root, "delta"), MaxBashHead), Str(root, "delta")?.Length ?? 0),
+            "session_info_changed" => DecodeSessionRenamed(root, observedAtUtc),
+            "auto_retry_start" => DecodeRetryStart(root, observedAtUtc),
+            "auto_retry_end" => DecodeRetryEnd(root, observedAtUtc),
+            "compaction_start" => DecodeCompactionStart(root, observedAtUtc),
+            "compaction_end" => DecodeCompactionEnd(root, observedAtUtc),
             "response" => DecodeResponse(root, document, observedAtUtc),
             _ => DescribeUnknown(root, type.Length > 0 ? type : "unknown", observedAtUtc),
         };
@@ -287,6 +292,60 @@ public sealed class PiEventTap : IDisposable
         var preview = Slice(kept, MaxOutputPreview);
         return new ToolEnded(observedAtUtc, callId, name, isError, duration, exit, wireTruncated, tapCut,
             outputTotal, Encoding.UTF8.GetByteCount(kept), preview, kept, resultPresent);
+    }
+
+    /// <summary>
+    /// Live session rename (set_session_name): the name is user-chosen text,
+    /// redacted, flattened and capped. Absent/empty names carry no information
+    /// and degrade to metadata instead of an empty row.
+    /// </summary>
+    private static AgentXEvent DecodeSessionRenamed(JsonElement root, DateTime observedAtUtc)
+    {
+        var name = AgentXEvent.PreviewForTap(PiRedaction.Redact(Str(root, "name")), 120);
+        return string.IsNullOrEmpty(name)
+            ? DescribeUnknown(root, "session_info_changed", observedAtUtc)
+            : new SessionRenamed(observedAtUtc, name);
+    }
+
+    /// <summary>Automatic retry began: attempt/max/delayMs are counts, the message Pi's own redacted error text.</summary>
+    private static AgentXEvent DecodeRetryStart(JsonElement root, DateTime observedAtUtc)
+        => new AutoRetryStarted(observedAtUtc,
+            (int)Num(root, "attempt"), (int)Num(root, "maxAttempts"), Num(root, "delayMs"),
+            AgentXEvent.PreviewForTap(PiRedaction.Redact(Str(root, "errorMessage")), 500));
+
+    /// <summary>
+    /// Automatic retry finished. Success is Pi's own boolean and always
+    /// present on the wire; a missing/non-boolean success flag degrades to
+    /// metadata rather than a fabricated failure verdict.
+    /// </summary>
+    private static AgentXEvent DecodeRetryEnd(JsonElement root, DateTime observedAtUtc)
+    {
+        if (!root.TryGetProperty("success", out var s)
+            || s.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            return DescribeUnknown(root, "auto_retry_end", observedAtUtc);
+        }
+
+        var finalError = s.ValueKind == JsonValueKind.True ? null
+            : AgentXEvent.PreviewForTap(PiRedaction.Redact(Str(root, "finalError")), 500);
+        return new AutoRetryEnded(observedAtUtc, s.ValueKind == JsonValueKind.True,
+            (int)Num(root, "attempt"), string.IsNullOrEmpty(finalError) ? null : finalError);
+    }
+
+    /// <summary>Compaction began; the reason token is shape-gated (manual/auto), empty stays empty.</summary>
+    private static AgentXEvent DecodeCompactionStart(JsonElement root, DateTime observedAtUtc)
+        => new CompactionStarted(observedAtUtc, PiRedaction.Text(Str(root, "reason")));
+
+    /// <summary>
+    /// Compaction finished. The end event itself is the completion evidence:
+    /// an error message means Pi reported failure, aborted means cancelled,
+    /// otherwise finished. Absent optionals are simply absent.
+    /// </summary>
+    private static AgentXEvent DecodeCompactionEnd(JsonElement root, DateTime observedAtUtc)
+    {
+        var error = AgentXEvent.PreviewForTap(PiRedaction.Redact(Str(root, "errorMessage")), 500);
+        return new CompactionEnded(observedAtUtc, Bool(root, "aborted"),
+            PiRedaction.Text(Str(root, "reason")), string.IsNullOrEmpty(error) ? null : error);
     }
 
     private static AgentXEvent DecodeResponse(JsonElement root, JsonDocument document, DateTime observedAtUtc)

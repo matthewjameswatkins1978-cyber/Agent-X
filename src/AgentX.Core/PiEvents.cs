@@ -335,3 +335,76 @@ public sealed record EngineStateObserved(DateTime ObservedAtUtc, PiEngineState S
         ? $"Engine: {State.ModelId ?? "unknown model"} (streaming: {State.IsStreaming}, messages: {State.MessageCount})."
         : null;
 }
+
+/// <summary>Pi renamed the session live (set_session_name). The name is user-chosen text: redacted, flattened, capped.</summary>
+public sealed record SessionRenamed(DateTime ObservedAtUtc, string Name)
+    : AgentXEvent(ObservedAtUtc, "session_info_changed")
+{
+    internal override int RetainedChars() => Name.Length;
+
+    public override string? Render(VisibilityLevel level) => level switch
+    {
+        VisibilityLevel.Compact => null,
+        _ => string.IsNullOrEmpty(Name) ? "Session renamed." : $"Session renamed to {Name}.",
+    };
+}
+
+/// <summary>Pi began an automatic retry after a transient error. The message is Pi's own error text, redacted and capped.</summary>
+public sealed record AutoRetryStarted(DateTime ObservedAtUtc, int Attempt, int MaxAttempts, long DelayMs, string ErrorMessage)
+    : AgentXEvent(ObservedAtUtc, "auto_retry_start")
+{
+    internal override int RetainedChars() => ErrorMessage.Length;
+
+    public override string? Render(VisibilityLevel level) => level switch
+    {
+        VisibilityLevel.Compact => null,
+        _ => ErrorMessage.Length == 0
+            ? $"Pi retry {Attempt}/{MaxAttempts} in {DelayMs} ms."
+            : $"Pi retry {Attempt}/{MaxAttempts} in {DelayMs} ms: {ErrorMessage}",
+    };
+}
+
+/// <summary>An automatic retry finished. FinalError carries Pi's terminal message on failure, redacted and capped; null on recovery.</summary>
+public sealed record AutoRetryEnded(DateTime ObservedAtUtc, bool Success, int Attempt, string? FinalError)
+    : AgentXEvent(ObservedAtUtc, "auto_retry_end")
+{
+    internal override int RetainedChars() => FinalError?.Length ?? 0;
+
+    public override string? Render(VisibilityLevel level) => level switch
+    {
+        VisibilityLevel.Compact => null,
+        _ => Success
+            ? $"Retry attempt {Attempt} recovered."
+            : string.IsNullOrEmpty(FinalError)
+                ? $"Retry attempt {Attempt} failed."
+                : $"Retry attempt {Attempt} failed: {FinalError}",
+    };
+}
+
+/// <summary>Pi began compacting context. Reason is Pi's own token (manual/auto), shape-gated; empty renders without it.</summary>
+public sealed record CompactionStarted(DateTime ObservedAtUtc, string Reason)
+    : AgentXEvent(ObservedAtUtc, "compaction_start")
+{
+    public override string? Render(VisibilityLevel level) => level switch
+    {
+        VisibilityLevel.Compact => null,
+        _ => string.IsNullOrEmpty(Reason) ? "Pi is compacting context." : $"Pi is compacting context ({Reason}).",
+    };
+}
+
+/// <summary>Compaction finished. An error message means Pi reported failure; aborted means it was cancelled.</summary>
+public sealed record CompactionEnded(DateTime ObservedAtUtc, bool Aborted, string Reason, string? ErrorMessage)
+    : AgentXEvent(ObservedAtUtc, "compaction_end")
+{
+    internal override int RetainedChars() => ErrorMessage?.Length ?? 0;
+
+    public override string? Render(VisibilityLevel level) => level switch
+    {
+        VisibilityLevel.Compact => null,
+        _ => Aborted
+            ? "Compaction aborted."
+            : !string.IsNullOrEmpty(ErrorMessage)
+                ? $"Compaction failed: {ErrorMessage}"
+                : "Compaction finished.",
+    };
+}

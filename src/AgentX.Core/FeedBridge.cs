@@ -196,6 +196,41 @@ public sealed class FeedBridge : IDisposable
             case EngineStateObserved engine:
                 LatestEngine = engine;
                 break;
+            case SessionRenamed renamed when Level >= VisibilityLevel.Detailed:
+                _feed.AddSystemNotice(renamed.Render(VisibilityLevel.Detailed) ?? string.Empty);
+                break;
+            case AutoRetryStarted retryStart when Level >= VisibilityLevel.Detailed:
+                _feed.AddSystemNotice(retryStart.Render(VisibilityLevel.Detailed) ?? string.Empty);
+                break;
+            case AutoRetryEnded retryEnd when Level >= VisibilityLevel.Detailed:
+                // A failed retry is a run problem like a tool failure (the
+                // receipt counts it too); a recovery is a plain notice.
+                if (retryEnd.Success)
+                {
+                    _feed.AddSystemNotice(retryEnd.Render(VisibilityLevel.Detailed) ?? string.Empty);
+                }
+                else
+                {
+                    _feed.AddError(retryEnd.Render(VisibilityLevel.Detailed) ?? string.Empty);
+                }
+
+                break;
+            case CompactionStarted compactionStart when Level >= VisibilityLevel.Detailed:
+                _feed.AddSystemNotice(compactionStart.Render(VisibilityLevel.Detailed) ?? string.Empty);
+                break;
+            case CompactionEnded compactionEnd when Level >= VisibilityLevel.Detailed:
+                // Only a reported compaction failure is an error row; an
+                // aborted or finished compaction is an informational notice.
+                if (!string.IsNullOrEmpty(compactionEnd.ErrorMessage))
+                {
+                    _feed.AddError(compactionEnd.Render(VisibilityLevel.Detailed) ?? string.Empty);
+                }
+                else
+                {
+                    _feed.AddSystemNotice(compactionEnd.Render(VisibilityLevel.Detailed) ?? string.Empty);
+                }
+
+                break;
             case TapError tapError when Level >= VisibilityLevel.Full:
                 _feed.AddSystemNotice($"Tap skipped a {tapError.Chars}-char {tapError.Kind} record.");
                 break;
