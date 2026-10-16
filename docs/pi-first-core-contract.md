@@ -23,7 +23,7 @@ Live Pi 1.3.0 ephemeral probe → all six baseline commands `success:true`.
 // 1. Open existing project (+ Git state for the header/footer)
 AgentXWorkspace ws = AgentXWorkspace.ForProject(managedRoot, pickedFolder);
 ProjectGitState git = ProjectGit.ReadState(pickedFolder);
-// git: { ProjectRoot, IsGitRepo, TopLevel, Branch?, HeadSha?, IsDirty }
+// git: { ProjectRoot, IsGitRepo, TopLevel, Branch?, HeadSha?, IsDirty, StatusAvailable } + ProjectGit.DescribeBranch (single branch label: named, unborn, detached)
 // Pi runs IN ws.WorkingDirectory (= ProjectRoot). Nothing is written into it.
 
 // 2. Fresh local project (no remote, no commit)

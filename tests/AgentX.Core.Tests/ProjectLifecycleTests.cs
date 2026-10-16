@@ -182,6 +182,100 @@ public sealed class ProjectLifecycleTests
     }
 
     [Fact]
+    public void ReadState_FailedStatus_IsUnavailableNeverClean()
+    {
+        // Corrupt index: rev-parse still resolves the repo, but status
+        // cannot run. The failure must surface as unavailable, not clean.
+        var root = TempRoot("badstatus");
+        try
+        {
+            var project = NewProject.Create(root, "lifecycle-badstatus");
+            RunGit(project, "config user.email probe@local");
+            RunGit(project, "config user.name probe");
+            File.WriteAllText(Path.Combine(project, "a.txt"), "x");
+            RunGit(project, "add -A");
+            RunGit(project, "commit -m init");
+            File.WriteAllBytes(Path.Combine(project, ".git", "index"), new byte[] { 0xDE, 0xAD, 0xBE, 0xEF });
+
+            var state = ProjectGit.ReadState(project);
+            Assert.True(state.IsGitRepo);
+            Assert.False(state.StatusAvailable);
+            Assert.False(state.IsDirty); // Meaningless here — hosts must check StatusAvailable first.
+            Assert.NotNull(state.HeadSha);
+        }
+        finally
+        {
+            DeleteTree(root);
+        }
+    }
+
+    [Fact]
+    public void ReadState_DetachedHead_ReportsShaWithoutBranch()
+    {
+        var root = TempRoot("detached");
+        try
+        {
+            var project = NewProject.Create(root, "lifecycle-detached");
+            RunGit(project, "config user.email probe@local");
+            RunGit(project, "config user.name probe");
+            File.WriteAllText(Path.Combine(project, "a.txt"), "x");
+            RunGit(project, "add -A");
+            RunGit(project, "commit -m init");
+            RunGit(project, "checkout --detach HEAD");
+
+            var state = ProjectGit.ReadState(project);
+            Assert.True(state.IsGitRepo);
+            Assert.Null(state.Branch);
+            Assert.NotNull(state.HeadSha);
+            Assert.True(state.StatusAvailable);
+            Assert.Equal("detached HEAD", ProjectGit.DescribeBranch(state));
+        }
+        finally
+        {
+            DeleteTree(root);
+        }
+    }
+
+    [Fact]
+    public void DescribeBranch_Matrix()
+    {
+        var utc = DateTime.UtcNow;
+        Assert.Equal("main", ProjectGit.DescribeBranch(
+            new ProjectGitState("/r", true, "/r", "main", new string('a', 40), false, true, utc)));
+        Assert.Equal("unborn HEAD (no commits yet)", ProjectGit.DescribeBranch(
+            new ProjectGitState("/r", true, "/r", null, null, false, true, utc)));
+        Assert.Equal("detached HEAD", ProjectGit.DescribeBranch(
+            new ProjectGitState("/r", true, "/r", null, new string('b', 40), false, true, utc)));
+    }
+
+    /// Git marks object files read-only: clear attributes before
+    /// recursive delete or cleanup throws UnauthorizedAccessException.
+    private static void DeleteTree(string root)
+    {
+        foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        {
+            try { File.SetAttributes(file, FileAttributes.Normal); } catch { }
+        }
+
+        Directory.Delete(root, recursive: true);
+    }
+
+    private static void RunGit(string directory, string arguments)
+    {
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+            "git", $"-C \"{directory}\" {arguments}")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        });
+        Assert.NotNull(process);
+        Assert.True(process.WaitForExit(30000), $"git {arguments} timed out.");
+        Assert.True(process.ExitCode == 0, $"git {arguments} failed: {process.StandardError.ReadToEnd()}");
+    }
+
+    [Fact]
     public void ReadState_Timeout_ThrowsLoudly()
     {
         var root = TempRoot("gittimeout");

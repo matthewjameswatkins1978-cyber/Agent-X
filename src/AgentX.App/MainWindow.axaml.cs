@@ -1315,8 +1315,30 @@ public partial class MainWindow : Window
         _addConfirmFlyout.Closed += AddConfirmFlyout_OnClosed;
         // Keyboard users land on the first action when the flyout opens;
         // tab order then walks the actions, Esc/outside-click dismisses.
-        _addConfirmFlyout.Opened += (_, _) => _existingButton.Focus();
+        _addConfirmFlyout.Opened += (_, _) => FocusAddFlyout();
         AddContextButton.Flyout = _addConfirmFlyout;
+    }
+
+    /// Focus follows the visible Add mode (never an invisible control):
+    /// choice → Existing Project, confirm → Open project, quick → name box.
+    /// Routing logic is unit-tested via <see cref="AddFlyoutFocus"/>.
+    private void FocusAddFlyout()
+    {
+        switch (AddFlyoutFocus.Pick(
+            _choiceRow.IsVisible,
+            _openButton.IsVisible && _confirmRow.IsVisible,
+            _quickSetupRow.IsVisible))
+        {
+            case AddFlyoutFocus.Target.Open:
+                _openButton.Focus();
+                break;
+            case AddFlyoutFocus.Target.Name:
+                _quickNameBox.Focus();
+                break;
+            default:
+                _existingButton.Focus();
+                break;
+        }
     }
 
     /// Dismissing the Add flyout without confirming is a cancellation:
@@ -1324,7 +1346,8 @@ public partial class MainWindow : Window
     /// clear the staging first, so their own flyout close is a no-op.
     private void AddConfirmFlyout_OnClosed(object? sender, EventArgs e)
     {
-        _quickSetupRow.IsVisible = false;
+        // Visibility resets on the next open via ShowAddMode; closing only
+        // drops unconfirmed staging.
         if (_pendingWorkspacePath is not null)
         {
             _pendingWorkspacePath = null;
@@ -1339,9 +1362,8 @@ public partial class MainWindow : Window
     private void QuickSetupReveal_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         _quickNameBox.Text ??= ProjectSetupFacts.SuggestName();
-        _quickSetupRow.IsVisible = true;
         _addConfirmNote.Text = $"New folder under {ProjectSetupFacts.DefaultProjectsParent()} + local git init (no remote, no commit). Edit the name, then Create project — or close to cancel.";
-        _quickNameBox.Focus();
+        ShowAddMode("quick");
     }
 
     private async void QuickSetupCreate_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -1442,7 +1464,7 @@ public partial class MainWindow : Window
                 return $"{projectRoot} (not a Git repository)";
             }
 
-            var branch = git.Branch ?? "detached HEAD";
+            var branch = ProjectGit.DescribeBranch(git);
             return $"{projectRoot} • {branch} • {(git.IsDirty ? "uncommitted changes" : "clean")}";
         }
         catch (Exception ex) when (ex is InvalidOperationException or TimeoutException or ArgumentException)

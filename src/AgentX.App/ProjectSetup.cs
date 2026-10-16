@@ -119,10 +119,13 @@ public static class ProjectSetupFacts
         }
         else
         {
-            var branch = git.Branch
-                ?? (git.HeadSha is null ? "unborn HEAD (no commits yet)" : "detached HEAD");
-            var dirty = git.IsDirty ? "uncommitted changes" : "clean";
-            lines.Add($"Git: {branch}, {dirty}.");
+            // One Core interpretation (branch label + status availability)
+            // shared with the footer tooltip: a failed query is unavailable,
+            // never clean, and only Core names the branch state.
+            var status = !git.StatusAvailable
+                ? "status unavailable"
+                : git.IsDirty ? "uncommitted changes" : "clean";
+            lines.Add($"Git: {ProjectGit.DescribeBranch(git)}, {status}.");
             if (git.TopLevel is not null
                 && !string.Equals(
                     AgentXWorkspace.CanonicalizeProjectRoot(git.TopLevel),

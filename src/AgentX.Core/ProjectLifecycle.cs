@@ -6,6 +6,9 @@ namespace AgentX.Core;
 /// Observed Git state of one project root. UI-free; the host renders it.
 /// <see cref="IsGitRepo"/> false means the directory is not inside a Git
 /// work tree — every other field is then null/false and nothing throws.
+/// <see cref="StatusAvailable"/> false means the repo was confirmed but
+/// <c>status</c> could not be read: <see cref="IsDirty"/> is then
+/// meaningless and hosts must report unavailable, never clean.
 /// </summary>
 public sealed record ProjectGitState(
     string ProjectRoot,
@@ -14,6 +17,7 @@ public sealed record ProjectGitState(
     string? Branch,
     string? HeadSha,
     bool IsDirty,
+    bool StatusAvailable,
     DateTime CheckedUtc);
 
 /// <summary>
@@ -47,19 +51,24 @@ public static class ProjectGit
         var top = RunGit(canonical, "rev-parse --show-toplevel", limit);
         if (top is null)
         {
-            return new ProjectGitState(canonical, false, null, null, null, false, DateTime.UtcNow);
+            return new ProjectGitState(canonical, false, null, null, null, false, false, DateTime.UtcNow);
         }
 
         var branchRaw = RunGit(canonical, "rev-parse --abbrev-ref HEAD", limit);
         var headRaw = RunGit(canonical, "rev-parse HEAD", limit);
         var statusRaw = RunGit(canonical, "status --porcelain", limit);
+        // A failed status query is unavailable, never clean: IsDirty below
+        // is only meaningful when statusAvailable holds.
+        var statusAvailable = statusRaw is not null;
+        var dirty = statusRaw is not null && statusRaw.Length > 0;
         return new ProjectGitState(
             canonical,
             true,
             NormalizePath(top),
             ParseBranch(branchRaw),
             NormalizeSha(headRaw),
-            statusRaw is not null && statusRaw.Length > 0,
+            dirty,
+            statusAvailable,
             DateTime.UtcNow);
     }
 
@@ -78,6 +87,15 @@ public static class ProjectGit
         var branch = output.Trim();
         return branch.Length == 0 || branch == "HEAD" ? null : branch;
     }
+
+    /// <summary>
+    /// The single branch-label interpretation every host uses (notes,
+    /// tooltips, footer): named branch, unborn HEAD (confirmed repo with
+    /// no commits), or detached HEAD. GUI layers must not re-derive this.
+    /// </summary>
+    public static string DescribeBranch(ProjectGitState git)
+        => git.Branch
+            ?? (git.HeadSha is null ? "unborn HEAD (no commits yet)" : "detached HEAD");
 
     private static string? NormalizePath(string? output)
         => string.IsNullOrWhiteSpace(output) ? null : output.Trim();
