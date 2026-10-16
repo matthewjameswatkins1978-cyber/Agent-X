@@ -777,6 +777,10 @@ public partial class MainWindow : Window
             ? "Workers have no disconnect — Remove worker stops the selected worker's process."
             : "Disconnect the workspace session.");
         RemoveWorkerMenuItem.IsEnabled = workerSelected && _manager is not null;
+        // B1: the empty composer names its destination (approved Feed design).
+        PiPromptBox.PlaceholderText = ComposerPlaceholder.For(
+            SelectedWorker is { } worker ? WorkerViewKey.DisplayLabel(worker.Id, worker.Label) : null,
+            SelectedEntry is { } entry ? AxTheme.WorkspaceTabLabel(entry.IsLegacy, entry.Label) : null);
     }
 
     private void WorkspaceTabs_OnChanged(object? sender, SelectionChangedEventArgs e)
@@ -2534,6 +2538,7 @@ public partial class MainWindow : Window
 
     // Checkpoint A shell: the rail is fixed icon-only (Overview / Feed /
     // Settings); the expandable labeled rail and its preference are gone.
+    // B1 adds the temporary Feed action group (FeedActions, Feed-only).
     // ViewPrefs.RailExpanded stays persisted but unused.
 
     /// Persist view preferences. Prunes drafts ONLY against healthy sources:
@@ -2560,6 +2565,8 @@ public partial class MainWindow : Window
         OverviewPanel.IsVisible = index == 0;
         LivePanel.IsVisible = index == 1;
         SettingsPanel.IsVisible = index == 2;
+        // B1: the temporary rail action group is Feed-only.
+        FeedActions.IsVisible = index == 1;
         if (index == 0)
         {
             RebuildOverview();
@@ -2723,18 +2730,8 @@ public partial class MainWindow : Window
         {
             var name = AxTheme.WorkspaceTabLabel(entry.IsLegacy, entry.Label);
             EmptyStateText.Text = _conversation is null
-                ? $"No conversation in '{name}' yet. Connect, then ask your first question — or try a suggestion below."
+                ? $"No conversation in '{name}' yet. Connect, then ask your first question."
                 : $"'{name}' is quiet. Ask anything below to begin.";
-        }
-    }
-
-    private void Suggestion_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-    {
-        if (sender is Button button && button.Tag is string prompt)
-        {
-            PiPromptBox.Text = prompt;
-            PiPromptBox.Focus();
-            PiPromptBox.CaretIndex = prompt.Length;
         }
     }
 

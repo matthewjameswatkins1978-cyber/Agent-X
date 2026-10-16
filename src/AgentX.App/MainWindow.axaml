@@ -87,6 +87,57 @@
             <app:AxIcon x:Name="NavLiveIcon" Kind="Chat" Width="18" Height="18" />
           </ToggleButton>
         </StackPanel>
+        <!-- Temporary feed action group (Checkpoint B1): the Feed toolbar
+             actions live here until the rail earns a designed home. Visually
+             separated from the three navigation destinations (Overview /
+             Feed above, Settings below) and shown on the Feed page only.
+             Buttons keep their names, handlers and states — only the parent
+             changes. -->
+        <StackPanel DockPanel.Dock="Top" x:Name="FeedActions" Spacing="4" Margin="0,8,0,0">
+          <Border BorderBrush="{DynamicResource Ax.Border}" BorderThickness="0,1,0,0"
+                  Margin="10,0,10,4" />
+          <Button x:Name="ConnectButton" Classes="AxIconBtn" Click="ConnectPi_OnClick"
+                  ToolTip.Tip="Connect the selected worker or workspace"
+                  AutomationProperties.Name="Connect" HorizontalAlignment="Center">
+            <app:AxIcon Kind="Connect" />
+          </Button>
+          <Button x:Name="ReconnectButton" Classes="AxIconBtn" Click="ReconnectPi_OnClick"
+                  ToolTip.Tip="Reconnect (session is persisted)"
+                  AutomationProperties.Name="Reconnect" HorizontalAlignment="Center">
+            <app:AxIcon Kind="Reconnect" />
+          </Button>
+          <Button x:Name="StopButton" Classes="AxIconBtn" Click="ComposerStop_OnClick"
+                  IsVisible="False" ToolTip.Tip="Stop current run (Escape)"
+                  AutomationProperties.Name="Stop current run" HorizontalAlignment="Center">
+            <app:AxIcon Kind="Stop" Filled="True" />
+          </Button>
+          <Button x:Name="CopySelectedButton" Classes="AxIconBtn" Click="CopySelectedMessage_OnClick"
+                  ToolTip.Tip="Copy selected message (exact bytes)"
+                  AutomationProperties.Name="Copy selected message" HorizontalAlignment="Center">
+            <app:AxIcon Kind="Copy" />
+          </Button>
+          <Button x:Name="MoreActionsButton" Classes="AxIconBtn" ToolTip.Tip="More actions"
+                  AutomationProperties.Name="More actions" HorizontalAlignment="Center">
+            <app:AxIcon Kind="More" Filled="True" />
+            <Button.Flyout>
+              <MenuFlyout>
+                <MenuItem x:Name="DisconnectMenuItem" Header="Disconnect"
+                          Click="DisconnectPi_OnClick"
+                          ToolTip.Tip="Disconnect the workspace session" />
+                <MenuItem x:Name="AutoScrollMenuItem" Header="Auto-scroll" ToggleType="CheckBox"
+                          IsChecked="True" StaysOpenOnClick="True" Click="AutoScrollMenu_OnClick"
+                          ToolTip.Tip="Follow new messages automatically" />
+                <MenuItem x:Name="CopyFullMenuItem" Header="Copy full conversation"
+                          Click="CopyFullConversation_OnClick"
+                          ToolTip.Tip="Copy the whole transcript (exact bytes)" />
+                <Separator />
+                <MenuItem x:Name="RemoveWorkerMenuItem" Header="Remove worker…"
+                          Click="RemoveWorker_OnClick"
+                          ToolTip.Tip="Stop the selected worker's process and remove its registration (session files stay on disk)" />
+              </MenuFlyout>
+            </Button.Flyout>
+          </Button>
+        </StackPanel>
         <StackPanel DockPanel.Dock="Bottom" Spacing="8">
           <ToggleButton x:Name="NavSettings" Classes="NavBtn" Click="Nav_OnClick" Width="40" Height="40"
                         ToolTip.Tip="Settings" AutomationProperties.Name="Settings">
@@ -172,7 +223,7 @@
       </ScrollViewer>
 
       <!-- Live: contextual toolbar + dominant conversation + anchored composer. -->
-      <Grid x:Name="LivePanel" RowDefinitions="Auto,Auto,*,Auto" RowSpacing="6">
+      <Grid x:Name="LivePanel" RowDefinitions="Auto,*,Auto" RowSpacing="6">
         <Border Grid.Row="0" x:Name="FindBar" IsVisible="False" BorderBrush="{DynamicResource Ax.Border}"
                 BorderThickness="1" CornerRadius="{DynamicResource Ax.Radius}" Padding="8,4"
                 Background="{DynamicResource Ax.Surface}">
@@ -185,59 +236,10 @@
             <Button Content="Close" Click="FindClose_OnClick" FontSize="12" />
           </StackPanel>
         </Border>
-        <!-- Contextual actions: frequent actions as icons, occasional or
-             destructive ones in the overflow menu. No dead buttons. -->
-        <DockPanel Grid.Row="1" LastChildFill="False" MinHeight="32">
-          <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Spacing="2">
-            <Button x:Name="ConnectButton" Classes="AxIconBtn" Click="ConnectPi_OnClick"
-                    ToolTip.Tip="Connect the selected worker or workspace"
-                    AutomationProperties.Name="Connect">
-              <app:AxIcon Kind="Connect" />
-            </Button>
-            <Button x:Name="ReconnectButton" Classes="AxIconBtn" Click="ReconnectPi_OnClick"
-                    ToolTip.Tip="Reconnect (session is persisted)"
-                    AutomationProperties.Name="Reconnect">
-              <app:AxIcon Kind="Reconnect" />
-            </Button>
-            <Button x:Name="StopButton" Classes="AxIconBtn" Click="ComposerStop_OnClick"
-                    IsVisible="False" ToolTip.Tip="Stop current run (Escape)"
-                    AutomationProperties.Name="Stop current run">
-              <app:AxIcon Kind="Stop" Filled="True" />
-            </Button>
-            <Button x:Name="CopySelectedButton" Classes="AxIconBtn" Click="CopySelectedMessage_OnClick"
-                    ToolTip.Tip="Copy selected message (exact bytes)"
-                    AutomationProperties.Name="Copy selected message">
-              <app:AxIcon Kind="Copy" />
-            </Button>
-          </StackPanel>
-          <Button DockPanel.Dock="Right" Classes="AxIconBtn" ToolTip.Tip="More actions"
-                  AutomationProperties.Name="More actions">
-            <app:AxIcon Kind="More" Filled="True" />
-            <Button.Flyout>
-              <MenuFlyout>
-                <MenuItem x:Name="DisconnectMenuItem" Header="Disconnect"
-                          Click="DisconnectPi_OnClick"
-                          ToolTip.Tip="Disconnect the workspace session" />
-                <MenuItem x:Name="AutoScrollMenuItem" Header="Auto-scroll" ToggleType="CheckBox"
-                          IsChecked="True" StaysOpenOnClick="True" Click="AutoScrollMenu_OnClick"
-                          ToolTip.Tip="Follow new messages automatically" />
-                <MenuItem x:Name="CopyFullMenuItem" Header="Copy full conversation"
-                          Click="CopyFullConversation_OnClick"
-                          ToolTip.Tip="Copy the whole transcript (exact bytes)" />
-                <Separator />
-                <MenuItem x:Name="RemoveWorkerMenuItem" Header="Remove worker…"
-                          Click="RemoveWorker_OnClick"
-                          ToolTip.Tip="Stop the selected worker's process and remove its registration (session files stay on disk)" />
-              </MenuFlyout>
-            </Button.Flyout>
-          </Button>
-        </DockPanel>
+        <!-- Feed actions live in the rail group (FeedActions) since B1. -->
 
-        <Grid Grid.Row="2">
-          <Border BorderBrush="{DynamicResource Ax.Border}" BorderThickness="1"
-                  CornerRadius="{DynamicResource Ax.Radius}" Padding="4"
-                  Background="{DynamicResource Ax.Bg}">
-            <ListBox x:Name="ConversationList" Background="Transparent" BorderThickness="0"
+        <Grid Grid.Row="1">
+          <ListBox x:Name="ConversationList" Background="Transparent" BorderThickness="0"
                      SelectionMode="Single" FontFamily="{DynamicResource Ax.ProseFont}"
                      FontSize="{DynamicResource Ax.FeedFontSize}">
               <ListBox.ItemsPanel>
@@ -318,29 +320,19 @@
                 </DataTemplate>
               </ListBox.ItemTemplate>
             </ListBox>
-          </Border>
-          <!-- Restrained empty state: one state-aware hint line plus the
-               composer-filling suggestions. No tutorial card; the composer
-               below stays the obvious starting point. -->
+          <!-- Restrained empty state: one state-aware hint line. No tutorial
+               card, no suggestion buttons; the composer below stays the
+               obvious starting point. -->
           <StackPanel x:Name="EmptyStatePanel" IsVisible="False" HorizontalAlignment="Center"
                       VerticalAlignment="Center" Spacing="10" MaxWidth="620">
             <TextBlock x:Name="EmptyStateText" Text="Connect a workspace, then ask your first question."
                        Foreground="{DynamicResource Ax.Muted}" FontSize="13" TextWrapping="Wrap"
                        HorizontalAlignment="Center" TextAlignment="Center" />
-            <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center" ItemSpacing="8">
-              <Button Content="List the top-level files and explain the layout"
-                      Tag="List the top-level files in this project and explain the layout briefly."
-                      Click="Suggestion_OnClick" FontSize="12" />
-              <Button Content="Summarise recent changes" Tag="Summarise the recent changes in this project."
-                      Click="Suggestion_OnClick" FontSize="12" />
-              <Button Content="What tests exist and how do I run them"
-                      Tag="What tests exist in this project and how do I run them?"
-                      Click="Suggestion_OnClick" FontSize="12" />
-            </WrapPanel>
+            <!-- B1: suggestions removed — the empty state is one hint line. -->
           </StackPanel>
         </Grid>
 
-        <Border Grid.Row="3" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="1"
+        <Border Grid.Row="2" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="1"
                 CornerRadius="{DynamicResource Ax.Radius}" Padding="8"
                 Background="{DynamicResource Ax.Surface}">
           <StackPanel Spacing="6">
@@ -350,10 +342,14 @@
                  Chord + Escape handled in code (PreviewKeyDown tunnel): XAML cannot
                  attach tunnel events. The only visible Send/Stop surface is the context
                  menu (mouse right-click or Shift+F10/Menu key) — no permanent buttons. -->
-            <TextBox x:Name="PiPromptBox" PlaceholderText="Ask Pi anything… (Ctrl+Enter to send)"
-                     AcceptsReturn="True" TextWrapping="Wrap" MinHeight="64" MaxHeight="220"
+            <!-- Composer row: the box takes the width and grows upward with
+                 content (Auto row at the page bottom); the send chord stays
+                 visible at the right, muted. -->
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <TextBox Grid.Column="0" x:Name="PiPromptBox" PlaceholderText="Ask Pi anything…"
+                     AcceptsReturn="True" TextWrapping="Wrap" MinHeight="28" MaxHeight="220"
                      ScrollViewer.VerticalScrollBarVisibility="Auto" BorderThickness="0"
-                     Background="Transparent"
+                     Background="Transparent" VerticalContentAlignment="Center"
                      ContextRequested="ComposerMenu_OnContextRequested">
               <TextBox.ContextFlyout>
                 <!-- Opened programmatically at the CONTROL (see ContextRequested
@@ -371,7 +367,10 @@
                   <MenuItem x:Name="ComposerStopItem" Header="Stop current run" InputGesture="Escape" Click="ComposerStop_OnClick" />
                 </MenuFlyout>
               </TextBox.ContextFlyout>
-            </TextBox>
+              </TextBox>
+              <TextBlock Grid.Column="1" Text="Ctrl+Enter" Foreground="{DynamicResource Ax.Muted}"
+                         FontSize="11" VerticalAlignment="Center" />
+            </Grid>
           </StackPanel>
         </Border>
       </Grid>
