@@ -52,6 +52,14 @@ another view's draft); failed sends never clear; the button path
   typed on a worker did not leak to the workspace composer, restored
   exactly on return, sent normally, and stayed cleared across further
   switches — `view-prefs.json` shows both drafts empty afterwards.
+- Send-then-switch-before-settle phantom CLOSED live (Luna retest
+  pass): the worker settle path returned early when another view was
+  selected, so the pre-switch snapshot restored the SENT text into
+  the box on return (screenshot-proven, resendable verbatim). Fix:
+  `VacateSentDraft` retires the sent draft under the worker's own key
+  at settle regardless of selection, guarded by sent-text equality so
+  newer edits survive; re-verified with a sleep-anchored run (box
+  empty on return, prefs vacated).
   Cross-RESTART resend remains unexercised (no killed-mid-draft
   cycle); per-key persistence makes resurrection-by-design, and the
   send path is the only author of user rows, so the remaining risk

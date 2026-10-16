@@ -276,39 +276,14 @@ public partial class MainWindow : Window
             StatusText.Text = _viewPrefs.RecoveryMessage;
         }
 
-        AppendWorkerTabs();
+        // Worker tabs are part of LoadWorkspaceTabs itself now (merged
+        // strip order): no separate append step to forget on later rebuilds.
         UpdateTabDots();
         if (_managerError is not null)
         {
             StatusText.Text = _viewPrefs.IsRecovery
                 ? $"{_viewPrefs.RecoveryMessage} {_managerError}"
                 : _managerError;
-        }
-    }
-
-    /// Append persisted worker tabs after the workspace tabs (startup only;
-    /// later changes go through RebuildWorkerTabs). Never steals the
-    /// workspace selection — startup still lands on legacy.
-    private void AppendWorkerTabs()
-    {
-        if (_manager is null)
-        {
-            return;
-        }
-
-        _suppressTabEvents = true;
-        try
-        {
-            var tintIndex = WorkspaceTabs.Items.Count;
-            foreach (var worker in _manager.Workers)
-            {
-                WorkspaceTabs.Items.Add(MakeWorkerTab(
-                    worker, worker.IsConnected, _busyWorkers.Contains(worker.Id), tintIndex++));
-            }
-        }
-        finally
-        {
-            _suppressTabEvents = false;
         }
     }
 
@@ -340,13 +315,44 @@ public partial class MainWindow : Window
             _conversation is not null ? _connectedWorkspace : null,
             selectKey);
         var connectedLive = _conversation is not null && _connectedKey is not null;
-        WorkspaceTabs.Items.Clear();
-        var tintIndex = 0;
+        // Both populations merge through one tested order (catalog first,
+        // then workers): a catalog rebuild after a workspace registration
+        // can never drop an existing worker tab again. Keys materialize
+        // to catalog tabs or worker tabs; unknown keys are impossible by
+        // construction but skipped rather than crashed on.
+        var workerIds = _manager?.Workers.Select(w => w.Id).ToArray() ?? [];
+        var order = WorkerDisplayPolicy.StripOrder(
+            resolved.Entries.Select(e => e.Key).ToArray(), workerIds);
+        var entriesByKey = new Dictionary<string, CatalogEntry>(StringComparer.Ordinal);
         foreach (var entry in resolved.Entries)
         {
-            WorkspaceTabs.Items.Add(MakeTab(entry,
-                isConnected: connectedLive && entry.Key == _connectedKey,
-                tintIndex: tintIndex++));
+            entriesByKey[entry.Key] = entry;
+        }
+
+        var workersById = new Dictionary<string, PiWorker>(StringComparer.Ordinal);
+        if (_manager is not null)
+        {
+            foreach (var worker in _manager.Workers)
+            {
+                workersById[worker.Id] = worker;
+            }
+        }
+
+        WorkspaceTabs.Items.Clear();
+        var tintIndex = 0;
+        foreach (var key in order)
+        {
+            if (entriesByKey.TryGetValue(key, out var entry))
+            {
+                WorkspaceTabs.Items.Add(MakeTab(entry,
+                    isConnected: connectedLive && entry.Key == _connectedKey,
+                    tintIndex: tintIndex++));
+            }
+            else if (workersById.TryGetValue(key, out var worker))
+            {
+                WorkspaceTabs.Items.Add(MakeWorkerTab(
+                    worker, worker.IsConnected, _busyWorkers.Contains(worker.Id), tintIndex++));
+            }
         }
 
         // One authoritative transition for programmatic reselects too: a
@@ -946,6 +952,39 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Retire a successfully sent draft that settled while another view
+    /// was selected (send-then-switch-before-settle). Only vacates when
+    /// the stored draft is still exactly the sent message: a newer user
+    /// edit is never clobbered. The visible box is untouched — another
+    /// view owns it. Both the in-memory store and the persisted prefs
+    /// move together so the phantom cannot resurrect on return.
+    /// </summary>
+    private void VacateSentDraft(string key, string sentMessage)
+    {
+        var store = _viewLifecycle.Store;
+        if (!store.TryGet(key, out var state) || state is null
+            || !string.Equals(state.DraftText, sentMessage, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!store.Save(key, state with { DraftText = string.Empty }))
+        {
+            return;
+        }
+
+        _viewPrefs.Drafts[key] = string.Empty;
+        try
+        {
+            SaveViewPrefs();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            store.MarkDirty(key);
+        }
+    }
+
+    /// <summary>
     /// Restore one worker tab's view: draft (seeded from persisted prefs on
     /// first visit), selection, scroll, and its status snapshot. Live
     /// connection/engine strings stay global and are NOT overwritten here.
@@ -1164,9 +1203,18 @@ public partial class MainWindow : Window
         _addConfirmFlyout = new Flyout
         {
             Content = body,
-            Placement = Avalonia.Controls.PlacementMode.BottomEdgeAlignedLeft,
+            // The + button sits at the window's right edge: aligning the
+            // flyout's right edge to the anchor's right grows it leftward
+            // into the window instead of off-screen. Constraint adjustment
+            // (slide/flip/resize) is the supported fallback for narrow
+            // windows — no hardcoded offsets.
+            Placement = Avalonia.Controls.PlacementMode.BottomEdgeAlignedRight,
+            PlacementConstraintAdjustment = Avalonia.Controls.Primitives.PopupPositioning.PopupPositionerConstraintAdjustment.All,
         };
         _addConfirmFlyout.Closed += AddConfirmFlyout_OnClosed;
+        // Keyboard users land on the first action when the flyout opens;
+        // tab order then walks the actions, Esc/outside-click dismisses.
+        _addConfirmFlyout.Opened += (_, _) => workerButton.Focus();
         AddContextButton.Flyout = _addConfirmFlyout;
     }
 
@@ -1874,6 +1922,11 @@ public partial class MainWindow : Window
         try
         {
             var (text, receipt) = await worker.SendAsync(message, progress);
+            // Background settle: the reader may have moved on, but the
+            // successfully sent draft must still retire under the WORKER's
+            // key — otherwise the pre-switch snapshot restores the sent
+            // text as a phantom draft on return (resendable verbatim).
+            VacateSentDraft(WorkerViewKey.ForWorker(id), message);
             if (!IsSelectedWorker(id))
             {
                 return; // Reader moved on: feed + dots are current; footer stays theirs.

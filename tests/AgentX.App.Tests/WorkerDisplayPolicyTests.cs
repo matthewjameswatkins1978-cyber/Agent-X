@@ -71,4 +71,46 @@ public sealed class WorkerDisplayPolicyTests
     {
         Assert.Null(WorkerDisplayPolicy.RepairTarget("gone", [], null));
     }
+
+    [Fact]
+    public void StripOrder_LunaRepro_WorkerSurvivesWorkspaceRegistrations()
+    {
+        // project-a worker created first, then project-b and project-c
+        // registered: every population stays visible, catalog first.
+        var order = WorkerDisplayPolicy.StripOrder(
+            ["legacy", "proj-b", "proj-c"], ["worker-a"]);
+        Assert.Equal(["legacy", "proj-b", "proj-c", "worker-a"], order);
+    }
+
+    [Fact]
+    public void StripOrder_MixedPopulation_KeepsBothOrders()
+    {
+        var order = WorkerDisplayPolicy.StripOrder(
+            ["legacy", "b", "c"], ["w1", "w2"]);
+        Assert.Equal(["legacy", "b", "c", "w1", "w2"], order);
+    }
+
+    [Fact]
+    public void StripOrder_DuplicateKeyKeptOnceCatalogWins()
+    {
+        var order = WorkerDisplayPolicy.StripOrder(["legacy", "x"], ["x", "w"]);
+        Assert.Equal(["legacy", "x", "w"], order);
+    }
+
+    [Fact]
+    public void StripOrder_EmptyWorkersIsCatalogOnly()
+    {
+        var order = WorkerDisplayPolicy.StripOrder(["legacy", "b"], []);
+        Assert.Equal(["legacy", "b"], order);
+    }
+
+    [Theory]
+    [InlineData(null, "a", true)]
+    [InlineData("a", "a", false)]
+    [InlineData("a", "b", true)]
+    [InlineData("a", null, false)]
+    public void ShouldReveal_OnlyOnSelectionChange(string? last, string? selected, bool expected)
+    {
+        Assert.Equal(expected, WorkerDisplayPolicy.ShouldReveal(last, selected));
+    }
 }

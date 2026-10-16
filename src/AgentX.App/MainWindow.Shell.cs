@@ -157,6 +157,29 @@ public partial class MainWindow
         }
 
         ApplyCardWidths();
+        RevealSelectedCard(fresh);
+    }
+
+    /// Selection must reveal the selected card (overflow strip): posted so
+    /// layout settles first, and only on selection CHANGE so busy ticks
+    /// never fight the user's scroll (WorkerDisplayPolicy.ShouldReveal).
+    private string? _lastRevealedKey;
+
+    private void RevealSelectedCard(IReadOnlyList<ContextCardData> fresh)
+    {
+        var selected = fresh.FirstOrDefault(f => f.IsSelected)?.Key;
+        if (!WorkerDisplayPolicy.ShouldReveal(_lastRevealedKey, selected))
+        {
+            return;
+        }
+
+        _lastRevealedKey = selected;
+        var button = ContextCards.Children.OfType<Button>()
+            .FirstOrDefault(b => (b.Tag as CardView)?.Data.Key == selected);
+        if (button is not null)
+        {
+            Dispatcher.UIThread.Post(button.BringIntoView);
+        }
     }
 
     private ContextCardData WorkerCardData(PiWorker worker, bool selected)
@@ -280,7 +303,12 @@ public partial class MainWindow
         reconnect.Click += (_, e) => CardMenu_Act(button, ReconnectPi_OnClick, e);
         disconnect.Click += (_, e) => CardMenu_Act(button, DisconnectPi_OnClick, e);
         remove.Click += (_, e) => CardMenu_Act(button, RemoveWorker_OnClick, e);
-        var menu = new MenuFlyout();
+        var menu = new MenuFlyout
+        {
+            // Card menus anchor across the full strip width including the
+            // right edge: let the system slide/flip inside the window.
+            PlacementConstraintAdjustment = Avalonia.Controls.Primitives.PopupPositioning.PopupPositionerConstraintAdjustment.All,
+        };
         menu.Items.Add(connect);
         menu.Items.Add(reconnect);
         menu.Items.Add(disconnect);

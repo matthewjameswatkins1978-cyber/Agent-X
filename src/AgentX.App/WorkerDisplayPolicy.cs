@@ -24,6 +24,47 @@ public static class WorkerDisplayPolicy
     public static bool ShowWorking(bool viewedIsBusy) => viewedIsBusy;
 
     /// <summary>
+    /// Card-strip order from the two authorities: catalog entries first
+    /// (legacy + registered workspaces, in catalog order), then workers
+    /// (in manager order), each key once. A catalog rebuild must never
+    /// drop a worker: both populations always merge here, so registering
+    /// a workspace cannot hide an existing worker. Ordinal throughout.
+    /// </summary>
+    public static IReadOnlyList<string> StripOrder(
+        IReadOnlyList<string> catalogKeys, IReadOnlyList<string> workerIds)
+    {
+        var order = new List<string>(catalogKeys.Count + workerIds.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var key in catalogKeys)
+        {
+            if (seen.Add(key))
+            {
+                order.Add(key);
+            }
+        }
+
+        foreach (var id in workerIds)
+        {
+            if (seen.Add(id))
+            {
+                order.Add(id);
+            }
+        }
+
+        return order;
+    }
+
+    /// <summary>
+    /// Selection reveal without scroll-jacking: scroll the strip only
+    /// when the SELECTED key actually changed (registration, removal,
+    /// user switch). Busy/connection/state refreshes keep the key and
+    /// must never fight the user's scroll position.
+    /// </summary>
+    public static bool ShouldReveal(string? lastRevealedKey, string? selectedKey)
+        => selectedKey is not null
+            && !string.Equals(lastRevealedKey, selectedKey, StringComparison.Ordinal);
+
+    /// <summary>
     /// Tab-list repair after a worker removal: which worker id to show, or
     /// null to fall back to the legacy workspace view. A null viewed id
     /// (workspace showing) repairs nothing; a surviving viewed worker is

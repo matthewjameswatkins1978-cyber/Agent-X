@@ -244,6 +244,21 @@ public sealed class ConversationFeedTests
     }
 
     [Fact]
+    public void Feed_CopySource_PreservesMultilineToolOutput_ByteForByte()
+    {
+        // Luna acceptance (clipboard): multiline tool output must round-
+        // trip through both copy paths with newlines and spacing intact.
+        var feed = new ConversationFeed();
+        feed.AddUser("list files");
+        var tool = feed.BeginAssistantTurn();
+        var output = "alpha.txt\n  beta gamma.txt\n\ttrailing  spaces  \n\u4e2d\u6587";
+        feed.AppendDelta(tool, output);
+        feed.EndAssistantTurn(tool, new PiRunReceipt(true, false, 0, 9, 2));
+        Assert.Equal(output, feed.GetEntryText(tool));
+        Assert.Contains(output, feed.BuildTranscriptText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Map_DerivesMilestonesChangedFilesAndTests_WithoutFabricatingDecisions()
     {
         var feed = new ConversationFeed();

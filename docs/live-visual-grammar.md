@@ -137,7 +137,14 @@ lightness intent, not claimed bit-exact terminal output.
   scroll lives only in Settings. Card menus select-then-act through
   the existing handlers with per-open enable states; a dropped
   connection with history also offers Reconnect beside the composer
-  status line (never menu-only).
+  status line (never menu-only). The card strip always merges both
+  populations through one tested order (catalog entries, then workers:
+  `WorkerDisplayPolicy.StripOrder`) — a catalog rebuild after a
+  workspace registration can never drop a worker tab again. Selecting
+  a card scrolls it into view on selection change only (posted
+  `BringIntoView`; busy ticks never fight the user's scroll); the
+  strip's own scrollbar owns the return journey. Card and feed menus
+  carry full constraint adjustment so they stay inside the window.
 - The footer context gauge is a flat-green bottom-filling disc with a
   thin outline: green outline + fill for known percentages (sub-6%
   fills are subpixel on the 16px disc — tooltip and text carry the
@@ -159,6 +166,14 @@ lightness intent, not claimed bit-exact terminal output.
   quiet attachments: tight rhythm, one step smaller, muted ink
   (`MarkdownView.Dim`, scales with feed size; ANSI colours and diff
   verdicts survive). Evidence preserved, visually grouped.
+- The Add confirmation flyout right-aligns to the + button (which
+  sits at the window's right edge) and grows leftward into the
+  window, with full constraint adjustment as the narrow-window
+  fallback; keyboard focus lands on the first action on open.
+- A run that settles while another view is selected still retires
+  its sent draft under its own key (`VacateSentDraft`, guarded by
+  sent-text equality so newer edits survive) — the sent text can
+  never resurrect as a phantom draft on return.
 - Feed rhythm is group-aware (`GroupMargins` from neighbour roles,
   tested): prompts and receipts keep full turn air; rows inside one
   run join tight; detail rows always tight. No negative margins.

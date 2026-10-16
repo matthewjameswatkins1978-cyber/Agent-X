@@ -315,7 +315,7 @@
                      SelectionMode="Single" FontFamily="{DynamicResource Ax.ProseFont}"
                      FontSize="{DynamicResource Ax.FeedFontSize}">
             <ListBox.ContextFlyout>
-              <MenuFlyout>
+              <MenuFlyout PlacementConstraintAdjustment="All">
                 <MenuItem Header="Copy selected message" Click="CopySelectedMessage_OnClick"
                           ToolTip.Tip="Copy the selected message (exact bytes)" />
                 <MenuItem Header="Copy full conversation" Click="CopyFullConversation_OnClick"
