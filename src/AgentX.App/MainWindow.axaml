@@ -450,12 +450,12 @@
       <StackPanel Spacing="2">
         <StackPanel x:Name="FooterTransient" />
         <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
-          <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-            <app:AxIcon Kind="Branch" Width="14" Height="14" VerticalAlignment="Center" />
-            <TextBlock x:Name="FooterContextText" Text="Main" FontSize="12"
+          <Grid Grid.Column="0" ColumnDefinitions="Auto,*" ColumnSpacing="6" VerticalAlignment="Center">
+            <app:AxIcon Grid.Column="0" Kind="Branch" Width="14" Height="14" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" x:Name="FooterContextText" Text="Main" FontSize="12"
                        Foreground="{DynamicResource Ax.Muted}" VerticalAlignment="Center"
                        TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
-          </StackPanel>
+          </Grid>
           <TextBlock Grid.Column="1" x:Name="FooterEngineText" FontSize="12"
                      Foreground="{DynamicResource Ax.Muted}" VerticalAlignment="Center"
                      TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />

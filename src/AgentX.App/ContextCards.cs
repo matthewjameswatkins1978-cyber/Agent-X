@@ -38,19 +38,20 @@ public static class ContextCards
         => new(key, false, name, StateWordFor(busy, connecting, connected), detail, connected, busy, selected);
 
     /// <summary>
-    /// Per-card width for the balanced strip: cards share the viewport
-    /// equally (single card fills it — edges align with the page below),
-    /// floored at 200px so overflow scrolls instead of crushing. Pure so
-    /// the layout rule is tested, not eyeballed.
+    /// Per-card width for the balanced strip: the Add control lives outside
+    /// the scroller, so cards share exactly the card viewport minus the
+    /// real inter-card gaps. Single card fills it (edges meet the page
+    /// below); the 200px floor sends overflow to the scroller instead of
+    /// crushing content. Pure so the layout rule is tested, not eyeballed.
     /// </summary>
-    public static double CardWidth(double viewportWidth, int cardCount, double addWidth)
+    public static double CardWidth(double viewportWidth, int cardCount)
     {
         if (cardCount <= 0 || viewportWidth <= 0)
         {
             return 200;
         }
 
-        return Math.Max(200, (viewportWidth - Math.Max(0, addWidth) - (8 * cardCount)) / cardCount);
+        return Math.Max(200, (viewportWidth - (8 * (cardCount - 1))) / cardCount);
     }
 
     /// <summary>
@@ -102,6 +103,37 @@ public static class ContextCards
         "corrupt", "mismatch", "denied", "unavailable", "unable", "error",
         "invalid", "expired", "quarantine",
     ];
+
+    /// <summary>
+    /// Notice expansion lifecycle: call on every status change. A new alert
+    /// opens automatically; a new routine message collapses unless the user
+    /// deliberately opened the notice (manual toggle); unchanged or empty
+    /// text keeps the current state. Writers are untouched — severity stays
+    /// a hint, and typed severity remains a future improvement.
+    /// </summary>
+    public sealed record NoticeState(bool Open, bool Manual, string? LastText);
+
+    public static NoticeState NextNotice(NoticeState state, string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return new NoticeState(false, state.Manual, null);
+        }
+
+        if (text == state.LastText)
+        {
+            return state;
+        }
+
+        return IsAlert(text)
+            ? new NoticeState(true, state.Manual, text)
+            : new NoticeState(state.Manual, state.Manual, text);
+    }
+
+    public static NoticeState ToggleNotice(NoticeState state)
+        => state.Open
+            ? new NoticeState(false, false, state.LastText)
+            : new NoticeState(true, true, state.LastText);
 
     /// <summary>Bounded branch freshness: refresh when never checked or older than the TTL.</summary>
     public static readonly TimeSpan GitBranchTtl = TimeSpan.FromMinutes(5);

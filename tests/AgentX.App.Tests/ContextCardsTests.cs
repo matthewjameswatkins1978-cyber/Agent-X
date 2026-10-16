@@ -27,14 +27,63 @@ public sealed class ContextCardsTests
     }
 
     [Theory]
-    [InlineData(696, 1, 40, 648)]
-    [InlineData(696, 2, 40, 320)]
-    [InlineData(696, 6, 40, 200)]
-    [InlineData(0, 2, 40, 200)]
-    [InlineData(696, 0, 40, 200)]
-    public void CardWidth_BalancesAcrossViewport_FloorsAt200(double viewport, int count, double add, double expected)
+    [InlineData(696, 1, 696)]
+    [InlineData(696, 2, 344)]
+    [InlineData(696, 6, 200)]
+    [InlineData(0, 2, 200)]
+    [InlineData(696, 0, 200)]
+    public void CardWidth_BalancesAcrossViewport_FloorsAt200(double viewport, int count, double expected)
     {
-        Assert.Equal(expected, ContextCards.CardWidth(viewport, count, add));
+        Assert.Equal(expected, ContextCards.CardWidth(viewport, count));
+    }
+
+    [Fact]
+    public void NoticeState_WarningThenRoutine_Collapses()
+    {
+        var closed = new ContextCards.NoticeState(false, false, null);
+        var alerted = ContextCards.NextNotice(closed, "Connection failed: timeout.");
+        Assert.True(alerted.Open);
+
+        var routine = ContextCards.NextNotice(alerted, "Main selected — press Connect.");
+        Assert.False(routine.Open);
+        Assert.Equal("Main selected — press Connect.", routine.LastText);
+    }
+
+    [Fact]
+    public void NoticeState_ManualExpansion_SurvivesRoutine()
+    {
+        var closed = new ContextCards.NoticeState(false, false, null);
+        var manual = ContextCards.ToggleNotice(closed);
+        Assert.True(manual is { Open: true, Manual: true });
+
+        var routine = ContextCards.NextNotice(manual, "Copied message #5.");
+        Assert.True(routine.Open);
+        Assert.True(routine.Manual);
+    }
+
+    [Fact]
+    public void NoticeState_NewError_ReopensAfterManualClose()
+    {
+        var closed = new ContextCards.NoticeState(false, false, "old routine");
+        var alerted = ContextCards.NextNotice(closed, "Connection failed: timeout.");
+        var dismissed = ContextCards.ToggleNotice(alerted);
+        Assert.False(dismissed.Open);
+        Assert.False(dismissed.Manual);
+
+        var again = ContextCards.NextNotice(dismissed, "Connection failed: refused.");
+        Assert.True(again.Open);
+    }
+
+    [Fact]
+    public void NoticeState_Empty_CollapsesUnchangedText_Keeps()
+    {
+        var open = new ContextCards.NoticeState(true, true, "Copied.");
+        var cleared = ContextCards.NextNotice(open, string.Empty);
+        Assert.False(cleared.Open);
+        Assert.True(cleared.Manual);
+
+        var steady = ContextCards.NextNotice(open, "Copied.");
+        Assert.True(steady.Open);
     }
 
     [Fact]

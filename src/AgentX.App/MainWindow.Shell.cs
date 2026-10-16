@@ -53,37 +53,28 @@ public partial class MainWindow
 
     // Expandable notice (Lucy corrective pass): normal operation shows exactly
     // one footer line. Routine information never lights the toggle; genuine
-    // warning/error language (ShellCards.IsAlert, tested both ways) greens it
+    // warning/error language (ShellCards.IsAlert, tested both ways) ambers it
     // and opens the text on arrival. Writers are untouched; the full text is
     // always one click away.
-    private bool _noticeOpen;
-    private string? _lastNoticeText;
+    // Notice lifecycle lives in ContextCards.NoticeState (tested): alerts
+    // auto-open, routine collapses unless manually opened, writers untouched.
+    // Keyword severity is temporary; typed severity is a future improvement.
+    private ContextCards.NoticeState _notice = new(false, false, null);
 
     private void SyncTransientVisibility()
     {
-        var text = StatusText.Text;
-        var hasNotice = !string.IsNullOrEmpty(text);
-        var alert = ShellCards.IsAlert(text);
-        if (hasNotice && alert && text != _lastNoticeText)
-        {
-            _noticeOpen = true;
-        }
-
-        if (hasNotice)
-        {
-            _lastNoticeText = text;
-        }
-
+        _notice = ShellCards.NextNotice(_notice, StatusText.Text);
+        var hasNotice = !string.IsNullOrEmpty(StatusText.Text);
         NoticeToggle.IsVisible = hasNotice;
-        NoticeToggle.Foreground = alert ? AxTheme.GreenBrush : AxTheme.MutedBrush;
-        FooterTransient.IsVisible = hasNotice && _noticeOpen;
-        NoticeToggle.SetValue(AutomationProperties.NameProperty, _noticeOpen ? "Hide notice" : "Show notice");
-        ToolTip.SetTip(NoticeToggle, _noticeOpen ? "Hide notice" : "Show notice");
+        NoticeToggle.Foreground = ShellCards.IsAlert(StatusText.Text) ? AxTheme.YellowBrush : AxTheme.MutedBrush;
+        FooterTransient.IsVisible = hasNotice && _notice.Open;
+        NoticeToggle.SetValue(AutomationProperties.NameProperty, _notice.Open ? "Hide notice" : "Show notice");
+        ToolTip.SetTip(NoticeToggle, _notice.Open ? "Hide notice" : "Show notice");
     }
 
     private void NoticeToggle_OnClick(object? sender, RoutedEventArgs e)
     {
-        _noticeOpen = !_noticeOpen;
+        _notice = ShellCards.ToggleNotice(_notice);
         SyncTransientVisibility();
     }
 
@@ -296,7 +287,7 @@ public partial class MainWindow
             return;
         }
 
-        var width = ShellCards.CardWidth(viewport, cards.Count, 44);
+        var width = ShellCards.CardWidth(viewport, cards.Count);
         foreach (var card in cards)
         {
             if (double.IsNaN(card.Width) || Math.Abs(card.Width - width) >= 0.5)
@@ -448,7 +439,6 @@ public partial class MainWindow
                 }
 
                 _gitBranchCache[root] = (branch, DateTime.UtcNow);
-                RefreshCompactFooter();
                 RefreshCompactFooter();
             });
         }, cts.Token);
