@@ -122,10 +122,7 @@ public static class ProjectSetupFacts
             // One Core interpretation (branch label + status availability)
             // shared with the footer tooltip: a failed query is unavailable,
             // never clean, and only Core names the branch state.
-            var status = !git.StatusAvailable
-                ? "status unavailable"
-                : git.IsDirty ? "uncommitted changes" : "clean";
-            lines.Add($"Git: {ProjectGit.DescribeBranch(git)}, {status}.");
+            lines.Add($"Git: {ProjectGit.DescribeBranch(git)}, {ProjectGit.DescribeStatus(git)}.");
             if (git.TopLevel is not null
                 && !string.Equals(
                     AgentXWorkspace.CanonicalizeProjectRoot(git.TopLevel),

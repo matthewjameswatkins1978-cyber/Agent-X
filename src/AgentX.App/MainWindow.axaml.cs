@@ -1465,7 +1465,7 @@ public partial class MainWindow : Window
             }
 
             var branch = ProjectGit.DescribeBranch(git);
-            return $"{projectRoot} • {branch} • {(git.IsDirty ? "uncommitted changes" : "clean")}";
+            return $"{projectRoot} • {branch} • {ProjectGit.DescribeStatus(git)}";
         }
         catch (Exception ex) when (ex is InvalidOperationException or TimeoutException or ArgumentException)
         {

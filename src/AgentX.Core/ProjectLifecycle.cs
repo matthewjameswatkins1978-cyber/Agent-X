@@ -97,6 +97,17 @@ public static class ProjectGit
         => git.Branch
             ?? (git.HeadSha is null ? "unborn HEAD (no commits yet)" : "detached HEAD");
 
+    /// <summary>
+    /// The single working-tree status label every host uses: confirmed
+    /// clean, confirmed dirty, or unavailable when the status query failed.
+    /// A failed query is never clean — <see cref="ProjectGitState.IsDirty"/>
+    /// is meaningless unless <see cref="ProjectGitState.StatusAvailable"/>.
+    /// </summary>
+    public static string DescribeStatus(ProjectGitState git)
+        => !git.StatusAvailable
+            ? "status unavailable"
+            : git.IsDirty ? "uncommitted changes" : "clean";
+
     private static string? NormalizePath(string? output)
         => string.IsNullOrWhiteSpace(output) ? null : output.Trim();
 

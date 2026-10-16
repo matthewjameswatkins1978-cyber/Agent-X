@@ -237,6 +237,22 @@ public sealed class ProjectLifecycleTests
     }
 
     [Fact]
+    public void DescribeStatus_Matrix()
+    {
+        // A failed query reports unavailable even when IsDirty happens to
+        // be false (or true) — never clean, never dirty.
+        var utc = DateTime.UtcNow;
+        Assert.Equal("clean", ProjectGit.DescribeStatus(
+            new ProjectGitState("/r", true, "/r", "main", new string('a', 40), false, true, utc)));
+        Assert.Equal("uncommitted changes", ProjectGit.DescribeStatus(
+            new ProjectGitState("/r", true, "/r", "main", new string('a', 40), true, true, utc)));
+        Assert.Equal("status unavailable", ProjectGit.DescribeStatus(
+            new ProjectGitState("/r", true, "/r", "main", new string('a', 40), false, false, utc)));
+        Assert.Equal("status unavailable", ProjectGit.DescribeStatus(
+            new ProjectGitState("/r", true, "/r", "main", new string('a', 40), true, false, utc)));
+    }
+
+    [Fact]
     public void DescribeBranch_Matrix()
     {
         var utc = DateTime.UtcNow;

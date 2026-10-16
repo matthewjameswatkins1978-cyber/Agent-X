@@ -126,6 +126,19 @@ public sealed class ProjectSetupTests
     }
 
     [Fact]
+    public void Describe_FailedDirtyStatus_IsUnavailableNeverDirty()
+    {
+        // Failed query on a dirty-flagged state: unavailable, and neither
+        // clean nor dirty may leak into the note. This is the footer path
+        // too — both consumers share ProjectGit.DescribeStatus.
+        var note = ProjectSetupFacts.Describe(State("/r", true, "/r", "main", new string('e', 40), true, false), []);
+
+        Assert.Contains("unavailable", note, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("clean", note, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("uncommitted", note, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void DescribeSetupFailure_NamesParentAndRecovery()
     {
         var note = ProjectSetupFacts.DescribeSetupFailure("/parent", "my hint", new InvalidOperationException("git gone"));
