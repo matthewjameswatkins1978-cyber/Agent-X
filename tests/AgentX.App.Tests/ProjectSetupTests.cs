@@ -87,4 +87,58 @@ public sealed class ProjectSetupTests
         Assert.Null(ProjectSetupFacts.FindWorkerIdByRoot(workers, @"C:\Code\Elsewhere"));
         Assert.Null(ProjectSetupFacts.FindWorkerIdByRoot(workers, ""));
     }
+
+    [Fact]
+    public void Describe_UnbornHead_IsNotDetached()
+    {
+        var git = new ProjectGitState("/r", true, "/r", null, null, false, DateTime.UtcNow);
+
+        var note = ProjectSetupFacts.Describe(git, []);
+
+        Assert.Contains("unborn HEAD", note, StringComparison.Ordinal);
+        Assert.DoesNotContain("detached", note, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Describe_DetachedWithSha_NamesDetached()
+    {
+        var git = new ProjectGitState("/r", true, "/r", null, new string('d', 40), false, DateTime.UtcNow);
+
+        var note = ProjectSetupFacts.Describe(git, []);
+
+        Assert.Contains("detached HEAD", note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SuggestName_IsMemorableAndUsableAsHint()
+    {
+        var rng = new Random(7);
+        var parent = Path.Combine(Path.GetTempPath(), "ax-suggest-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(parent);
+        try
+        {
+            for (var i = 0; i < 10; i++)
+            {
+                var hint = ProjectSetupFacts.SuggestName(rng);
+                Assert.Matches("^[a-z]+-[a-z]+$", hint);
+                var created = NewProject.Create(parent, hint);
+                Assert.True(Directory.Exists(Path.Combine(created, ".git")));
+            }
+        }
+        finally
+        {
+            Directory.Delete(parent, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void DescribeSetupFailure_NamesParentAndRecovery()
+    {
+        var note = ProjectSetupFacts.DescribeSetupFailure("/parent", "my hint", new InvalidOperationException("git gone"));
+
+        Assert.Contains("/parent", note, StringComparison.Ordinal);
+        Assert.Contains("my hint", note, StringComparison.Ordinal);
+        Assert.Contains("nothing registered", note, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("leftover", note, StringComparison.OrdinalIgnoreCase);
+    }
 }

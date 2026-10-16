@@ -1051,7 +1051,7 @@ public partial class MainWindow : Window
 
     // --- Pages: presentation-only switches. ---
 
-    private async void AddWorkspace_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    private void AddWorkspace_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (_catalog.IsRecovery)
         {
@@ -1059,6 +1059,54 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Choice-first (P0): + offers Existing Project vs Quick Setup.
+        // No picker opens here; ExistingProject_OnClick runs the picker
+        // flow and QuickSetupReveal starts the name flow.
+        _pendingWorkspacePath = null;
+        ShowAddMode("choice");
+        _addConfirmNote.Text = "Choose how to add the agent — nothing has been registered yet.";
+        StatusText.Text = "Choose how to add the agent — nothing has been registered yet.";
+        _addConfirmFlyout.ShowAt(AddContextButton);
+    }
+
+    // Pending explicit confirmation: the picker result is staged here and
+    // opened ONLY by OpenProject_OnClick. A phantom or dismissed
+    // picker can never create a workspace by itself.
+    private string? _pendingWorkspacePath;
+
+    /// Add modes for the single Add flyout: choice (Existing vs Quick),
+    /// confirm (staged folder facts + Open), quick (editable name + Create).
+    /// Only one mode is ever visible; switching modes never registers or
+    /// creates anything — the mode buttons do that explicitly.
+    private void ShowAddMode(string mode)
+    {
+        var choice = mode == "choice";
+        var confirm = mode == "confirm";
+        var quick = mode == "quick";
+        _addTitle.Text = choice ? "Add agent" : confirm ? "Add project" : "Quick setup";
+        _addConfirmPath.IsVisible = confirm;
+        _choiceRow.IsVisible = choice;
+        _quickSetupRow.IsVisible = quick;
+        _confirmRow.IsVisible = confirm || quick;
+        _openButton.IsVisible = confirm;
+        if (choice)
+        {
+            _existingButton.Focus();
+        }
+        else if (quick)
+        {
+            _quickNameBox.Focus();
+        }
+        else
+        {
+            _openButton.Focus();
+        }
+    }
+
+    /// Existing Project choice: the folder picker flow. Staging switches
+    /// the flyout to confirm mode; only Open project acts on the result.
+    private async void ExistingProject_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
         if (_pickingWorkspace)
         {
             return;
@@ -1073,16 +1121,7 @@ public partial class MainWindow : Window
         {
             _pickingWorkspace = false;
         }
-
-        // The staged confirmation opens inline at the Add button (see
-        // AddWorkspaceCoreAsync) — no page detour, the workflow continues
-        // where the user pressed +.
     }
-
-    // Pending explicit confirmation: the picker result is staged here and
-    // registered ONLY by ConfirmWorkspace_OnClick. A phantom or dismissed
-    // picker can never create a workspace by itself.
-    private string? _pendingWorkspacePath;
 
     private async Task AddWorkspaceCoreAsync()
     {
@@ -1132,12 +1171,27 @@ public partial class MainWindow : Window
         _pendingWorkspacePath = path;
         _addConfirmPath.Text = path;
         Avalonia.Controls.ToolTip.SetTip(_addConfirmPath, path);
-        _addConfirmNote.Text = (IsAlreadyRegistered(path)
-            ? "Already registered — confirming selects the existing project. Nothing is duplicated."
-            : "Nothing has been registered yet. Confirm to continue, or close to cancel.")
-            + " " + DescribeStagedProject(path);
+        var registeredNote = IsAlreadyRegistered(path)
+            ? "Already registered — opening selects the existing project. Nothing is duplicated."
+            : "Nothing has been registered yet. Open to continue, or close to cancel.";
+        _addConfirmNote.Text = registeredNote + " Reading Git state…";
         StatusText.Text = "Confirm at the Add panel — nothing has been registered yet.";
+        ShowAddMode("confirm");
         _addConfirmFlyout.ShowAt(AddContextButton);
+        // Git discovery runs off the UI thread (P0): the note paints only
+        // when this same path is still staged, so a fast re-pick can never
+        // show another folder's facts. States are loading / observed /
+        // unavailable — never invented.
+        var facts = await Task.Run(() => DescribeStagedProject(path)).ConfigureAwait(false);
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (_pendingWorkspacePath != path)
+            {
+                return;
+            }
+
+            _addConfirmNote.Text = registeredNote + " " + facts;
+        });
         return;
     }
 
@@ -1170,6 +1224,16 @@ public partial class MainWindow : Window
 
     private StackPanel _quickSetupRow = null!;
 
+    private TextBlock _addTitle = null!;
+
+    private Button _existingButton = null!;
+
+    private Button _openButton = null!;
+
+    private StackPanel _choiceRow = null!;
+
+    private StackPanel _confirmRow = null!;
+
     /// Inline Add confirmation (repair gate): code-built so the window
     /// owns every control — XAML flyout content is outside the window
     /// name-scope and cannot be wired by name. Charcoal AxAction buttons
@@ -1189,16 +1253,20 @@ public partial class MainWindow : Window
             FontSize = 12,
             TextWrapping = Avalonia.Media.TextWrapping.Wrap,
         };
-        var workerButton = new Button { Content = "Create worker here" };
-        workerButton.Classes.Add("AxAction");
-        Avalonia.Controls.ToolTip.SetTip(workerButton,
-            "Create an independent Pi worker for the staged folder (separate process and session)");
-        workerButton.Click += CreateWorker_OnClick;
-        var quickButton = new Button { Content = "Quick setup…" };
-        quickButton.Classes.Add("AxAction");
-        Avalonia.Controls.ToolTip.SetTip(quickButton,
-            "New folder under the projects root + local git init (name editable below), then the same worker path");
-        quickButton.Click += QuickSetupReveal_OnClick;
+        _addTitle = new TextBlock { FontSize = 13, FontWeight = Avalonia.Media.FontWeight.SemiBold };
+        _existingButton = new Button { Content = "Existing Project" };
+        _existingButton.Classes.Add("AxAction");
+        Avalonia.Controls.ToolTip.SetTip(_existingButton,
+            "Choose a folder — Git and project context discovered, worker created or reused");
+        _existingButton.Click += ExistingProject_OnClick;
+        var choiceSetupButton = new Button { Content = "Quick Setup" };
+        choiceSetupButton.Classes.Add("AxAction");
+        Avalonia.Controls.ToolTip.SetTip(choiceSetupButton,
+            "New folder under the projects root + local git init (name editable), then the same worker path");
+        choiceSetupButton.Click += QuickSetupReveal_OnClick;
+        _choiceRow = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8 };
+        _choiceRow.Children.Add(_existingButton);
+        _choiceRow.Children.Add(choiceSetupButton);
         _quickNameBox = new TextBox
         {
             FontSize = 12,
@@ -1215,23 +1283,24 @@ public partial class MainWindow : Window
         _quickSetupRow = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8, IsVisible = false };
         _quickSetupRow.Children.Add(_quickNameBox);
         _quickSetupRow.Children.Add(quickCreateButton);
-        var registerButton = new Button { Content = "Register project" };
-        registerButton.Classes.Add("AxAction");
-        registerButton.Click += ConfirmWorkspace_OnClick;
+        _openButton = new Button { Content = "Open project" };
+        _openButton.Classes.Add("AxAction");
+        Avalonia.Controls.ToolTip.SetTip(_openButton,
+            "Register the staged folder and open its persistent Pi worker (reused when present)");
+        _openButton.Click += OpenProject_OnClick;
         var cancelButton = new Button { Content = "Cancel" };
         cancelButton.Classes.Add("AxAction");
         cancelButton.Click += CancelWorkspace_OnClick;
-        var actions = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8 };
-        actions.Children.Add(workerButton);
-        actions.Children.Add(quickButton);
-        actions.Children.Add(registerButton);
-        actions.Children.Add(cancelButton);
+        _confirmRow = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8 };
+        _confirmRow.Children.Add(_openButton);
+        _confirmRow.Children.Add(cancelButton);
         var body = new StackPanel { Spacing = 8, MinWidth = 320, MaxWidth = 460 };
-        body.Children.Add(new TextBlock { Text = "Add project", FontWeight = Avalonia.Media.FontWeight.SemiBold, FontSize = 13 });
+        body.Children.Add(_addTitle);
         body.Children.Add(_addConfirmPath);
         body.Children.Add(_addConfirmNote);
+        body.Children.Add(_choiceRow);
         body.Children.Add(_quickSetupRow);
-        body.Children.Add(actions);
+        body.Children.Add(_confirmRow);
         _addConfirmFlyout = new Flyout
         {
             Content = body,
@@ -1246,7 +1315,7 @@ public partial class MainWindow : Window
         _addConfirmFlyout.Closed += AddConfirmFlyout_OnClosed;
         // Keyboard users land on the first action when the flyout opens;
         // tab order then walks the actions, Esc/outside-click dismisses.
-        _addConfirmFlyout.Opened += (_, _) => workerButton.Focus();
+        _addConfirmFlyout.Opened += (_, _) => _existingButton.Focus();
         AddContextButton.Flyout = _addConfirmFlyout;
     }
 
@@ -1269,7 +1338,7 @@ public partial class MainWindow : Window
     /// folder path; existing work is never overwritten (Core suffixes -2…).
     private void QuickSetupReveal_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        _quickNameBox.Text ??= NewProject.GenerateName();
+        _quickNameBox.Text ??= ProjectSetupFacts.SuggestName();
         _quickSetupRow.IsVisible = true;
         _addConfirmNote.Text = $"New folder under {ProjectSetupFacts.DefaultProjectsParent()} + local git init (no remote, no commit). Edit the name, then Create project — or close to cancel.";
         _quickNameBox.Focus();
@@ -1304,7 +1373,7 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) when (ex is ArgumentException or DirectoryNotFoundException or IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException)
         {
-            await Dispatcher.UIThread.InvokeAsync(() => StatusText.Text = $"Quick setup failed — nothing registered: {ex.Message}");
+            await Dispatcher.UIThread.InvokeAsync(() => StatusText.Text = ProjectSetupFacts.DescribeSetupFailure(parent, hint, ex));
             return;
         }
 
@@ -1344,6 +1413,23 @@ public partial class MainWindow : Window
         return ProjectSetupFacts.Describe(git, ProjectSetupFacts.InstructionFiles(git.ProjectRoot));
     }
 
+    /// Async footer tooltip (P0): Git discovery runs off the UI thread and
+    /// paints only while the same worker is still viewed — a project switch
+    /// mid-discovery can never paint another project's facts.
+    private async void UpdateGitTooltipAsync(string workerId, string projectRoot)
+    {
+        var tip = await Task.Run(() => GitTooltipFor(projectRoot)).ConfigureAwait(false);
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (SelectedWorker?.Id != workerId)
+            {
+                return;
+            }
+
+            Avalonia.Controls.ToolTip.SetTip(DirectoryButton, tip);
+        });
+    }
+
     /// Git tooltip for the footer directory button: branch + dirty state
     /// for the viewed worker, or honest unavailability. Never blocks.
     private static string GitTooltipFor(string projectRoot)
@@ -1362,49 +1448,6 @@ public partial class MainWindow : Window
         catch (Exception ex) when (ex is InvalidOperationException or TimeoutException or ArgumentException)
         {
             return $"{projectRoot} (Git state unavailable: {ex.Message})";
-        }
-    }
-
-    /// Create a worker for the staged folder (the Add flow's explicit
-    /// confirmation). Reuses the existing picker staging — no new navigation.
-    /// Shows the new worker immediately; the outgoing draft stays under its
-    /// own key.
-    private void CreateWorker_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-    {
-        var path = _pendingWorkspacePath;
-        _pendingWorkspacePath = null;
-        _addConfirmFlyout.Hide();
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return;
-        }
-
-        if (_manager is null)
-        {
-            StatusText.Text = $"Workers unavailable ({_managerError ?? "store failed to load"}) — nothing created.";
-            return;
-        }
-
-        if (!Directory.Exists(path))
-        {
-            StatusText.Text = $"Selected folder no longer exists: {path} — nothing created.";
-            return;
-        }
-
-        try
-        {
-            var folder = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var worker = _manager.CreateWorker(path, Path.GetFileName(folder));
-            // WorkerAdded already rebuilt the tab list; move the view now.
-            SaveWorkerViewState(_lastViewKey);
-            _manager.SelectWorker(worker.Id);
-            SelectWorkerTab(worker.Id);
-            SwitchToWorker(worker);
-            StatusText.Text = $"Worker '{WorkerViewKey.DisplayLabel(worker.Id, worker.Label)}' created — session {worker.SessionId}. Press Connect.";
-        }
-        catch (Exception ex) when (ex is ArgumentException or DirectoryNotFoundException or IOException or UnauthorizedAccessException or InvalidOperationException)
-        {
-            StatusText.Text = $"Cannot create worker: {ex.Message}";
         }
     }
 
@@ -1437,7 +1480,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ConfirmWorkspace_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    /// Unified open (P1): one coherent route — the staged folder is
+    /// registered (idempotent, legacy-compatible) and its persistent Pi
+    /// worker is selected or created, then its Feed opens. No split
+    /// worker-vs-register choice for ordinary use.
+    private void OpenProject_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         var path = _pendingWorkspacePath;
         _pendingWorkspacePath = null;
@@ -1476,33 +1523,49 @@ public partial class MainWindow : Window
             var workspace = registry.GetOrRegister(path);
             registry.Save();
             LoadWorkspaceTabs(selectKey: workspace.Slug);
-            StatusText.Text = already
-                ? $"Workspace '{workspace.Slug}' was already registered — selected it. Nothing duplicated."
-                : _conversation is not null && workspace.Slug != _connectedKey
-                    ? $"Workspace '{workspace.Slug}' registered — disconnect from '{_connectedLabel}' to open it."
-                    : $"Workspace '{workspace.Slug}' ready — session {workspace.SessionId}. Press Connect.";
-            // Same normal experience: a worker already bound to this root
-            // is selected instead of duplicated (the registry stays the
-            // identity anchor; the worker owns the live session).
-            var existingId = _manager is null ? null : ProjectSetupFacts.FindWorkerIdByRoot(
+            // The visible card strip is not part of LoadWorkspaceTabs:
+            // without this fan-out the new card never appears (registration
+            // persisted, UI stale). Selection already moved; just mirror.
+            UpdateTabDots();
+            if (_manager is null)
+            {
+                StatusText.Text = already
+                    ? $"Workspace '{workspace.Slug}' was already registered — selected it. Nothing duplicated."
+                    : _conversation is not null && workspace.Slug != _connectedKey
+                        ? $"Workspace '{workspace.Slug}' registered — disconnect from '{_connectedLabel}' to open it."
+                        : $"Workspace '{workspace.Slug}' ready — session {workspace.SessionId}. Press Connect.";
+                return;
+            }
+
+            var existingId = ProjectSetupFacts.FindWorkerIdByRoot(
                 _manager.Workers.Select(w => (w.Id, w.ProjectRoot)), workspace.ProjectRoot);
-            if (existingId is not null && _manager is not null)
+            if (existingId is not null)
             {
                 SaveWorkerViewState(_lastViewKey);
                 var existing = _manager.SelectWorker(existingId);
                 SelectWorkerTab(existing.Id);
                 SwitchToWorker(existing);
-                StatusText.Text = $"Workspace '{workspace.Slug}' ready — worker '{WorkerViewKey.DisplayLabel(existing.Id, existing.Label)}' already exists here; selected it.";
+                StatusText.Text = $"Project '{workspace.Slug}' open — worker '{WorkerViewKey.DisplayLabel(existing.Id, existing.Label)}' already exists here; selected it. Press Connect.";
+                return;
             }
 
-            // The visible card strip is not part of LoadWorkspaceTabs:
-            // without this fan-out the new card never appears (registration
-            // persisted, UI stale). Selection already moved; just mirror.
-            UpdateTabDots();
+            try
+            {
+                var worker = _manager.CreateWorker(workspace.ProjectRoot, workspace.Slug);
+                SaveWorkerViewState(_lastViewKey);
+                _manager.SelectWorker(worker.Id);
+                SelectWorkerTab(worker.Id);
+                SwitchToWorker(worker);
+                StatusText.Text = $"Project '{workspace.Slug}' open — worker created, session {worker.SessionId}. Press Connect.";
+            }
+            catch (Exception ex) when (ex is ArgumentException or DirectoryNotFoundException or IOException or UnauthorizedAccessException or InvalidOperationException)
+            {
+                StatusText.Text = $"Project '{workspace.Slug}' registered, but worker creation failed: {ex.Message} — nothing else changed; retry or remove the registration.";
+            }
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
-            StatusText.Text = $"Cannot add workspace: {ex.Message}";
+            StatusText.Text = $"Cannot open project: {ex.Message}";
         }
     }
 
@@ -4228,7 +4291,8 @@ public partial class MainWindow : Window
             if (SelectedWorker is { } worker)
             {
                 DirectoryButtonText.Text = worker.ProjectRoot;
-                Avalonia.Controls.ToolTip.SetTip(DirectoryButton, GitTooltipFor(worker.ProjectRoot));
+                Avalonia.Controls.ToolTip.SetTip(DirectoryButton, $"{worker.ProjectRoot} (reading Git state…)");
+                UpdateGitTooltipAsync(worker.Id, worker.ProjectRoot);
                 return;
             }
 

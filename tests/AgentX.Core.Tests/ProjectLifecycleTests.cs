@@ -156,4 +156,43 @@ public sealed class ProjectLifecycleTests
         Assert.Null(NewProject.SanitizeName("x")); // Too short to be a useful name.
         Assert.Equal("my-demo-project", NewProject.SanitizeName("My Demo Project!"));
     }
+
+    [Fact]
+    public void ReadState_LargeStatus_Completes_Dirty()
+    {
+        // Regression: ~90KB of porcelain must drain while git runs — a
+        // post-exit ReadToEnd would deadlock on a full pipe instead.
+        var root = TempRoot("largestatus");
+        try
+        {
+            var project = NewProject.Create(root, "lifecycle-big");
+            for (var i = 0; i < 2500; i++)
+            {
+                File.WriteAllText(Path.Combine(project, $"file-{i:0000}.txt"), "x");
+            }
+
+            var state = ProjectGit.ReadState(project);
+            Assert.True(state.IsGitRepo);
+            Assert.True(state.IsDirty);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ReadState_Timeout_ThrowsLoudly()
+    {
+        var root = TempRoot("gittimeout");
+        try
+        {
+            var project = NewProject.Create(root, "lifecycle-slow");
+            Assert.Throws<TimeoutException>(() => ProjectGit.ReadState(project, TimeSpan.FromMilliseconds(1)));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }

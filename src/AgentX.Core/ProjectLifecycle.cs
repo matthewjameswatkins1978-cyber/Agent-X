@@ -93,7 +93,7 @@ public static class ProjectGit
         return sha.Length is 40 or 64 && sha.All(c => Uri.IsHexDigit(c)) ? sha : null;
     }
 
-    /// <summary>Run one git command; null when git reports failure (not-a-repo, unborn HEAD, ...).</summary>
+    /// <summary>Run one git command; null when git reports failure (not-a-repo, unborn HEAD, ...). Stdout/stderr drain asynchronously while the process runs, so a large output (e.g. big status porcelain) can never fill the pipe and deadlock the wait. Bounded by the timeout with kill + throw.</summary>
     private static string? RunGit(string workingDirectory, string arguments, TimeSpan timeout)
     {
         var startInfo = new ProcessStartInfo
@@ -113,18 +113,24 @@ public static class ProjectGit
                 throw new InvalidOperationException("Failed to start 'git' — is Git installed and on PATH?");
             }
 
+            var output = new System.Text.StringBuilder();
+            process.OutputDataReceived += (_, a) => { if (a.Data is not null) { output.AppendLine(a.Data); } };
+            process.ErrorDataReceived += (_, a) => { };
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
             if (!process.WaitForExit((int)timeout.TotalMilliseconds))
             {
                 try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
                 throw new TimeoutException($"'git {arguments}' timed out after {timeout.TotalSeconds:0}s in {workingDirectory}.");
             }
 
+            process.WaitForExit();
             if (process.ExitCode != 0)
             {
                 return null;
             }
 
-            return process.StandardOutput.ReadToEnd().TrimEnd('\r', '\n');
+            return output.ToString().TrimEnd('\r', '\n');
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or FileNotFoundException)
         {
@@ -252,17 +258,22 @@ public static class NewProject
                 throw new InvalidOperationException("Failed to start 'git init' — is Git installed and on PATH?");
             }
 
-            var output = process.StandardOutput.ReadToEnd();
-            var error = process.StandardError.ReadToEnd();
+            var output = new System.Text.StringBuilder();
+            var error = new System.Text.StringBuilder();
+            process.OutputDataReceived += (_, a) => { if (a.Data is not null) { output.AppendLine(a.Data); } };
+            process.ErrorDataReceived += (_, a) => { if (a.Data is not null) { error.AppendLine(a.Data); } };
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
             if (!process.WaitForExit((int)timeout.TotalMilliseconds))
             {
                 try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
                 throw new TimeoutException($"'git init' timed out after {timeout.TotalSeconds:0}s in {directory}.");
             }
 
+            process.WaitForExit();
             if (process.ExitCode != 0 || !Directory.Exists(Path.Combine(directory, ".git")))
             {
-                throw new InvalidOperationException($"'git init' failed in {directory}: {output.Trim()} {error.Trim()}".Trim());
+                throw new InvalidOperationException($"'git init' failed in {directory}: {output.ToString().Trim()} {error.ToString().Trim()}".Trim());
             }
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or FileNotFoundException)

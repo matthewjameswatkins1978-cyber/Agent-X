@@ -36,6 +36,36 @@ public static class ProjectSetupFacts
     public static string DefaultProjectsParent()
         => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "AgentX Projects");
 
+    private static readonly string[] NameAdjectives =
+        ["harbor", "signal", "meadow", "ember", "willow", "cobalt", "juniper", "otter"];
+
+    private static readonly string[] NameNouns =
+        ["desk", "garden", "ledger", "beacon", "atelier", "station", "notebook", "workshop"];
+
+    /// <summary>
+    /// Memorable name hint for Quick Setup (presentation default only).
+    /// Core <see cref="NewProject.Create"/> still owns sanitizing,
+    /// uniqueness (-2, -3, …) and creation — this never touches the disk.
+    /// </summary>
+    public static string SuggestName(Random? rng = null)
+    {
+        rng ??= Random.Shared;
+        return $"{NameAdjectives[rng.Next(NameAdjectives.Length)]}-{NameNouns[rng.Next(NameNouns.Length)]}";
+    }
+
+    /// <summary>
+    /// Honest Quick Setup failure note: names the tried parent/hint and
+    /// warns a leftover folder may remain for inspection (Core never
+    /// deletes user data on failure) with safe recovery directions.
+    /// </summary>
+    public static string DescribeSetupFailure(string parentDirectory, string? nameHint, Exception ex)
+    {
+        var tried = string.IsNullOrWhiteSpace(nameHint)
+            ? $"under {parentDirectory}"
+            : $"'{nameHint.Trim()}' under {parentDirectory}";
+        return $"Quick setup failed for {tried} — nothing registered ({ex.Message}). A leftover folder may remain; delete it or retry with a different name.";
+    }
+
     /// <summary>
     /// Find the id of an existing worker for a project root (canonical,
     /// case-insensitive); null when none exists and the caller should
@@ -89,7 +119,8 @@ public static class ProjectSetupFacts
         }
         else
         {
-            var branch = git.Branch ?? "detached HEAD";
+            var branch = git.Branch
+                ?? (git.HeadSha is null ? "unborn HEAD (no commits yet)" : "detached HEAD");
             var dirty = git.IsDirty ? "uncommitted changes" : "clean";
             lines.Add($"Git: {branch}, {dirty}.");
             if (git.TopLevel is not null
