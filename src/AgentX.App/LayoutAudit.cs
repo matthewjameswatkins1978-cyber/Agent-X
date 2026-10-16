@@ -80,4 +80,19 @@ public static class LayoutAudit
         var max = values.Max();
         return new GuideDeviation(name, min, max);
     }
+
+    /// Viewport fill for capped panels (Overview/Settings): at and above
+    /// the reading cap the content must span exactly the cap regardless of
+    /// how much text it holds, so empty and populated states share one
+    /// width. Below the cap, stretch rules plus scrollbar gutters apply
+    /// and there is nothing exact to assert — returns null (skipped).
+    public static GuideDeviation? CheckFill(Avalonia.Rect content, Avalonia.Rect viewport, double maxWidth)
+    {
+        if (viewport.Width < maxWidth)
+        {
+            return null;
+        }
+
+        return new GuideDeviation("panel-fill", maxWidth, content.Width);
+    }
 }

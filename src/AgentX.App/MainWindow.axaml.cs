@@ -189,13 +189,7 @@ public partial class MainWindow : Window
             new EventHandler<Avalonia.Input.KeyEventArgs>(PiPromptBox_OnKeyDown),
             Avalonia.Interactivity.RoutingStrategies.Tunnel,
             handledEventsToo: true);
-        SizeChanged += (_, _) =>
-        {
-            if (LayoutOverlay.IsVisible)
-            {
-                PostLayoutRefresh();
-            }
-        };
+        SizeChanged += (_, _) => PostLayoutRefresh();
         // Developer Layout Inspector (B2): F12 toggles the guide overlay.
         // Tunnel so the key works from anywhere, including the composer;
         // the handler only ever acts on F12 itself.
@@ -1774,11 +1768,11 @@ public partial class MainWindow : Window
             _pendingActivityText = null;
             RebuildSessionMap();
             RefreshOverviewAndSettings();
-            PiRunStatus.Text = $"Last run: {receipt.Display} ({receipt.AssistantChars:N0} chars in {sink.Accumulator.FlushCount:N0} UI updates, {worker.Feed.Count} feed entries.)";
-            // B1: the accepted send vacates the composer — but only when the
-            // box still holds exactly the sent message (mid-run typing is a
-            // new draft and survives; failures keep the text by never
-            // reaching here).
+            // Routine success leaves no composer row: the footer StatusText
+            // already carries the healthy summary, and the empty status
+            // collapses the line. Warnings keep their row (failures never
+            // reach here). The composer-clear below still vacates the box.
+            PiRunStatus.Text = string.Empty;
             if (ComposerActionPolicy.ShouldClearComposer(PiPromptBox.Text, message))
             {
                 PiPromptBox.Text = string.Empty;
@@ -1919,11 +1913,11 @@ public partial class MainWindow : Window
             RebuildSessionMap();
             RefreshOverviewAndSettings();
             var updates = _liveAccumulator?.FlushCount ?? 0;
-            PiRunStatus.Text = $"Last run: {receipt.Display} ({receipt.AssistantChars:N0} chars in {updates:N0} UI updates, {_feed.Count} feed entries.)";
-            // B1: the accepted send vacates the composer — but only when the
-            // box still holds exactly the sent message (mid-run typing is a
-            // new draft and survives; failures keep the text by never
-            // reaching here).
+            // Routine success leaves no composer row: the footer StatusText
+            // already carries the healthy summary, and the empty status
+            // collapses the line. Warnings keep their row (failures never
+            // reach here). The composer-clear below still vacates the box.
+            PiRunStatus.Text = string.Empty;
             if (ComposerActionPolicy.ShouldClearComposer(PiPromptBox.Text, message))
             {
                 PiPromptBox.Text = string.Empty;
@@ -2632,7 +2626,10 @@ public partial class MainWindow : Window
         var rects = new Dictionary<string, Avalonia.Rect>();
         void Add(string name, Avalonia.Controls.Control? element)
         {
-            if (element is null)
+            // Hidden pages keep stale bounds, and Avalonia does not
+            // propagate IsVisible down the tree — so walk the ancestors:
+            // any explicitly hidden panel disqualifies the whole subtree.
+            if (element is null || !IsEffectivelyVisible(element))
             {
                 return;
             }
@@ -2651,9 +2648,19 @@ public partial class MainWindow : Window
         Add("send", ComposerSendButton);
         Add("input", PiPromptBox);
         Add("headerDiv", HeaderDivider);
+        Add("overview", OverviewPanel);
+        Add("overviewContent", OverviewContent);
         rects["overlay"] = new Avalonia.Rect(new Avalonia.Point(0, 0), LayoutOverlay.Bounds.Size);
 
-        var deviations = LayoutAudit.Check(rects);
+        var deviations = LayoutAudit.Check(rects).ToList();
+        if (rects.TryGetValue("overviewContent", out var contentRect)
+            && rects.TryGetValue("overview", out var viewportRect)
+            && LayoutAudit.CheckFill(contentRect, viewportRect, AxLayout.ContentMaxWidth) is { } fill)
+        {
+            // Capped-panel fill (B2 regression net): empty and populated
+            // share one width at and above the reading cap.
+            deviations.Add(fill);
+        }
         foreach (var region in new[] { "cards", "feed", "composer", "footer", "rabbit", "send", "input" })
         {
             if (rects.TryGetValue(region, out var frame))
@@ -2711,6 +2718,25 @@ public partial class MainWindow : Window
         }
 
         return new Avalonia.Point(x, y);
+    }
+
+    /// Effective visibility: Avalonia keeps IsVisible true on children of
+    /// a hidden panel (only rendering skips them), while their bounds go
+    /// stale — so any explicitly hidden ancestor disqualifies the subtree.
+    private static bool IsEffectivelyVisible(Avalonia.Controls.Control element)
+    {
+        Avalonia.Visual? node = element;
+        while (node is not null)
+        {
+            if (node is Avalonia.Controls.Control control && !control.IsVisible)
+            {
+                return false;
+            }
+
+            node = node.GetVisualParent();
+        }
+
+        return true;
     }
 
     private void GuideFor(
@@ -2785,13 +2811,27 @@ public partial class MainWindow : Window
     /// itself included). Posted work is dropped when the window is gone.
     private void PostLayoutRefresh()
     {
+        // Background priority: layout and render passes triggered by the
+        // resize or page switch complete first, so no member is ever
+        // measured from a half-arranged tree (historic content-right
+        // regression showed exactly the resize delta). Dropped when gone.
         Dispatcher.UIThread.Post(() =>
         {
-            if (!_closed && LayoutOverlay.IsVisible)
+            if (_closed)
+            {
+                return;
+            }
+
+            if (OverviewPanel.IsVisible)
+            {
+                ArrangeOverviewCards();
+            }
+
+            if (LayoutOverlay.IsVisible)
             {
                 RefreshLayoutOverlay();
             }
-        });
+        }, Avalonia.Threading.DispatcherPriority.Background);
     }
 
     private static double LayoutOverlayFallbackHeight(IReadOnlyDictionary<string, Avalonia.Rect> rects)
@@ -2824,8 +2864,9 @@ public partial class MainWindow : Window
 
     // Checkpoint A shell: the rail is fixed icon-only (Overview / Feed /
     // Settings); the expandable labeled rail and its preference are gone.
-    // B1 adds the temporary Feed action group (FeedActions, Feed-only).
-    // ViewPrefs.RailExpanded stays persisted but unused.
+    // B2 returned the feed actions to the in-column toolbar, so the rail
+    // is navigation only again. ViewPrefs.RailExpanded stays persisted
+    // but unused.
 
     /// Persist view preferences. Prunes drafts ONLY against healthy sources:
     /// a degraded catalog or an unavailable worker store must never delete
@@ -2851,8 +2892,7 @@ public partial class MainWindow : Window
         OverviewPanel.IsVisible = index == 0;
         LivePanel.IsVisible = index == 1;
         SettingsPanel.IsVisible = index == 2;
-        // B1: the temporary rail action group is Feed-only.
-        FeedActions.IsVisible = index == 1;
+        // B2: feed actions live in the in-column toolbar again.
         if (LayoutOverlay.IsVisible)
         {
             PostLayoutRefresh();
@@ -2949,51 +2989,31 @@ public partial class MainWindow : Window
             ? (busy ? $"Working · {label}" : $"Idle · {label}")
             : $"Not connected · {label}";
         OvStateDot.Fill = connected
-            ? (busy ? AxTheme.YellowBrush : AxTheme.GreenBrush)
+            ? (busy ? AxTheme.CyanBrush : AxTheme.GreenBrush)
             : AxTheme.MutedBrush;
 
         var entries = feed.Snapshot();
         var map = feed.BuildMap();
         var attention = OverviewSummary.AttentionFor(connected, busy, entries, map.ErrorCount);
         OvAttentionText.Text = attention.Text;
+        // Quiet normal: only genuine attention takes colour (amber review,
+        // red failure); the idle state stays muted, never success-green.
         OvAttentionText.Foreground = attention.Level switch
         {
             AttentionLevel.Warning => AxTheme.YellowBrush,
-            AttentionLevel.Guidance => AxTheme.MutedBrush,
-            _ => AxTheme.GreenBrush,
+            AttentionLevel.Failed => AxTheme.RedBrush,
+            _ => AxTheme.MutedBrush,
         };
 
         // Receipts and compactions are outcomes, not missions: the card
         // shows the latest work-driving milestone, or stays quiet.
-        var milestone = map.Milestones.LastOrDefault(m => m.Kind is not ("receipt" or "compaction"));
-        if (milestone is null)
-        {
-            OvMissionTitle.Text = "No mission data yet.";
-            OvMissionDetail.Text = "Milestones appear as you work.";
-        }
-        else
-        {
-            OvMissionTitle.Text = milestone.Title;
-            var evidence = new List<string>();
-            if (map.ChangedFiles.Count > 0)
-            {
-                evidence.Add($"changed: {string.Join(", ", map.ChangedFiles)}");
-            }
-
-            if (map.TestCommands.Count > 0)
-            {
-                evidence.Add($"tests (heuristic): {string.Join(" | ", map.TestCommands)}");
-            }
-
-            OvMissionDetail.Text = $"[#{milestone.Seq} {milestone.Kind}]" +
-                (evidence.Count == 0 ? " No file changes observed yet." : $" {string.Join(" · ", evidence)}");
-        }
-
+        // No mission authority exists in the app (researched — tool
+        // milestones are operations, not missions), so the card stays in
+        // its restrained unconnected state. Tool work lives under Recent
+        // Activity with the same evidence jumps.
+        OvMissionTitle.Text = "No mission connected.";
+        OvMissionDetail.Text = "Mission identity needs an authoritative source; none is available.";
         OvMissionEvidence.Children.Clear();
-        if (milestone is not null)
-        {
-            OvMissionEvidence.Children.Add(JumpButton($"Evidence #{milestone.Seq}", milestone.Seq));
-        }
 
         OvModelName.Text = engine.Model ?? "—";
         OvModelDetail.Text = engine.Model is null
@@ -3021,8 +3041,15 @@ public partial class MainWindow : Window
         else
         {
             var healthy = !receipt.IsError && receipt.Note != "needs review";
-            OvVerifyTitle.Text = healthy ? "Latest run healthy" : "Run needs review";
+            OvVerifyTitle.Text = healthy ? "Latest run healthy" : receipt.IsError ? "Run failed" : "Run needs review";
             OvVerifyDetail.Text = receipt.Text;
+        }
+
+        // Historical errors are never discarded: they ride along here even
+        // when the latest receipt quiets the title row.
+        if (map.ErrorCount > 0)
+        {
+            OvVerifyDetail.Text += $" Session errors observed: {map.ErrorCount}.";
         }
 
         if (stats is null)
@@ -3042,8 +3069,11 @@ public partial class MainWindow : Window
         }
 
         OvActivityList.Children.Clear();
-        var activity = OverviewSummary.RecentActivity(entries);
-        if (activity.Count == 0)
+        const int collapsedMax = 3;
+        const int expandedMax = 8;
+        var total = OverviewSummary.GroupCount(entries);
+        var groups = OverviewSummary.GroupActivity(entries, busy, _overviewActivityExpanded ? expandedMax : collapsedMax);
+        if (groups.Count == 0)
         {
             OvActivityList.Children.Add(new TextBlock
             {
@@ -3053,13 +3083,150 @@ public partial class MainWindow : Window
             });
         }
 
-        foreach (var item in activity)
+        for (var gi = 0; gi < groups.Count; gi++)
         {
-            var (rowLabel, rowDetail) = OverviewSummary.Summarize(item);
-            var jump = JumpButton(rowLabel, item.Seq);
-            Avalonia.Controls.ToolTip.SetTip(jump, rowDetail);
-            OvActivityList.Children.Add(jump);
+            OvActivityList.Children.Add(ActivityGroupRow(groups[gi], gi == 0, gi == groups.Count - 1));
         }
+
+        if (total > groups.Count)
+        {
+            var more = new Button
+            {
+                Content = _overviewActivityExpanded
+                    ? "Show fewer runs"
+                    : $"Show {total - groups.Count} earlier run{(total - groups.Count == 1 ? string.Empty : "s")}",
+                Background = Avalonia.Media.Brushes.Transparent,
+                BorderThickness = new Avalonia.Thickness(0),
+                Foreground = AxTheme.BlueBrush,
+                Padding = new Avalonia.Thickness(4, 2, 4, 2),
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+            };
+            more.Click += OvActivityMore_OnClick;
+            OvActivityList.Children.Add(more);
+        }
+
+        // Arrange and overlay follow through the posted refresh (never
+        // synchronously: bounds are stale on the show/resize that
+        // triggers this rebuild).
+        PostLayoutRefresh();
+    }
+
+    private bool _overviewActivityExpanded;
+
+    private void OvActivityMore_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        _overviewActivityExpanded = !_overviewActivityExpanded;
+        RebuildOverview();
+    }
+
+    /// One timeline group: a rail cell (guide segment + outcome dot) beside
+    /// headline (jump to the run start), coloured status and muted tool
+    /// summary. First/last cells trim the guide so it never overshoots.
+    private Avalonia.Controls.Control ActivityGroupRow(OverviewSummary.ActivityGroup group, bool first, bool last)
+    {
+        var (dot, status) = group.Outcome switch
+        {
+            ActivityOutcome.Healthy => (AxTheme.GreenBrush, "Healthy"),
+            ActivityOutcome.NeedsReview => (AxTheme.YellowBrush, "Needs review"),
+            ActivityOutcome.Failed => (AxTheme.RedBrush, "Failed"),
+            ActivityOutcome.InProgress => (AxTheme.CyanBrush, "In progress"),
+            _ => (AxTheme.MutedBrush, "No outcome recorded"),
+        };
+        var cell = new Grid
+        {
+            ColumnDefinitions = new Avalonia.Controls.ColumnDefinitions("16,*"),
+        };
+        var rail = new Grid();
+        if (!first || !last)
+        {
+            var guide = new Border
+            {
+                Width = 2,
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+                Background = AxTheme.DimBrush,
+                Opacity = 0.5,
+            };
+            if (first)
+            {
+                guide.Margin = new Avalonia.Thickness(0, 8, 0, 0);
+            }
+            else if (last)
+            {
+                guide.VerticalAlignment = Avalonia.Layout.VerticalAlignment.Top;
+                guide.Height = 8;
+            }
+
+            rail.Children.Add(guide);
+        }
+
+        rail.Children.Add(new Avalonia.Controls.Shapes.Ellipse
+        {
+            Width = 8,
+            Height = 8,
+            Fill = dot,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Top,
+            Margin = new Avalonia.Thickness(0, 4, 0, 0),
+        });
+        Grid.SetColumn(rail, 0);
+        cell.Children.Add(rail);
+
+        // Bottom margin lives inside the cell so the rail guide segments
+        // of adjacent groups join into one continuous line.
+        var content = new StackPanel { Spacing = 2, Margin = new Avalonia.Thickness(0, 0, 0, 8) };
+        var headline = new Button
+        {
+            Content = OverviewSummary.Headline(group.Prompt),
+            Tag = group.Prompt.Seq,
+            Background = Avalonia.Media.Brushes.Transparent,
+            BorderThickness = new Avalonia.Thickness(0),
+            Foreground = AxTheme.TextBrush,
+            FontWeight = Avalonia.Media.FontWeight.SemiBold,
+            FontSize = 13,
+            Padding = new Avalonia.Thickness(4, 2, 4, 2),
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+        };
+        headline.Click += Milestone_OnClick;
+        Avalonia.Controls.ToolTip.SetTip(headline, $"Open run start in Feed (#{group.Prompt.Seq})");
+        content.Children.Add(headline);
+
+        var receiptSeq = group.Items.LastOrDefault(e => e.Role == "receipt")?.Seq ?? group.Prompt.Seq;
+        var statusRow = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 6 };
+        statusRow.Children.Add(new TextBlock { Text = status, Foreground = dot, FontSize = 12 });
+        statusRow.Children.Add(new TextBlock { Text = $"· #{receiptSeq}", Foreground = AxTheme.MutedBrush, FontSize = 12 });
+        content.Children.Add(statusRow);
+
+        content.Children.Add(new TextBlock
+        {
+            Text = group.Summary,
+            Foreground = AxTheme.MutedBrush,
+            FontSize = 12,
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+        });
+        Grid.SetColumn(content, 1);
+        cell.Children.Add(content);
+        return cell;
+    }
+
+    /// Responsive dual cards (refinement): side by side when the page is
+    /// wide, stacked when narrow. Idempotent; runs on every rebuild and on
+    /// window resize while Overview shows.
+    private void ArrangeOverviewCards()
+    {
+        if (!OverviewPanel.IsVisible)
+        {
+            return;
+        }
+
+        var stacked = OverviewPanel.Bounds.Width < 700;
+        OvDualGrid.ColumnDefinitions = stacked
+            ? new Avalonia.Controls.ColumnDefinitions("*")
+            : new Avalonia.Controls.ColumnDefinitions("*,*");
+        OvDualGrid.RowDefinitions = stacked
+            ? new Avalonia.Controls.RowDefinitions("Auto,Auto")
+            : new Avalonia.Controls.RowDefinitions();
+        Grid.SetRow(OvVerifyCard, stacked ? 1 : 0);
+        Grid.SetColumn(OvVerifyCard, stacked ? 0 : 1);
     }
 
     /// Quiet evidence-jump link: transparent, left-aligned, opens the feed

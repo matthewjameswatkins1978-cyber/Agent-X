@@ -150,10 +150,10 @@ public sealed class ContextCardsTests
     [Fact]
     public void FooterText_FullValues_MatchesApprovedShape()
     {
-        var (left, right) = ContextCards.FooterText("Agent-X", "foundation", "MiMo 2.6", "High", 18);
+        var (left, right) = ContextCards.FooterText("Agent-X", "foundation", "MiMo 2.6", "High", 18.4);
 
         Assert.Equal("Agent-X · foundation", left);
-        Assert.Equal("MiMo 2.6 · High · Context 18%", right);
+        Assert.Equal("MiMo 2.6 · High · Context 18.4%", right);
     }
 
     [Fact]

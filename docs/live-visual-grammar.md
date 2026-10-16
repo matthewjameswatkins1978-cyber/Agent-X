@@ -117,6 +117,21 @@ lightness intent, not claimed bit-exact terminal output.
   toggle, resize and page switch — never continuously. Verified:
   footer gutter, rail padding, header cell, overlay timing and the
   structural Send/input centring (all Δ0.0; see `docs/gui-ckpt-b2`).
+  The capped-panel fill check (`panel-fill`) guards Overview/Settings
+  width at and above the 900px cap; below it stretch rules apply.
+  Hidden subtrees are excluded by ancestor walk (Avalonia keeps
+  `IsVisible` true on children of hidden panels with stale bounds).
+- Overview attention is latest-word: unhealthy receipt warns (amber),
+  error receipt fails (red), healthy quiets earlier errors (muted
+  normal — never success-green), bare errors warn only with no receipt.
+  Historical errors ride along in Verification, never discarded.
+  Footer and Overview share one snapshot at F1 precision.
+- No mission authority exists anywhere in the repo (researched), so the
+  mission card stays `No mission connected`; tool work groups under
+  Recent Activity by run association (prompt → rows → receipt), with
+  outcome dots (green/amber/red/teal/grey), a joining guide rail and
+  an earlier-runs affordance. The composer Send/Stop button and Ctrl+Enter
+  share one guarded path; routine success leaves no composer row.
 - Fluent theme findings (12.1.4, verified against its shipped source):
   the TextBox :focus edge and the checked checkbox come from
   variant-scoped accent keys no post-load override can reach; an

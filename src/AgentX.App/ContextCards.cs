@@ -155,7 +155,7 @@ public static class ContextCards
             : $"{contextName} · {gitBranch.Trim()}";
         var right = $"{model switch { null or { Length: 0 } => "—", var m => m }} · " +
                     $"{thinking switch { null or { Length: 0 } => "—", var t => t }} · " +
-                    $"{(contextPercent is double p ? $"Context {p:0}%": "Context —")}";
+                    $"{(contextPercent is double p ? $"Context {p:F1}%" : "Context —")}";
         return (left, right);
     }
 

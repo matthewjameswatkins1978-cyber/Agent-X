@@ -62,6 +62,31 @@ public sealed class LayoutAuditTests
     }
 
     [Fact]
+    public void CheckFill_EmptyAndPopulated_ShareOneWidth()
+    {
+        // Viewport 1156, cap 900: content spans the cap either way.
+        var viewport = At(0, 0, 1156, 700);
+        Assert.Equal(0, LayoutAudit.CheckFill(At(56, 0, 900, 200), viewport, 900)!.Delta);
+        Assert.Equal(0, LayoutAudit.CheckFill(At(56, 0, 900, 600), viewport, 900)!.Delta);
+    }
+
+    [Fact]
+    public void CheckFill_NarrowViewport_SkippedBelowCap()
+    {
+        var viewport = At(0, 0, 700, 700);
+        Assert.Null(LayoutAudit.CheckFill(At(0, 0, 700, 200), viewport, 900));
+    }
+
+    [Fact]
+    public void CheckFill_ShrunkContent_ReportsExactDelta()
+    {
+        var viewport = At(0, 0, 1156, 700);
+        var deviation = LayoutAudit.CheckFill(At(56, 0, 450, 200), viewport, 900)!;
+        Assert.Equal("panel-fill", deviation.Name);
+        Assert.Equal(450, deviation.Delta);
+    }
+
+    [Fact]
     public void Check_MissingRects_SkippedNeverFail()
     {
         var deviations = LayoutAudit.Check(new Dictionary<string, Rect>

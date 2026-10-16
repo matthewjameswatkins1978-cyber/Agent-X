@@ -64,10 +64,9 @@
            starts exactly on the content-column datum. One width, both
            alignments — no per-element offsets. -->
       <Grid Grid.Row="0" ColumnDefinitions="48,Auto,*,Auto" ColumnSpacing="8">
-        <app:AxIcon x:Name="BrandIcon" Kind="Rabbit" Width="20" Height="20" VerticalAlignment="Center" HorizontalAlignment="Center" />
+        <app:AxIcon x:Name="BrandIcon" Kind="Rabbit" Width="18" Height="18" VerticalAlignment="Center" HorizontalAlignment="Center" />
         <StackPanel x:Name="BrandText" Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
           <TextBlock Text="Agent X" FontWeight="Bold" FontSize="15" VerticalAlignment="Center" />
-          <TextBlock Text="/ Biscuit Logic" Foreground="{DynamicResource Ax.Muted}" FontSize="13" VerticalAlignment="Center" />
         </StackPanel>
         <Button Grid.Column="3" Classes="AxIconBtn" Click="SearchButton_OnClick"
                 ToolTip.Tip="Find in conversation" AutomationProperties.Name="Find in conversation">
@@ -93,57 +92,6 @@
                         ToolTip.Tip="Feed" AutomationProperties.Name="Feed">
             <app:AxIcon x:Name="NavLiveIcon" Kind="Chat" Width="18" Height="18" />
           </ToggleButton>
-        </StackPanel>
-        <!-- Temporary feed action group (Checkpoint B1): the Feed toolbar
-             actions live here until the rail earns a designed home. Visually
-             separated from the three navigation destinations (Overview /
-             Feed above, Settings below) and shown on the Feed page only.
-             Buttons keep their names, handlers and states — only the parent
-             changes. -->
-        <StackPanel DockPanel.Dock="Top" x:Name="FeedActions" Spacing="4" Margin="0,8,0,0">
-          <Border BorderBrush="{DynamicResource Ax.Border}" BorderThickness="0,1,0,0"
-                  Margin="10,0,10,4" />
-          <Button x:Name="ConnectButton" Classes="AxIconBtn" Click="ConnectPi_OnClick"
-                  ToolTip.Tip="Connect the selected worker or workspace"
-                  AutomationProperties.Name="Connect" HorizontalAlignment="Center">
-            <app:AxIcon Kind="Connect" />
-          </Button>
-          <Button x:Name="ReconnectButton" Classes="AxIconBtn" Click="ReconnectPi_OnClick"
-                  ToolTip.Tip="Reconnect (session is persisted)"
-                  AutomationProperties.Name="Reconnect" HorizontalAlignment="Center">
-            <app:AxIcon Kind="Reconnect" />
-          </Button>
-          <Button x:Name="StopButton" Classes="AxIconBtn" Click="ComposerStop_OnClick"
-                  IsVisible="False" ToolTip.Tip="Stop current run (Escape)"
-                  AutomationProperties.Name="Stop current run" HorizontalAlignment="Center">
-            <app:AxIcon Kind="Stop" Filled="True" />
-          </Button>
-          <Button x:Name="CopySelectedButton" Classes="AxIconBtn" Click="CopySelectedMessage_OnClick"
-                  ToolTip.Tip="Copy selected message (exact bytes)"
-                  AutomationProperties.Name="Copy selected message" HorizontalAlignment="Center">
-            <app:AxIcon Kind="Copy" />
-          </Button>
-          <Button x:Name="MoreActionsButton" Classes="AxIconBtn" ToolTip.Tip="More actions"
-                  AutomationProperties.Name="More actions" HorizontalAlignment="Center">
-            <app:AxIcon Kind="More" Filled="True" />
-            <Button.Flyout>
-              <MenuFlyout>
-                <MenuItem x:Name="DisconnectMenuItem" Header="Disconnect"
-                          Click="DisconnectPi_OnClick"
-                          ToolTip.Tip="Disconnect the workspace session" />
-                <MenuItem x:Name="AutoScrollMenuItem" Header="Auto-scroll" ToggleType="CheckBox"
-                          IsChecked="True" StaysOpenOnClick="True" Click="AutoScrollMenu_OnClick"
-                          ToolTip.Tip="Follow new messages automatically" />
-                <MenuItem x:Name="CopyFullMenuItem" Header="Copy full conversation"
-                          Click="CopyFullConversation_OnClick"
-                          ToolTip.Tip="Copy the whole transcript (exact bytes)" />
-                <Separator />
-                <MenuItem x:Name="RemoveWorkerMenuItem" Header="Remove worker…"
-                          Click="RemoveWorker_OnClick"
-                          ToolTip.Tip="Stop the selected worker's process and remove its registration (session files stay on disk)" />
-              </MenuFlyout>
-            </Button.Flyout>
-          </Button>
         </StackPanel>
         <StackPanel DockPanel.Dock="Bottom" Spacing="8">
           <ToggleButton x:Name="NavSettings" Classes="NavBtn" Click="Nav_OnClick" Width="40" Height="40"
@@ -179,9 +127,14 @@
       <ScrollViewer x:Name="OverviewPanel" IsVisible="False"
                     VerticalScrollBarVisibility="Auto"
                     HorizontalScrollBarVisibility="Disabled">
-        <StackPanel Spacing="8" MaxWidth="900" HorizontalAlignment="Left">
-          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-            <TextBlock Text="Overview" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
+        <!-- Viewport fill up to the reading cap (AxLayout): Stretch spans
+             the viewport, MaxWidth caps it — empty and populated share one
+             width. The panel-fill Inspector check guards this. -->
+        <StackPanel x:Name="OverviewContent" Spacing="8" MaxWidth="900" HorizontalAlignment="Stretch">
+          <!-- Page header: deliberate top air, stronger title, status on
+               the same rhythm. No enclosing box. -->
+          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" Margin="0,8,0,0">
+            <TextBlock Text="Overview" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center" />
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
               <Ellipse x:Name="OvStateDot" Width="8" Height="8" Fill="#6B7280" VerticalAlignment="Center" />
               <TextBlock x:Name="OvStateText" Text="Not connected" FontSize="12"
@@ -201,8 +154,8 @@
               <StackPanel x:Name="OvMissionEvidence" Spacing="4" />
             </StackPanel>
           </Border>
-          <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
-            <Border Grid.Column="0" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="1"
+          <Grid x:Name="OvDualGrid" ColumnDefinitions="*,*" ColumnSpacing="8" RowSpacing="8">
+            <Border x:Name="OvModelCard" Grid.Column="0" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="1"
                     CornerRadius="{DynamicResource Ax.Radius}" Padding="12"
                     Background="{DynamicResource Ax.Surface}">
               <StackPanel Spacing="4">
@@ -215,7 +168,7 @@
                            TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
               </StackPanel>
             </Border>
-            <Border Grid.Column="1" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="1"
+            <Border x:Name="OvVerifyCard" Grid.Column="1" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="1"
                     CornerRadius="{DynamicResource Ax.Radius}" Padding="12"
                     Background="{DynamicResource Ax.Surface}">
               <StackPanel Spacing="4">
@@ -248,7 +201,7 @@
             <TextBlock Grid.Column="1" Text="Selected agent only" FontSize="11"
                        Foreground="{DynamicResource Ax.Muted}" VerticalAlignment="Center" />
           </Grid>
-          <StackPanel x:Name="OvActivityList" Spacing="4" />
+          <StackPanel x:Name="OvActivityList" Spacing="0" />
           <Expander Header="Advanced diagnostics" IsExpanded="False" HorizontalAlignment="Stretch">
             <StackPanel Spacing="8">
               <Expander Header="Session map detail" IsExpanded="False" HorizontalAlignment="Stretch">
@@ -294,7 +247,7 @@
       </ScrollViewer>
 
       <!-- Live: contextual toolbar + dominant conversation + anchored composer. -->
-      <Grid x:Name="LivePanel" RowDefinitions="Auto,*,Auto" RowSpacing="6">
+      <Grid x:Name="LivePanel" RowDefinitions="Auto,Auto,*,Auto" RowSpacing="6">
         <Border Grid.Row="0" x:Name="FindBar" IsVisible="False" BorderBrush="{DynamicResource Ax.Border}"
                 BorderThickness="1" CornerRadius="{DynamicResource Ax.Radius}" Padding="8,4"
                 Background="{DynamicResource Ax.Surface}">
@@ -307,9 +260,56 @@
             <Button Content="Close" Click="FindClose_OnClick" FontSize="12" />
           </StackPanel>
         </Border>
-        <!-- Feed actions live in the rail group (FeedActions) since B1. -->
+        <!-- Feed toolbar (B2): one compact in-column action row. Same
+             buttons, names, handlers and states — horizontal again, so the
+             transcript keeps the full content width with no side strip. -->
+        <DockPanel Grid.Row="1" LastChildFill="False">
+          <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Spacing="2">
+            <Button x:Name="ConnectButton" Classes="AxIconBtn" Click="ConnectPi_OnClick"
+                    ToolTip.Tip="Connect the selected worker or workspace"
+                    AutomationProperties.Name="Connect">
+              <app:AxIcon Kind="Connect" />
+            </Button>
+            <Button x:Name="ReconnectButton" Classes="AxIconBtn" Click="ReconnectPi_OnClick"
+                    ToolTip.Tip="Reconnect (session is persisted)"
+                    AutomationProperties.Name="Reconnect">
+              <app:AxIcon Kind="Reconnect" />
+            </Button>
+            <Button x:Name="StopButton" Classes="AxIconBtn" Click="ComposerStop_OnClick"
+                    IsVisible="False" ToolTip.Tip="Stop current run (Escape)"
+                    AutomationProperties.Name="Stop current run">
+              <app:AxIcon Kind="Stop" Filled="True" />
+            </Button>
+            <Button x:Name="CopySelectedButton" Classes="AxIconBtn" Click="CopySelectedMessage_OnClick"
+                    ToolTip.Tip="Copy selected message (exact bytes)"
+                    AutomationProperties.Name="Copy selected message">
+              <app:AxIcon Kind="Copy" />
+            </Button>
+          </StackPanel>
+          <Button DockPanel.Dock="Right" x:Name="MoreActionsButton" Classes="AxIconBtn" ToolTip.Tip="More actions"
+                  AutomationProperties.Name="More actions">
+            <app:AxIcon Kind="More" Filled="True" />
+            <Button.Flyout>
+              <MenuFlyout>
+                <MenuItem x:Name="DisconnectMenuItem" Header="Disconnect"
+                          Click="DisconnectPi_OnClick"
+                          ToolTip.Tip="Disconnect the workspace session" />
+                <MenuItem x:Name="AutoScrollMenuItem" Header="Auto-scroll" ToggleType="CheckBox"
+                          IsChecked="True" StaysOpenOnClick="True" Click="AutoScrollMenu_OnClick"
+                          ToolTip.Tip="Follow new messages automatically" />
+                <MenuItem x:Name="CopyFullMenuItem" Header="Copy full conversation"
+                          Click="CopyFullConversation_OnClick"
+                          ToolTip.Tip="Copy the whole transcript (exact bytes)" />
+                <Separator />
+                <MenuItem x:Name="RemoveWorkerMenuItem" Header="Remove worker…"
+                          Click="RemoveWorker_OnClick"
+                          ToolTip.Tip="Stop the selected worker's process and remove its registration (session files stay on disk)" />
+              </MenuFlyout>
+            </Button.Flyout>
+          </Button>
+        </DockPanel>
 
-        <Grid Grid.Row="1">
+        <Grid Grid.Row="2">
           <ListBox x:Name="ConversationList" Background="Transparent" BorderThickness="0"
                      SelectionMode="Single" FontFamily="{DynamicResource Ax.ProseFont}"
                      FontSize="{DynamicResource Ax.FeedFontSize}">
@@ -324,7 +324,10 @@
                        unboxed assistant Markdown (no header), coherent tool
                        blocks with Pi-style name headers and a 3px state
                        edge, quiet rows, violet compaction box. -->
-                  <StackPanel Spacing="2" Margin="8,4"
+                  <!-- Rows sit flush on the feed edge (the content datum):
+                       block padding is the only inset, never a second
+                       margin — no double-indent against cards/composer. -->
+                  <StackPanel Spacing="2" Margin="0,4"
                               AutomationProperties.Name="{Binding Header}">
                     <!-- User: tinted block with an accent edge. Body renders
                          through the same safe MarkdownLite parser as assistant
@@ -403,7 +406,7 @@
           </StackPanel>
         </Grid>
 
-        <Border x:Name="ComposerBox" Grid.Row="2" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="1"
+        <Border x:Name="ComposerBox" Grid.Row="3" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="1"
                 CornerRadius="{DynamicResource Ax.Radius}" Padding="8"
                 Background="{DynamicResource Ax.Surface}">
           <StackPanel Spacing="6">
@@ -465,7 +468,7 @@
       <ScrollViewer x:Name="SettingsPanel" IsVisible="False"
                     VerticalScrollBarVisibility="Auto"
                     HorizontalScrollBarVisibility="Disabled">
-        <StackPanel Spacing="8" MaxWidth="900" HorizontalAlignment="Left">
+        <StackPanel Spacing="8" MaxWidth="900" HorizontalAlignment="Stretch">
           <TextBlock Text="Preferences" FontSize="16" FontWeight="SemiBold" />
           <CheckBox x:Name="SettingsAutoScrollCheck" Content="Auto-scroll conversation"
                     IsCheckedChanged="SettingsAutoScrollCheck_OnChanged" />
