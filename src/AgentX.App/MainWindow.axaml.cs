@@ -1743,6 +1743,14 @@ public partial class MainWindow : Window
             RebuildSessionMap();
             RefreshOverviewAndSettings();
             PiRunStatus.Text = $"Last run: {receipt.Display} ({receipt.AssistantChars:N0} chars in {sink.Accumulator.FlushCount:N0} UI updates, {worker.Feed.Count} feed entries.)";
+            // B1: the accepted send vacates the composer — but only when the
+            // box still holds exactly the sent message (mid-run typing is a
+            // new draft and survives; failures keep the text by never
+            // reaching here).
+            if (ComposerActionPolicy.ShouldClearComposer(PiPromptBox.Text, message))
+            {
+                PiPromptBox.Text = string.Empty;
+            }
             StatusText.Text = receipt.RunHealthy
                 ? $"Pi replied with {text.Length:N0} characters — healthy run (correctness needs separate acceptance checks)."
                 : $"Pi run finished — {receipt.Display}";
@@ -1880,6 +1888,14 @@ public partial class MainWindow : Window
             RefreshOverviewAndSettings();
             var updates = _liveAccumulator?.FlushCount ?? 0;
             PiRunStatus.Text = $"Last run: {receipt.Display} ({receipt.AssistantChars:N0} chars in {updates:N0} UI updates, {_feed.Count} feed entries.)";
+            // B1: the accepted send vacates the composer — but only when the
+            // box still holds exactly the sent message (mid-run typing is a
+            // new draft and survives; failures keep the text by never
+            // reaching here).
+            if (ComposerActionPolicy.ShouldClearComposer(PiPromptBox.Text, message))
+            {
+                PiPromptBox.Text = string.Empty;
+            }
             StatusText.Text = receipt.RunHealthy
                 ? $"Pi replied with {text.Length:N0} characters — healthy run (correctness needs separate acceptance checks)."
                 : $"Pi run finished — {receipt.Display}";

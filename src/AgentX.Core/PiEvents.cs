@@ -214,7 +214,11 @@ public sealed record ToolEnded(
         return level switch
         {
             VisibilityLevel.Compact => $"Tool {ToolName}: {status}.{timing}",
-            VisibilityLevel.Detailed => $"Tool {ToolName}: {status}.{timing} {OutputPreview}{marker}{missing}",
+            // Detailed keeps the verdict line but not the output preview:
+            // the same bytes already render in full in the tool block, so
+            // repeating the head here read as a duplicate presentation.
+            // Full keeps the preview for diagnostics.
+            VisibilityLevel.Detailed => $"Tool {ToolName}: {status}.{timing}{marker}{missing}",
             _ => $"Tool {ToolName} [{ToolCallAnnounced.ShortId(CallId)}]: {status}.{timing} " +
                  $"(source {OutputChars} chars, stored {RetainedText.Length} chars / {RetainedBytes} UTF-8 bytes, wire-truncated: {WireTruncated}, tap-truncated: {TapTruncated}, result-present: {ResultPresent}) " +
                  $"{OutputPreview}{marker}{missing}",

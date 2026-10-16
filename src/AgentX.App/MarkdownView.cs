@@ -106,12 +106,7 @@ public sealed class MarkdownView : SelectableTextBlock
                     inlines.Add(new LineBreak());
                     break;
                 case MdBlockKind.CodeFence:
-                    foreach (var line in (block.Code ?? string.Empty).Split('\n'))
-                    {
-                        inlines.Add(MonoRun(line.TrimEnd('\r'), GreenBrush));
-                        inlines.Add(new LineBreak());
-                    }
-
+                    RenderCodeFence(inlines, block.Code ?? string.Empty, block.Language);
                     break;
                 case MdBlockKind.List:
                     // Nested items keep their source level: two spaces per
@@ -205,17 +200,88 @@ public sealed class MarkdownView : SelectableTextBlock
         }
     }
 
+    /// <summary>
+    /// Language-aware fence body (display only). Diff fences take the
+    /// universal +/-/hunk verdicts; known languages take the conservative
+    /// token treatment in Pi roles; anything else keeps the uniform code
+    /// voice (Pi's own CLI emits fences plain — no rainbow is invented).
+    /// </summary>
+    private void RenderCodeFence(InlineCollection inlines, string code, string? language)
+    {
+        var normalized = CodeHighlight.Normalize(language);
+        if (normalized is null)
+        {
+            foreach (var line in code.Split('\n'))
+            {
+                inlines.Add(MonoRun(line.TrimEnd('\r'), GreenBrush));
+                inlines.Add(new LineBreak());
+            }
+
+            return;
+        }
+
+        foreach (var token in CodeHighlight.Highlight(code, normalized))
+        {
+            if (token.Text == "\n")
+            {
+                inlines.Add(new LineBreak());
+                continue;
+            }
+
+            var run = MonoRun(token.Text, CodeBrushFor(token.Kind));
+            if (token.Kind == CodeTokenKind.Comment)
+            {
+                run.FontStyle = FontStyle.Italic;
+            }
+
+            inlines.Add(run);
+        }
+    }
+
+    private static IBrush CodeBrushFor(CodeTokenKind kind) => kind switch
+    {
+        CodeTokenKind.Keyword => BlueBrush,
+        CodeTokenKind.String => GreenBrush,
+        CodeTokenKind.Comment => DimBrush,
+        CodeTokenKind.Number => YellowBrush,
+        CodeTokenKind.DiffAdd => GreenBrush,
+        CodeTokenKind.DiffDel => RedBrush,
+        CodeTokenKind.DiffHunk => YellowBrush,
+        CodeTokenKind.Error => RedBrush,
+        _ => TextBrush,
+    };
+
     private void RenderMono(string text, bool diffTint)
     {
+        // Terminal output keeps its own colours: the parser turns SGR into
+        // real runs and swallows every other sequence, so escapes can
+        // neither render as garbage nor act. Runs without explicit colour
+        // keep the diff verdict brush when asked (decoded line text, so a
+        // leading escape never hides a +/- hunk).
         var inlines = Inlines!;
-        var lines = text.Split('\n');
-        for (var i = 0; i < lines.Length; i++)
+        var lines = new List<List<(AnsiSpan Span, string Text)>>();
+        var current = new List<(AnsiSpan Span, string Text)>();
+        foreach (var span in AnsiParser.Parse(text))
         {
-            var line = lines[i].TrimEnd('\r');
-            IBrush? brush = null;
+            var parts = span.Text.Split('\n');
+            current.Add((span, parts[0]));
+            for (var p = 1; p < parts.Length; p++)
+            {
+                lines.Add(current);
+                current = new List<(AnsiSpan Span, string Text)>();
+                current.Add((span, parts[p]));
+            }
+        }
+
+        lines.Add(current);
+
+        for (var l = 0; l < lines.Count; l++)
+        {
+            IBrush? diffBrush = null;
             if (diffTint)
             {
-                brush = MarkdownLite.DiffLineKind(line) switch
+                var decoded = string.Concat(lines[l].Select(r => r.Text));
+                diffBrush = MarkdownLite.DiffLineKind(decoded) switch
                 {
                     "add" => GreenBrush,
                     "del" => RedBrush,
@@ -224,12 +290,48 @@ public sealed class MarkdownView : SelectableTextBlock
                 };
             }
 
-            inlines.Add(MonoRun(line, brush));
-            if (i + 1 < lines.Length)
+            foreach (var (span, part) in lines[l])
+            {
+                if (part.Length > 0)
+                {
+                    inlines.Add(AnsiRun(part, span, diffBrush));
+                }
+            }
+
+            if (l + 1 < lines.Count)
             {
                 inlines.Add(new LineBreak());
             }
         }
+    }
+
+    private static Run AnsiRun(string text, AnsiSpan span, IBrush? fallback)
+    {
+        var run = new Run(text) { FontFamily = MonoFamily };
+        run.Foreground = span.Foreground is { } fg
+            ? new SolidColorBrush(Color.FromRgb(fg.R, fg.G, fg.B))
+            : fallback ?? TextBrush;
+        if (span.Background is { } bg)
+        {
+            run.Background = new SolidColorBrush(Color.FromRgb(bg.R, bg.G, bg.B));
+        }
+
+        if (span.Bold)
+        {
+            run.FontWeight = FontWeight.Bold;
+        }
+
+        if (span.Italic)
+        {
+            run.FontStyle = FontStyle.Italic;
+        }
+
+        if (span.Underline)
+        {
+            run.TextDecorations = Avalonia.Media.TextDecorations.Underline;
+        }
+
+        return run;
     }
 
     private static Run StyledRun(

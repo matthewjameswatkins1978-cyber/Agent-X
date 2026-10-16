@@ -197,6 +197,23 @@ public sealed class PiTapMetadataTests
     }
 
     [Fact]
+    public void EndRow_DetailedVerdictOmitsPreview_FullKeepsIt()
+    {
+        // B1 rendering: the Detailed end row is a verdict line only — the
+        // output preview already renders in full in the tool block, so
+        // repeating it here read as a duplicate presentation. Full keeps
+        // the preview for diagnostics; the tap store keeps the bytes.
+        var ended = Assert.IsType<ToolEnded>(PiEventTap.Parse(
+            """{"type":"tool_execution_end","toolCallId":"v1","toolName":"powershell","isError":false,"durationMs":44,"result":{"content":[{"type":"text","text":"verdict-body-abc123"}],"structuredContent":{"exit_code":0}}}""", At));
+        var detailed = ended.Render(VisibilityLevel.Detailed);
+        Assert.Contains("ok.", detailed, StringComparison.Ordinal);
+        Assert.Contains("44 ms", detailed, StringComparison.Ordinal);
+        Assert.DoesNotContain("verdict-body-abc123", detailed, StringComparison.Ordinal);
+        Assert.Contains("verdict-body-abc123", ended.Render(VisibilityLevel.Full), StringComparison.Ordinal);
+        Assert.Contains("verdict-body-abc123", ended.RetainedText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TempAlloc_WindowedMessageCountsExactlyRetainsLittle()
     {
         // 200 blocks x 100 chars: true total counted, retention stays capped.

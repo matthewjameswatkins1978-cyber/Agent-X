@@ -51,6 +51,15 @@ public sealed class ComposerActionPolicyTests
     }
 
     [Fact]
+    public void ShouldClearComposer_ClearsOnlyUntouchedBox()
+    {
+        Assert.True(ComposerActionPolicy.ShouldClearComposer("hello pi", "hello pi"));
+        Assert.False(ComposerActionPolicy.ShouldClearComposer("hello pi + more", "hello pi"));
+        Assert.False(ComposerActionPolicy.ShouldClearComposer(string.Empty, "hello pi"));
+        Assert.False(ComposerActionPolicy.ShouldClearComposer(null, "hello pi"));
+    }
+
+    [Fact]
     public void Policy_NeverSendsAndStopsTogether()
     {
         // A run is either active (stoppable) or idle (sendable): the menu
