@@ -65,11 +65,22 @@ public partial class MainWindow
     {
         _notice = ShellCards.NextNotice(_notice, StatusText.Text);
         var hasNotice = !string.IsNullOrEmpty(StatusText.Text);
-        NoticeToggle.IsVisible = hasNotice;
-        NoticeToggle.Foreground = ShellCards.IsAlert(StatusText.Text) ? AxTheme.YellowBrush : AxTheme.MutedBrush;
+        // Amber is reserved for genuine alerts (the old toggle's language:
+        // yellow only for alert keywords, muted otherwise) — routine
+        // status text must never paint the gauge as a warning.
+        FooterGauge.HasNotice = hasNotice && ShellCards.IsAlert(StatusText.Text);
         FooterTransient.IsVisible = hasNotice && _notice.Open;
-        NoticeToggle.SetValue(AutomationProperties.NameProperty, _notice.Open ? "Hide notice" : "Show notice");
-        ToolTip.SetTip(NoticeToggle, _notice.Open ? "Hide notice" : "Show notice");
+        RefreshGaugeTip();
+    }
+
+    /// Gauge tooltip carries both halves of the truth: the measured
+    /// context (or its honest absence) and the notice affordance.
+    private void RefreshGaugeTip()
+    {
+        var context = FooterGauge.Percent is { } p ? $"Context {p:F1}%" : "Context unknown";
+        var notice = _notice.Open ? "Hide notice" : string.IsNullOrEmpty(StatusText.Text) ? "No notices" : "Show notice";
+        ToolTip.SetTip(ContextGaugeButton, $"{context} · {notice} (activate to toggle)");
+        ContextGaugeButton.SetValue(AutomationProperties.NameProperty, $"{context} · {notice}");
     }
 
     private void NoticeToggle_OnClick(object? sender, RoutedEventArgs e)
@@ -394,6 +405,8 @@ public partial class MainWindow
         var (left, right) = ShellCards.FooterText(name, branch, model, thinking, context);
         FooterContextText.Text = left;
         FooterEngineText.Text = right;
+        FooterGauge.Percent = context;
+        RefreshGaugeTip();
     }
 
     private void RefreshGitBranchAsync(string root)

@@ -24,6 +24,13 @@ public sealed class MarkdownView : SelectableTextBlock
     public static readonly StyledProperty<bool> DiffTintProperty =
         AvaloniaProperty.Register<MarkdownView, bool>(nameof(DiffTint));
 
+    /// Quiet annotation rendering for bridge detail rows: one step
+    /// smaller with the muted ink (explicit ANSI colours survive — only
+    /// uncoloured text quiets). Bound from the row's density, so it
+    /// scales with the feed size instead of hard-coding pixels.
+    public static readonly StyledProperty<bool> DimProperty =
+        AvaloniaProperty.Register<MarkdownView, bool>(nameof(Dim));
+
     public MdDocument? Markdown
     {
         get => GetValue(MarkdownProperty);
@@ -42,11 +49,18 @@ public sealed class MarkdownView : SelectableTextBlock
         set => SetValue(DiffTintProperty, value);
     }
 
+    public bool Dim
+    {
+        get => GetValue(DimProperty);
+        set => SetValue(DimProperty, value);
+    }
+
     static MarkdownView()
     {
         MarkdownProperty.Changed.AddClassHandler<MarkdownView>((v, _) => v.Rebuild());
         MonoTextProperty.Changed.AddClassHandler<MarkdownView>((v, _) => v.Rebuild());
         DiffTintProperty.Changed.AddClassHandler<MarkdownView>((v, _) => v.Rebuild());
+        DimProperty.Changed.AddClassHandler<MarkdownView>((v, _) => v.Rebuild());
     }
 
     // B7 treatments: shared live brushes, so a treatment switch repaints
@@ -76,7 +90,9 @@ public sealed class MarkdownView : SelectableTextBlock
         // standard RebuildConversationList refresh.
         var technical = Markdown is null || Markdown.IsEmpty;
         FontFamily = AxTheme.ProseFont;
-        FontSize = technical ? AxTheme.FeedMonoSize : AxTheme.FeedFontSize;
+        // Local size owns the row (a template binding would be shadowed):
+        // density arrives as the Dim flag, never a competing FontSize.
+        FontSize = technical ? AxTheme.FeedMonoSize - (Dim ? 1.5 : 0.0) : AxTheme.FeedFontSize;
         LineHeight = AxTheme.FeedLineHeight;
         if (!technical)
         {
@@ -294,7 +310,9 @@ public sealed class MarkdownView : SelectableTextBlock
             {
                 if (part.Length > 0)
                 {
-                    inlines.Add(AnsiRun(part, span, diffBrush));
+                    // Dim quiets only uncoloured text: explicit ANSI
+                    // colours and diff verdicts survive untouched.
+                    inlines.Add(AnsiRun(part, span, diffBrush ?? (Dim ? MutedBrush : null)));
                 }
             }
 

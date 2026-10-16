@@ -1776,6 +1776,9 @@ public partial class MainWindow : Window
             if (ComposerActionPolicy.ShouldClearComposer(PiPromptBox.Text, message))
             {
                 PiPromptBox.Text = string.Empty;
+                // Same phantom-draft guard as the workspace path: the
+                // cleared box must win over the persisted draft.
+                SaveWorkerViewState(_lastViewKey);
             }
             StatusText.Text = receipt.RunHealthy
                 ? $"Pi replied with {text.Length:N0} characters — healthy run (correctness needs separate acceptance checks)."
@@ -1921,6 +1924,10 @@ public partial class MainWindow : Window
             if (ComposerActionPolicy.ShouldClearComposer(PiPromptBox.Text, message))
             {
                 PiPromptBox.Text = string.Empty;
+                // Persist the vacated box: without this the sent text
+                // survives in the view prefs and the next tab switch
+                // restores it as a phantom draft (resendable verbatim).
+                SaveWorkerViewState(_lastViewKey);
             }
             StatusText.Text = receipt.RunHealthy
                 ? $"Pi replied with {text.Length:N0} characters — healthy run (correctness needs separate acceptance checks)."
@@ -2650,6 +2657,18 @@ public partial class MainWindow : Window
         Add("headerDiv", HeaderDivider);
         Add("overview", OverviewPanel);
         Add("overviewContent", OverviewContent);
+        Add("status", OvStateText);
+        Add("engine", FooterEngineText);
+        Add("session", OvSessionName);
+        Add("add", AddContextButton);
+        var infos = new List<string>();
+        Ink(infos, "rabbit", BrandIcon);
+        Ink(infos, "nav-overview", NavOverviewIcon);
+        Ink(infos, "nav-feed", NavLiveIcon);
+        Ink(infos, "nav-settings", NavSettingsIcon);
+        Ink(infos, "add", AxAddIcon);
+        Ink(infos, "search", AxSearchIcon);
+        Ink(infos, "send", ComposerSendIcon);
         rects["overlay"] = new Avalonia.Rect(new Avalonia.Point(0, 0), LayoutOverlay.Bounds.Size);
 
         var deviations = LayoutAudit.Check(rects).ToList();
@@ -2661,6 +2680,10 @@ public partial class MainWindow : Window
             // share one width at and above the reading cap.
             deviations.Add(fill);
         }
+        // Right-hand metadata never crosses the content datum (ellipsis
+        // owns the text; the layout never overflows). Bound to the cards
+        // edge: the shared content-right datum.
+        deviations.AddRange(LayoutAudit.CheckClipping(rects, "cards", "status", "engine", "session", "add"));
         foreach (var region in new[] { "cards", "feed", "composer", "footer", "rabbit", "send", "input" })
         {
             if (rects.TryGetValue(region, out var frame))
@@ -2674,8 +2697,9 @@ public partial class MainWindow : Window
         GuideFor("rail-brand", deviations, rects);
         GuideFor("send-input", deviations, rects);
 
-        var lines = deviations.Select(d =>
-            $"{(d.Delta <= LayoutAudit.Tolerance ? "PASS" : "FAIL")} {d.Name} Δ{d.Delta:F1}");
+        var lines = deviations
+            .Select(d => $"{(d.Delta <= LayoutAudit.Tolerance ? "PASS" : "FAIL")} {d.Name} Δ{d.Delta:F1}")
+            .Concat(infos);
         var report = new TextBlock
         {
             Text = "Guides (F12)\n" + string.Join("\n", lines),
@@ -2688,6 +2712,39 @@ public partial class MainWindow : Window
         Canvas.SetLeft(report, Math.Max(8, LayoutOverlay.Bounds.Width - 330));
         Canvas.SetTop(report, 8);
         LayoutOverlay.Children.Add(report);
+    }
+
+    /// Optical-ink centre of one icon in overlay coordinates: the path
+    /// bounds (24-unit viewBox) scale uniformly into the slot and centre
+    /// there; stroke width spreads symmetrically, so the path centre is
+    /// the ink centre. Hidden icons contribute nothing (stale bounds
+    /// would indict the wrong page).
+    private void Ink(List<string> infos, string name, AxIcon? icon)
+    {
+        if (icon?.Data is null || !IsEffectivelyVisible(icon))
+        {
+            return;
+        }
+
+        var origin = ToOverlay(icon);
+        var size = icon.Bounds.Size;
+        var scale = Math.Min(size.Width, size.Height) / 24.0;
+        if (scale <= 0)
+        {
+            return;
+        }
+
+        // Uniform stretch centres the whole 24-unit viewBox in the slot;
+        // the ink sits inside it at viewBox coordinates. (Centring the ink
+        // box itself would double-count its offset — the viewBox pad comes
+        // first, then the ink position within the viewBox.)
+        var inkBox = icon.Data.Bounds;
+        var inkSize = new Avalonia.Size(inkBox.Width * scale, inkBox.Height * scale);
+        var inkOrigin = new Avalonia.Point(
+            origin.X + (size.Width - 24 * scale) / 2 + inkBox.X * scale,
+            origin.Y + (size.Height - 24 * scale) / 2 + inkBox.Y * scale);
+        var (dx, dy) = LayoutAudit.InkOffset(new Avalonia.Rect(origin, size), new Avalonia.Rect(inkOrigin, inkSize));
+        infos.Add($"INFO ink-{name} ({dx:+0.0;-0.0},{dy:+0.0;-0.0})");
     }
 
     /// One datum guide per check: verticals for column edges and the rail
@@ -2892,7 +2949,10 @@ public partial class MainWindow : Window
         OverviewPanel.IsVisible = index == 0;
         LivePanel.IsVisible = index == 1;
         SettingsPanel.IsVisible = index == 2;
-        // B2: feed actions live in the in-column toolbar again.
+        // Feed actions live in the rail column (final, Matthew's approved
+        // home): Feed page only. The rail is outside the content column,
+        // so the transcript keeps its full width with no side strip.
+        RailFeedActions.IsVisible = index == 1;
         if (LayoutOverlay.IsVisible)
         {
             PostLayoutRefresh();
@@ -3034,6 +3094,8 @@ public partial class MainWindow : Window
         if (receipt is null)
         {
             OvVerifyTitle.Text = "Awaiting evidence";
+            OvVerifyIcon.Kind = AxIconKind.Check;
+            OvVerifyIcon.Tint = AxTheme.MutedBrush;
             OvVerifyDetail.Text = map.TestCommands.Count == 0
                 ? "No latest verified run."
                 : $"No latest verified run. Test commands (heuristic): {string.Join(" | ", map.TestCommands)}";
@@ -3042,6 +3104,8 @@ public partial class MainWindow : Window
         {
             var healthy = !receipt.IsError && receipt.Note != "needs review";
             OvVerifyTitle.Text = healthy ? "Latest run healthy" : receipt.IsError ? "Run failed" : "Run needs review";
+            OvVerifyIcon.Kind = healthy ? AxIconKind.Check : AxIconKind.Warn;
+            OvVerifyIcon.Tint = healthy ? AxTheme.GreenBrush : receipt.IsError ? AxTheme.RedBrush : AxTheme.YellowBrush;
             OvVerifyDetail.Text = receipt.Text;
         }
 
@@ -3052,10 +3116,20 @@ public partial class MainWindow : Window
             OvVerifyDetail.Text += $" Session errors observed: {map.ErrorCount}.";
         }
 
+        // Health is not verification: a clean Pi settle earns no
+        // independent-verified label. Genuine verification evidence is the
+        // observed test-command heuristic only — and its absence is stated,
+        // never glossed.
+        OvVerifyDetail.Text += map.TestCommands.Count == 0
+            ? " No independent verification evidence recorded."
+            : $" Observed test commands (heuristic, outcome unknown): {string.Join(" | ", map.TestCommands)}.";
+
         if (stats is null)
         {
             OvUsageLine.Text = "Awaiting first settled run — Pi reports telemetry after a run completes.";
             OvContextBar.IsVisible = false;
+            OvUsageGauge.Percent = null;
+            ToolTip.SetTip(OvUsageGauge, "Context unknown — Pi reports telemetry after a run completes.");
             OvCostLine.Text = "Est. cost: not available.";
         }
         else
@@ -3063,6 +3137,8 @@ public partial class MainWindow : Window
             OvUsageLine.Text = $"Context {stats.ContextPercent:F1}% · {stats.TotalTokens:N0} tokens · {stats.ToolCalls} tool calls.";
             OvContextBar.Value = Math.Clamp(stats.ContextPercent, 0, 100);
             OvContextBar.IsVisible = true;
+            OvUsageGauge.Percent = stats.ContextPercent;
+            ToolTip.SetTip(OvUsageGauge, $"Pi context usage: {stats.ContextPercent:F1}% of {stats.TotalTokens:N0} tokens.");
             OvCostLine.Text = stats.Cost > 0
                 ? $"Est. cost (Pi-reported): ${stats.Cost:F4}."
                 : "Est. cost: not available.";
@@ -3176,7 +3252,14 @@ public partial class MainWindow : Window
         var content = new StackPanel { Spacing = 2, Margin = new Avalonia.Thickness(0, 0, 0, 8) };
         var headline = new Button
         {
-            Content = OverviewSummary.Headline(group.Prompt),
+            // Long headlines wrap inside the button instead of clipping
+            // past the card at narrow widths; the 100-char Headline bound
+            // still caps pathological prompts.
+            Content = new TextBlock
+            {
+                Text = OverviewSummary.Headline(group.Prompt),
+                TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            },
             Tag = group.Prompt.Seq,
             Background = Avalonia.Media.Brushes.Transparent,
             BorderThickness = new Avalonia.Thickness(0),

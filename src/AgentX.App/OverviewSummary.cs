@@ -119,7 +119,9 @@ public static class OverviewSummary
         {
             var items = clusters[i];
             var isLatest = i == clusters.Count - 1;
-            groups.Add(new ActivityGroup(items[0], items, OutcomeFor(items, isLatest && latestRunActive), SummaryFor(items)));
+            var active = isLatest && latestRunActive;
+            var settled = items.Any(e => e.Role == "receipt");
+            groups.Add(new ActivityGroup(items[0], items, OutcomeFor(items, active), SummaryFor(items, settled, active)));
         }
 
         return groups;
@@ -160,6 +162,21 @@ public static class OverviewSummary
             }
         }
 
+        // Restored rows carry no lifecycle note: the same header parser
+        // the session map uses proves a persisted failure here too.
+        if (!failedTool)
+        {
+            foreach (var item in items)
+            {
+                if (item.Role == "tool"
+                    && ConversationFeed.ParseHistoryToolIdentity(item.Text)?.IsError == true)
+                {
+                    failedTool = true;
+                    break;
+                }
+            }
+        }
+
         if (receipt is null && active)
         {
             return ActivityOutcome.InProgress;
@@ -177,44 +194,180 @@ public static class OverviewSummary
         return failedTool ? ActivityOutcome.Failed : ActivityOutcome.Unknown;
     }
 
-    /// Concise tool/result line for a cluster: settled tools with their
-    /// outcomes, or the honest absence of tool calls.
-    internal static string SummaryFor(IReadOnlyList<FeedEntry> items)
+    /// One row's observed tool evidence. Live lifecycle notes first, then
+    /// the same header parser the session map uses for restored rows, then
+    /// the honest remainder: a tool-role row IS observed tool activity even
+    /// when its name is unprovable (bash "Ran …" bodies, unverified ends).
+    /// Names are never invented — unidentified rows stay "tool"/"shell".
+    /// Failed is null while the outcome is unobserved (pending or unknown).
+    internal sealed record ToolFact(string Name, bool? Failed, bool IsLiveStart);
+
+    internal static ToolFact? ToolOutcome(FeedEntry item)
     {
-        var tools = new List<string>();
+        if (item.Role != "tool")
+        {
+            return null;
+        }
+
+        var note = item.Note ?? string.Empty;
+        const string finished = "finished: ";
+        const string failed = "failed: ";
+        const string started = "started: ";
+        if (note.StartsWith(failed, StringComparison.Ordinal))
+        {
+            return new ToolFact(CleanName(note[failed.Length..]), true, false);
+        }
+
+        if (note.StartsWith(finished, StringComparison.Ordinal))
+        {
+            return new ToolFact(CleanName(note[finished.Length..]), false, false);
+        }
+
+        if (note.StartsWith(started, StringComparison.Ordinal))
+        {
+            return new ToolFact(CleanName(note[started.Length..]), null, true);
+        }
+
+        if (!string.IsNullOrEmpty(note))
+        {
+            return null;
+        }
+
+        // Restored row (no lifecycle note): the session map's own parser.
+        if (ConversationFeed.ParseHistoryToolIdentity(item.Text) is { } identity)
+        {
+            return new ToolFact(identity.Name, identity.IsError, false);
+        }
+
+        if (item.Text.StartsWith("Ran ", StringComparison.Ordinal))
+        {
+            return new ToolFact("shell", item.IsError ? true : null, false);
+        }
+
+        return new ToolFact("tool", item.IsError ? true : null, false);
+    }
+
+    private static string CleanName(string raw)
+    {
+        var name = raw.Trim();
+        return name.Length == 0 ? "tool" : name;
+    }
+
+    /// Concise tool/result line for a cluster: distinct tool names with
+    /// counts (never one label repeated five times), then the honest
+    /// absence states. Three cases, never conflated: none occurred (a
+    /// settled or active run with no tool evidence at all), none observed
+    /// (an unrestored cluster — no receipt proves the history complete),
+    /// and history incomplete (call markers or pending starts without
+    /// their recovered rows).
+    internal static string SummaryFor(IReadOnlyList<FeedEntry> items, bool settled, bool active)
+    {
+        var facts = new List<ToolFact>();
+        var markers = 0;
+        var pendingStale = 0;
         foreach (var item in items)
         {
-            if (item.Role == "tool" && item.Note is not null
-                && (item.Note.StartsWith("finished:", StringComparison.Ordinal)
-                    || item.Note.StartsWith("failed:", StringComparison.Ordinal)))
+            if (item.Role == "assistant" && !string.IsNullOrEmpty(item.Text))
             {
-                tools.Add(ToolLabel(item));
+                markers += CountMarkers(item.Text);
+            }
+
+            if (ToolOutcome(item) is { } fact)
+            {
+                if (fact.IsLiveStart && !active)
+                {
+                    // A live start in a cluster that is over never settled:
+                    // evidence of incompleteness, not a running tool.
+                    // (Restored rows with unobserved outcomes are complete
+                    // recovered operations — command and output present —
+                    // so they stay facts, shown without an outcome word.)
+                    pendingStale++;
+                }
+                else
+                {
+                    facts.Add(fact);
+                }
             }
         }
 
-        return tools.Count == 0 ? "No tool calls." : $"Tools: {string.Join(" · ", tools)}";
+        if (facts.Count > 0)
+        {
+            return "Tools: " + string.Join(" · ", GroupLabels(facts, active));
+        }
+
+        if (markers > 0 || pendingStale > 0)
+        {
+            var noted = markers > 0 ? $"{markers} call{(markers == 1 ? string.Empty : "s")} noted" : "starts without ends";
+            return $"Tool history incomplete — {noted}, none recovered.";
+        }
+
+        return settled || active ? "No tool calls." : "No tool calls observed.";
+    }
+
+    /// Group settled facts by name, preserving first-seen order: each
+    /// distinct tool appears once with its count and outcome words.
+    private static IEnumerable<string> GroupLabels(List<ToolFact> facts, bool active)
+    {
+        var order = new List<string>();
+        var groups = new Dictionary<string, List<bool?>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var fact in facts)
+        {
+            if (!groups.TryGetValue(fact.Name, out var list))
+            {
+                list = [];
+                groups[fact.Name] = list;
+                order.Add(fact.Name);
+            }
+
+            list.Add(fact.Failed);
+        }
+
+        foreach (var name in order)
+        {
+            var outcomes = groups[name];
+            var label = outcomes.Count > 1 ? $"{name} ×{outcomes.Count}" : name;
+            var failed = outcomes.Count(o => o == true);
+            if (outcomes.Any(o => o is null))
+            {
+                // Nulls here are live starts on the active run (stale ones
+                // were diverted above) or restored rows whose outcome Pi
+                // never persisted: only a live start means running.
+                var running = active && facts.Where(f => f.Name.Equals(name, StringComparison.OrdinalIgnoreCase)).Any(f => f.IsLiveStart);
+                yield return running ? $"{label} running" : label;
+            }
+            else if (failed == outcomes.Count)
+            {
+                yield return $"{label} failed";
+            }
+            else if (failed > 0)
+            {
+                yield return $"{label} ({failed} failed)";
+            }
+            else
+            {
+                yield return label;
+            }
+        }
+    }
+
+    private static int CountMarkers(string text)
+    {
+        const string marker = "[tool call: ";
+        var count = 0;
+        var at = 0;
+        while ((at = text.IndexOf(marker, at, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            at += marker.Length;
+        }
+
+        return count;
     }
 
     /// Prompt headline: first line, bounded, unwrapped.
     public static string Headline(FeedEntry prompt) => Short(prompt.Text, 100);
 
-    private static string ToolLabel(FeedEntry entry)
-    {
-        var note = entry.Note ?? string.Empty;
-        const string finished = "finished: ";
-        const string failed = "failed: ";
-        if (note.StartsWith(failed, StringComparison.Ordinal))
-        {
-            return $"{note[failed.Length..]} failed";
-        }
 
-        if (note.StartsWith(finished, StringComparison.Ordinal))
-        {
-            return $"{note[finished.Length..]} finished";
-        }
-
-        return note.Length > 0 ? note : "tool";
-    }
 
     private static string Short(string text, int max)
     {

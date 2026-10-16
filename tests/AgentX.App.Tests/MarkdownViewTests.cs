@@ -129,6 +129,20 @@ public sealed class MarkdownViewTests
     }
 
     [Fact]
+    public void Dim_QuietsUncolouredMonoOnly()
+    {
+        var view = new MarkdownView { MonoText = "plain line", Dim = true };
+        Assert.Equal(AxTheme.FeedMonoSize - 1.5, view.FontSize);
+        var quiet = Assert.Single(Runs(view));
+        Assert.Same(AxTheme.MutedBrush, quiet.Foreground);
+        // Explicit ANSI colours and diff verdicts survive the quieting.
+        var ansi = new MarkdownView { MonoText = "\x1b[31mred line", Dim = true };
+        Assert.NotSame(AxTheme.MutedBrush, Assert.Single(Runs(ansi)).Foreground);
+        var diff = new MarkdownView { MonoText = "+added line", DiffTint = true, Dim = true };
+        Assert.Same(AxTheme.GreenBrush, Assert.Single(Runs(diff)).Foreground);
+    }
+
+    [Fact]
     public void DiffTint_StillTintsOnlyDiffLines()
     {
         var add = Assert.Single(Runs(Build(mono: "+added line", diffTint: true)));

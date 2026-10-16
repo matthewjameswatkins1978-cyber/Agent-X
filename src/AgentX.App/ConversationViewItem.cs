@@ -97,6 +97,31 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
         }
     }
 
+    /// True for bridge detail rows ("[detail …]", "[result …]",
+    /// "[progress …]"): evidence annotations that read as attachments to
+    /// their tool operation, rendered compact — never as cards. Receipts,
+    /// compactions and plain notices stay full rows.
+    public bool IsDetailRow => Role == "system" && IsDetailPrefix(FullText);
+
+    /// Row rhythm: detail rows sit tight (1px) so a call, its detail, its
+    /// result and the response read as one operation; all other rows keep
+    /// the shared 4px rhythm. One property, no per-control nudges.
+    public Avalonia.Thickness RowMargin => IsDetailRow
+        ? new Avalonia.Thickness(0, 1, 0, 1)
+        : new Avalonia.Thickness(0, 4, 0, 4);
+
+    internal static bool IsDetailPrefix(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return false;
+        }
+
+        return text.StartsWith("[detail ", StringComparison.Ordinal)
+            || text.StartsWith("[result ", StringComparison.Ordinal)
+            || text.StartsWith("[progress ", StringComparison.Ordinal);
+    }
+
     public bool IsStreaming { get; }
 
     /// Pi-style tool header suffix: dim state + evidence seq ("· finished #4").
@@ -268,6 +293,8 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
             {
                 _fullText = value;
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FullText)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsDetailRow)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RowMargin)));
                 RefreshExpansion();
             }
         }

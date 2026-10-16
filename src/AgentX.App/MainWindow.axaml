@@ -64,13 +64,13 @@
            starts exactly on the content-column datum. One width, both
            alignments — no per-element offsets. -->
       <Grid Grid.Row="0" ColumnDefinitions="48,Auto,*,Auto" ColumnSpacing="8">
-        <app:AxIcon x:Name="BrandIcon" Kind="Rabbit" Width="18" Height="18" VerticalAlignment="Center" HorizontalAlignment="Center" />
+        <app:AxIcon x:Name="BrandIcon" Kind="Rabbit" Width="20" Height="20" VerticalAlignment="Center" HorizontalAlignment="Center" />
         <StackPanel x:Name="BrandText" Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
           <TextBlock Text="Agent X" FontWeight="Bold" FontSize="15" VerticalAlignment="Center" />
         </StackPanel>
         <Button Grid.Column="3" Classes="AxIconBtn" Click="SearchButton_OnClick"
                 ToolTip.Tip="Find in conversation" AutomationProperties.Name="Find in conversation">
-          <app:AxIcon Kind="Search" />
+          <app:AxIcon x:Name="AxSearchIcon" Kind="Search" />
         </Button>
       </Grid>
       <Border x:Name="HeaderDivider" Grid.Row="1" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="0,0,0,1" Margin="0,8,0,0" />
@@ -92,6 +92,62 @@
                         ToolTip.Tip="Feed" AutomationProperties.Name="Feed">
             <app:AxIcon x:Name="NavLiveIcon" Kind="Chat" Width="18" Height="18" />
           </ToggleButton>
+        </StackPanel>
+        <!-- Feed action group (final): Matthew's approved home is the rail
+             column itself — below navigation, above Settings, Feed page
+             only. The rail column is outside the content column, so the
+             transcript keeps the full content width (no side strip, no
+             indent). Same buttons, names, handlers, flyout and states;
+             only the parent changes. -->
+        <StackPanel DockPanel.Dock="Top" x:Name="RailFeedActions" IsVisible="False" Spacing="4" Margin="0,8,0,0">
+          <Border BorderBrush="{DynamicResource Ax.Border}" BorderThickness="0,1,0,0"
+                  Margin="10,0,10,4" />
+          <Button x:Name="ConnectButton" Click="ConnectPi_OnClick" Width="40" Height="40"
+                  Background="Transparent" BorderThickness="0" Padding="0" HorizontalAlignment="Center"
+                  ToolTip.Tip="Connect the selected worker or workspace"
+                  AutomationProperties.Name="Connect">
+            <app:AxIcon Kind="Connect" Width="18" Height="18" />
+          </Button>
+          <Button x:Name="ReconnectButton" Click="ReconnectPi_OnClick" Width="40" Height="40"
+                  Background="Transparent" BorderThickness="0" Padding="0" HorizontalAlignment="Center"
+                  ToolTip.Tip="Reconnect (session is persisted)"
+                  AutomationProperties.Name="Reconnect">
+            <app:AxIcon Kind="Reconnect" Width="18" Height="18" />
+          </Button>
+          <Button x:Name="StopButton" Click="ComposerStop_OnClick" Width="40" Height="40"
+                  Background="Transparent" BorderThickness="0" Padding="0" HorizontalAlignment="Center"
+                  IsVisible="False" ToolTip.Tip="Stop current run (Escape)"
+                  AutomationProperties.Name="Stop current run">
+            <app:AxIcon Kind="Stop" Filled="True" Width="18" Height="18" />
+          </Button>
+          <Button x:Name="CopySelectedButton" Click="CopySelectedMessage_OnClick" Width="40" Height="40"
+                  Background="Transparent" BorderThickness="0" Padding="0" HorizontalAlignment="Center"
+                  ToolTip.Tip="Copy selected message (exact bytes)"
+                  AutomationProperties.Name="Copy selected message">
+            <app:AxIcon Kind="Copy" Width="18" Height="18" />
+          </Button>
+          <Button x:Name="MoreActionsButton" Width="40" Height="40"
+                  Background="Transparent" BorderThickness="0" Padding="0" HorizontalAlignment="Center"
+                  ToolTip.Tip="More actions" AutomationProperties.Name="More actions">
+            <app:AxIcon Kind="More" Filled="True" Width="18" Height="18" />
+            <Button.Flyout>
+              <MenuFlyout>
+                <MenuItem x:Name="DisconnectMenuItem" Header="Disconnect"
+                          Click="DisconnectPi_OnClick"
+                          ToolTip.Tip="Disconnect the workspace session" />
+                <MenuItem x:Name="AutoScrollMenuItem" Header="Auto-scroll" ToggleType="CheckBox"
+                          IsChecked="True" StaysOpenOnClick="True" Click="AutoScrollMenu_OnClick"
+                          ToolTip.Tip="Follow new messages automatically" />
+                <MenuItem x:Name="CopyFullMenuItem" Header="Copy full conversation"
+                          Click="CopyFullConversation_OnClick"
+                          ToolTip.Tip="Copy the whole transcript (exact bytes)" />
+                <Separator />
+                <MenuItem x:Name="RemoveWorkerMenuItem" Header="Remove worker…"
+                          Click="RemoveWorker_OnClick"
+                          ToolTip.Tip="Stop the selected worker's process and remove its registration (session files stay on disk)" />
+              </MenuFlyout>
+            </Button.Flyout>
+          </Button>
         </StackPanel>
         <StackPanel DockPanel.Dock="Bottom" Spacing="8">
           <ToggleButton x:Name="NavSettings" Classes="NavBtn" Click="Nav_OnClick" Width="40" Height="40"
@@ -115,7 +171,7 @@
         <Button Grid.Column="1" x:Name="AddContextButton" Classes="AxIconBtn" Click="AddContextButton_OnClick"
                 ToolTip.Tip="Add project" AutomationProperties.Name="Add project"
                 VerticalAlignment="Center" MinWidth="32" MinHeight="40">
-          <app:AxIcon Kind="Add" />
+          <app:AxIcon x:Name="AxAddIcon" Kind="Add" />
         </Button>
       </Grid>
       <Border x:Name="CardsDivider" Grid.Row="1" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="0,0,0,1" Margin="0,8,0,0" />
@@ -138,7 +194,8 @@
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
               <Ellipse x:Name="OvStateDot" Width="8" Height="8" Fill="#6B7280" VerticalAlignment="Center" />
               <TextBlock x:Name="OvStateText" Text="Not connected" FontSize="12"
-                         Foreground="{DynamicResource Ax.Muted}" VerticalAlignment="Center" />
+                         Foreground="{DynamicResource Ax.Muted}" VerticalAlignment="Center"
+                         TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" MaxWidth="260" />
             </StackPanel>
           </Grid>
           <TextBlock x:Name="OvAttentionText" Text="No attention requested."
@@ -147,7 +204,10 @@
                   CornerRadius="{DynamicResource Ax.Radius}" Padding="12"
                   Background="{DynamicResource Ax.Surface}">
             <StackPanel Spacing="6">
-              <TextBlock Text="Current mission" FontSize="13" FontWeight="SemiBold" />
+              <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                <app:AxIcon Kind="Target" Width="14" Height="14" VerticalAlignment="Center" />
+                <TextBlock Text="Current mission" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" />
+              </StackPanel>
               <TextBlock x:Name="OvMissionTitle" Text="No mission data yet." FontSize="13" TextWrapping="Wrap" />
               <TextBlock x:Name="OvMissionDetail" Text="Milestones appear as you work."
                          Foreground="{DynamicResource Ax.Muted}" FontSize="12" TextWrapping="Wrap" />
@@ -159,7 +219,10 @@
                     CornerRadius="{DynamicResource Ax.Radius}" Padding="12"
                     Background="{DynamicResource Ax.Surface}">
               <StackPanel Spacing="4">
-                <TextBlock Text="Model &amp; session" FontSize="12" Foreground="{DynamicResource Ax.Muted}" />
+                <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                  <app:AxIcon Kind="Cpu" Width="14" Height="14" VerticalAlignment="Center" />
+                  <TextBlock Text="Model &amp; session" FontSize="12" Foreground="{DynamicResource Ax.Muted}" VerticalAlignment="Center" />
+                </StackPanel>
                 <TextBlock x:Name="OvModelName" Text="—" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap" />
                 <TextBlock x:Name="OvModelDetail" Text="Pi engine not connected."
                            Foreground="{DynamicResource Ax.Muted}" FontSize="12" TextWrapping="Wrap" />
@@ -172,7 +235,10 @@
                     CornerRadius="{DynamicResource Ax.Radius}" Padding="12"
                     Background="{DynamicResource Ax.Surface}">
               <StackPanel Spacing="4">
-                <TextBlock Text="Verification" FontSize="12" Foreground="{DynamicResource Ax.Muted}" />
+                <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                  <app:AxIcon x:Name="OvVerifyIcon" Kind="Check" Width="14" Height="14" VerticalAlignment="Center" />
+                  <TextBlock Text="Verification" FontSize="12" Foreground="{DynamicResource Ax.Muted}" VerticalAlignment="Center" />
+                </StackPanel>
                 <TextBlock x:Name="OvVerifyTitle" Text="Awaiting evidence" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap" />
                 <TextBlock x:Name="OvVerifyDetail" Text="No latest verified run."
                            Foreground="{DynamicResource Ax.Muted}" FontSize="12" TextWrapping="Wrap" />
@@ -183,9 +249,11 @@
                   CornerRadius="{DynamicResource Ax.Radius}" Padding="12"
                   Background="{DynamicResource Ax.Surface}">
             <StackPanel Spacing="6">
-              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                <TextBlock Text="Usage" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" />
-                <TextBlock Grid.Column="1" Text="Pi telemetry" FontSize="11"
+              <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                <app:ContextGauge x:Name="OvUsageGauge" Width="20" Height="20" VerticalAlignment="Center"
+                                  ToolTip.Tip="Pi context usage" />
+                <TextBlock Grid.Column="1" Text="Usage" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="2" Text="Pi telemetry" FontSize="11"
                            Foreground="{DynamicResource Ax.Muted}" VerticalAlignment="Center" />
               </Grid>
               <TextBlock x:Name="OvUsageLine" Text="Awaiting first settled run."
@@ -247,7 +315,7 @@
       </ScrollViewer>
 
       <!-- Live: contextual toolbar + dominant conversation + anchored composer. -->
-      <Grid x:Name="LivePanel" RowDefinitions="Auto,Auto,*,Auto" RowSpacing="6">
+      <Grid x:Name="LivePanel" RowDefinitions="Auto,*,Auto" RowSpacing="6">
         <Border Grid.Row="0" x:Name="FindBar" IsVisible="False" BorderBrush="{DynamicResource Ax.Border}"
                 BorderThickness="1" CornerRadius="{DynamicResource Ax.Radius}" Padding="8,4"
                 Background="{DynamicResource Ax.Surface}">
@@ -255,61 +323,21 @@
             <app:AxIcon Kind="Search" Width="14" Height="14" VerticalAlignment="Center" />
             <TextBox x:Name="FindBox" PlaceholderText="Find in conversation" MinWidth="200"
                      KeyDown="FindBox_OnKeyDown" />
-            <Button Content="Previous" Click="FindPrev_OnClick" FontSize="12" />
-            <Button Content="Next" Click="FindNext_OnClick" FontSize="12" />
-            <Button Content="Close" Click="FindClose_OnClick" FontSize="12" />
+            <Button Classes="AxIconBtn" Click="FindPrev_OnClick"
+                    ToolTip.Tip="Previous match" AutomationProperties.Name="Previous">
+              <app:AxIcon Kind="ChevronUp" Width="14" Height="14" />
+            </Button>
+            <Button Classes="AxIconBtn" Click="FindNext_OnClick"
+                    ToolTip.Tip="Next match" AutomationProperties.Name="Next">
+              <app:AxIcon Kind="ChevronDown" Width="14" Height="14" />
+            </Button>
+            <Button Classes="AxIconBtn" Click="FindClose_OnClick"
+                    ToolTip.Tip="Close search (Escape)" AutomationProperties.Name="Close">
+              <app:AxIcon Kind="Close" Width="14" Height="14" />
+            </Button>
           </StackPanel>
         </Border>
-        <!-- Feed toolbar (B2): one compact in-column action row. Same
-             buttons, names, handlers and states — horizontal again, so the
-             transcript keeps the full content width with no side strip. -->
-        <DockPanel Grid.Row="1" LastChildFill="False">
-          <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" Spacing="2">
-            <Button x:Name="ConnectButton" Classes="AxIconBtn" Click="ConnectPi_OnClick"
-                    ToolTip.Tip="Connect the selected worker or workspace"
-                    AutomationProperties.Name="Connect">
-              <app:AxIcon Kind="Connect" />
-            </Button>
-            <Button x:Name="ReconnectButton" Classes="AxIconBtn" Click="ReconnectPi_OnClick"
-                    ToolTip.Tip="Reconnect (session is persisted)"
-                    AutomationProperties.Name="Reconnect">
-              <app:AxIcon Kind="Reconnect" />
-            </Button>
-            <Button x:Name="StopButton" Classes="AxIconBtn" Click="ComposerStop_OnClick"
-                    IsVisible="False" ToolTip.Tip="Stop current run (Escape)"
-                    AutomationProperties.Name="Stop current run">
-              <app:AxIcon Kind="Stop" Filled="True" />
-            </Button>
-            <Button x:Name="CopySelectedButton" Classes="AxIconBtn" Click="CopySelectedMessage_OnClick"
-                    ToolTip.Tip="Copy selected message (exact bytes)"
-                    AutomationProperties.Name="Copy selected message">
-              <app:AxIcon Kind="Copy" />
-            </Button>
-          </StackPanel>
-          <Button DockPanel.Dock="Right" x:Name="MoreActionsButton" Classes="AxIconBtn" ToolTip.Tip="More actions"
-                  AutomationProperties.Name="More actions">
-            <app:AxIcon Kind="More" Filled="True" />
-            <Button.Flyout>
-              <MenuFlyout>
-                <MenuItem x:Name="DisconnectMenuItem" Header="Disconnect"
-                          Click="DisconnectPi_OnClick"
-                          ToolTip.Tip="Disconnect the workspace session" />
-                <MenuItem x:Name="AutoScrollMenuItem" Header="Auto-scroll" ToggleType="CheckBox"
-                          IsChecked="True" StaysOpenOnClick="True" Click="AutoScrollMenu_OnClick"
-                          ToolTip.Tip="Follow new messages automatically" />
-                <MenuItem x:Name="CopyFullMenuItem" Header="Copy full conversation"
-                          Click="CopyFullConversation_OnClick"
-                          ToolTip.Tip="Copy the whole transcript (exact bytes)" />
-                <Separator />
-                <MenuItem x:Name="RemoveWorkerMenuItem" Header="Remove worker…"
-                          Click="RemoveWorker_OnClick"
-                          ToolTip.Tip="Stop the selected worker's process and remove its registration (session files stay on disk)" />
-              </MenuFlyout>
-            </Button.Flyout>
-          </Button>
-        </DockPanel>
-
-        <Grid Grid.Row="2">
+        <Grid Grid.Row="1">
           <ListBox x:Name="ConversationList" Background="Transparent" BorderThickness="0"
                      SelectionMode="Single" FontFamily="{DynamicResource Ax.ProseFont}"
                      FontSize="{DynamicResource Ax.FeedFontSize}">
@@ -327,7 +355,7 @@
                   <!-- Rows sit flush on the feed edge (the content datum):
                        block padding is the only inset, never a second
                        margin — no double-indent against cards/composer. -->
-                  <StackPanel Spacing="2" Margin="0,4"
+                  <StackPanel Spacing="2" Margin="{Binding RowMargin}"
                               AutomationProperties.Name="{Binding Header}">
                     <!-- User: tinted block with an accent edge. Body renders
                          through the same safe MarkdownLite parser as assistant
@@ -388,7 +416,7 @@
                     </Border>
                     <StackPanel IsVisible="{Binding IsPlainSystemRow}" Spacing="2">
                       <app:MarkdownView MonoText="{Binding DisplayText}" TextWrapping="Wrap"
-                                            FontSize="13" />
+                                            Dim="{Binding IsDetailRow}" />
                     </StackPanel>
                   </StackPanel>
                 </DataTemplate>
@@ -406,16 +434,17 @@
           </StackPanel>
         </Grid>
 
-        <Border x:Name="ComposerBox" Grid.Row="3" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="1"
-                CornerRadius="{DynamicResource Ax.Radius}" Padding="8"
+        <Border x:Name="ComposerBox" Grid.Row="2" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="1"
+                CornerRadius="{DynamicResource Ax.Radius}" Padding="6"
                 Background="{DynamicResource Ax.Surface}">
           <StackPanel Spacing="6">
             <TextBlock x:Name="PiRunStatus" Text="" Foreground="{DynamicResource Ax.Muted}"
                        FontSize="12" TextWrapping="Wrap" />
             <!-- The text box is the interface: full composer width, keyboard-first.
                  Chord + Escape handled in code (PreviewKeyDown tunnel): XAML cannot
-                 attach tunnel events. The only visible Send/Stop surface is the context
-                 menu (mouse right-click or Shift+F10/Menu key) — no permanent buttons. -->
+                 attach tunnel events. Send/Stop also lives on the button at the
+                 right of the input row and in the context menu (right-click) —
+                 the chord stays discoverable in tooltips. -->
             <!-- Composer row: the box takes the width and grows upward with
                  content (Auto row at the page bottom); the send chord stays
                  visible at the right, muted. -->
@@ -549,12 +578,12 @@
           <TextBlock Grid.Column="1" x:Name="FooterEngineText" FontSize="12"
                      Foreground="{DynamicResource Ax.Muted}" VerticalAlignment="Center"
                      TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
-          <Button Grid.Column="2" x:Name="NoticeToggle" Content="i" Width="20" Height="20"
-                  FontSize="11" Padding="0" CornerRadius="10" BorderThickness="1"
-                  BorderBrush="{DynamicResource Ax.Muted}" Background="Transparent"
-                  Foreground="{DynamicResource Ax.Muted}" VerticalAlignment="Center"
-                  IsVisible="False" Click="NoticeToggle_OnClick"
-                  ToolTip.Tip="Show notice" AutomationProperties.Name="Show notice" />
+          <Button Grid.Column="2" x:Name="ContextGaugeButton" Click="NoticeToggle_OnClick"
+                  Background="Transparent" BorderThickness="0" Padding="2"
+                  VerticalAlignment="Center" ToolTip.Tip="Context unknown"
+                  AutomationProperties.Name="Context">
+            <app:ContextGauge x:Name="FooterGauge" Width="16" Height="16" />
+          </Button>
         </Grid>
         <!-- Legacy footer segments: hidden write-model for Checkpoint A.
              StatusText is reparented into FooterTransient in code so all

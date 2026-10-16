@@ -201,7 +201,10 @@ public sealed class ConversationFeed
             {
                 // CallId propagates so restored rows keep identity for a
                 // later reconcile; rows without one fall back to exclusivity.
-                _entries.Add(new FeedEntry(_nextSeq++, message.Role, message.Text, CallId: message.CallId));
+                // IsError propagates Pi's own persisted failure flag, so a
+                // restored failure counts exactly like a live one (observed
+                // evidence — nothing inferred, nothing invented).
+                _entries.Add(new FeedEntry(_nextSeq++, message.Role, message.Text, CallId: message.CallId, IsError: message.IsError));
             }
         }
 
@@ -756,8 +759,10 @@ public sealed class ConversationFeed
     /// Identity of a persisted history tool body from its own header:
     /// "[tool result: NAME]" / "[tool NAME failed]" (FormatToolResult).
     /// "Ran ..." bash-execution bodies and anything else carry no provable
-    /// name and return null.
-    internal static (string Name, bool IsError)? ParseHistoryToolIdentity(string text)
+    /// name and return null. Public so the Overview timeline reads restored
+    /// rows with the exact same parser the session map uses — one observed
+    /// identity, never two interpretations.
+    public static (string Name, bool IsError)? ParseHistoryToolIdentity(string text)
     {
         const string prefix = "[tool ";
         if (string.IsNullOrEmpty(text) || !text.StartsWith(prefix, StringComparison.Ordinal))

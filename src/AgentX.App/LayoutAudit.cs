@@ -81,6 +81,42 @@ public static class LayoutAudit
         return new GuideDeviation(name, min, max);
     }
 
+    /// Clipping net for right-hand metadata: status, engine, session and
+    /// action rects must end at or before the content column's right edge
+    /// (ellipsis and trimming own the text; the layout never overflows).
+    /// Only overshoot counts: contained rects read Δ0.0 whatever their
+    /// inset, overflows read their exact overshoot. Missing rects (hidden
+    /// pages) skip.
+    public static IReadOnlyList<GuideDeviation> CheckClipping(
+        IReadOnlyDictionary<string, Rect> rects, string bound, params string[] names)
+    {
+        var deviations = new List<GuideDeviation>();
+        if (!rects.TryGetValue(bound, out var edge))
+        {
+            return deviations;
+        }
+
+        foreach (var name in names)
+        {
+            if (rects.TryGetValue(name, out var r))
+            {
+                deviations.Add(new GuideDeviation(
+                    $"clip-{name}", edge.Right, r.Right <= edge.Right ? edge.Right : r.Right));
+            }
+        }
+
+        return deviations;
+    }
+
+    /// Optical-ink check: the visible vector ink centre versus its slot
+    /// centre, per axis. Deliberate glyph asymmetry (the search handle,
+    /// the rabbit's ear mass) reads here as data, not failure — these are
+    /// INFO lines, never PASS/FAIL. They justify an optical nudge inside
+    /// the drawing, or document why none was made; shared column geometry
+    /// is never bent to compensate for a symbol.
+    public static (double Dx, double Dy) InkOffset(Rect slot, Rect ink)
+        => (ink.Center.X - slot.Center.X, ink.Center.Y - slot.Center.Y);
+
     /// Viewport fill for capped panels (Overview/Settings): at and above
     /// the reading cap the content must span exactly the cap regardless of
     /// how much text it holds, so empty and populated states share one

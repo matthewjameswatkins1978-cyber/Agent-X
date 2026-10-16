@@ -8,9 +8,11 @@ namespace AgentX.Core;
 /// truncate. <see cref="CallId"/> is the persisted tool-call ID (raw,
 /// never rendered; same value the wire events carry) so reconciliation can
 /// match a live row to its persisted result by identity — null when the
-/// message carries none.
+/// message carries none. <see cref="IsError"/> carries Pi's own persisted
+/// failure flag for tool rows (observed evidence, never inferred) so
+/// restored failures count exactly like live ones.
 /// </summary>
-public sealed record ConversationMessage(string Role, string Text, string? CallId = null)
+public sealed record ConversationMessage(string Role, string Text, string? CallId = null, bool IsError = false)
 {
     public string DisplayText(int maxChars = 2000)
         => Text.Length <= maxChars
@@ -736,8 +738,8 @@ public sealed class PiConversation : IAsyncDisposable
             "system" => null, // Prompt boilerplate; not conversation.
             "user" => new ConversationMessage("user", ExtractContentText(message)),
             "assistant" => new ConversationMessage("assistant", ExtractAssistantText(message)),
-            "toolResult" => new ConversationMessage("tool", FormatToolResult(message), HistoryCallId(message)),
-            "bashExecution" => new ConversationMessage("tool", FormatBashExecution(message), HistoryCallId(message)),
+            "toolResult" => new ConversationMessage("tool", FormatToolResult(message), HistoryCallId(message), IsErrorProp(message)),
+            "bashExecution" => new ConversationMessage("tool", FormatBashExecution(message), HistoryCallId(message), IsErrorProp(message)),
             "custom" => message.TryGetProperty("display", out var display)
                 && display.ValueKind == JsonValueKind.True
                 ? new ConversationMessage("system", ExtractContentText(message))
@@ -845,6 +847,14 @@ public sealed class PiConversation : IAsyncDisposable
     /// never rendered; empty/oversized → null) so session IDs and wire
     /// IDs compare equal case-sensitively. Both derive from toolCall.id.
     /// </summary>
+    /// Pi's own persisted failure flag on a history message (observed
+    /// evidence: a literal boolean property, never inferred from text).
+    /// Absent or non-boolean reads as no observed failure.
+    internal static bool IsErrorProp(JsonElement message)
+    {
+        return message.TryGetProperty("isError", out var e) && e.ValueKind == JsonValueKind.True;
+    }
+
     internal static string? HistoryCallId(JsonElement message)
     {
         if (!message.TryGetProperty("toolCallId", out var id) || id.ValueKind != JsonValueKind.String)
@@ -859,7 +869,7 @@ public sealed class PiConversation : IAsyncDisposable
     private static string FormatToolResult(JsonElement message)
     {
         var name = message.TryGetProperty("toolName", out var n) ? n.GetString() ?? "?" : "?";
-        var failed = message.TryGetProperty("isError", out var e) && e.ValueKind == JsonValueKind.True;
+        var failed = IsErrorProp(message);
         var body = ExtractContentText(message);
         var header = failed ? $"[tool {PiRedaction.Name(name)} failed]" : $"[tool result: {PiRedaction.Name(name)}]";
         return string.IsNullOrEmpty(body) ? header : header + "\n" + PiRedaction.Redact(body);

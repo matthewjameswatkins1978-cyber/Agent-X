@@ -121,6 +121,28 @@ lightness intent, not claimed bit-exact terminal output.
   width at and above the 900px cap; below it stretch rules apply.
   Hidden subtrees are excluded by ancestor walk (Avalonia keeps
   `IsVisible` true on children of hidden panels with stale bounds).
+  Right-hand metadata never crosses the datum (`clip-*`, INFO-free
+  PASS lines). Icon ink centres report as INFO (`ink-*`), never
+  verdicts: they justify — or refuse — an optical nudge inside the
+  drawing. Shared column geometry is never bent for a symbol.
+- Feed actions live in the rail column (final, Matthew's approved home):
+  below navigation, Feed page only. The rail is outside the content
+  column, so the transcript keeps full width with no side strip.
+- The footer context gauge is a flat-green bottom-filling disc with a
+  thin outline: green outline + fill for known percentages (sub-6%
+  fills are subpixel on the 16px disc — tooltip and text carry the
+  exact value), hollow grey for unknown (never a measured zero),
+  amber outline only for genuine alert keywords. Same control anchors
+  the Usage card at 20px with its own tooltip.
+- The rabbit anchor is redrawn artwork (two capped ears, round head,
+  symmetric about its centre, 20px in the 48px cell) — ink-centred by
+  construction (`ink-rabbit` ≈ 0). Section anchors (mission target,
+  model CPU, verification check/warn, usage gauge) stay in the icon
+  family at 14px; verification tint follows state.
+- Bridge detail rows (`[detail]`, `[result]`, `[progress]`) render as
+  quiet attachments: tight rhythm, one step smaller, muted ink
+  (`MarkdownView.Dim`, scales with feed size; ANSI colours and diff
+  verdicts survive). Evidence preserved, visually grouped.
 - Overview attention is latest-word: unhealthy receipt warns (amber),
   error receipt fails (red), healthy quiets earlier errors (muted
   normal — never success-green), bare errors warn only with no receipt.

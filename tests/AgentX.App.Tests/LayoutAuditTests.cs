@@ -34,6 +34,50 @@ public sealed class LayoutAuditTests
     }
 
     [Fact]
+    public void CheckClipping_ContainedMetadata_Passes()
+    {
+        var rects = new Dictionary<string, Rect>
+        {
+            ["cards"] = At(56, 60, 1100, 60),
+            ["status"] = At(900, 140, 200, 16),
+            ["engine"] = At(800, 600, 356, 16),
+            ["add"] = At(1124, 60, 32, 40),
+        };
+        var deviations = LayoutAudit.CheckClipping(rects, "cards", "status", "engine", "session", "add");
+        Assert.Equal(3, deviations.Count); // Missing "session" skips.
+        Assert.All(deviations, d => Assert.True(d.Delta <= LayoutAudit.Tolerance, $"{d.Name} deviates by {d.Delta}"));
+    }
+
+    [Fact]
+    public void CheckClipping_Overflow_ReportsExactOvershoot()
+    {
+        var rects = new Dictionary<string, Rect>
+        {
+            ["cards"] = At(56, 60, 1100, 60),
+            ["engine"] = At(800, 600, 360, 16),
+        };
+        var over = Assert.Single(LayoutAudit.CheckClipping(rects, "cards", "engine"));
+        Assert.Equal("clip-engine", over.Name);
+        Assert.Equal(4, over.Delta);
+    }
+
+    [Fact]
+    public void InkOffset_CentredInk_ReadsZero()
+    {
+        Assert.Equal((0, 0), LayoutAudit.InkOffset(At(0, 0, 20, 20), At(4, 4, 12, 12)));
+    }
+
+    [Fact]
+    public void InkOffset_OffCentreInk_ReadsExactAxes()
+    {
+        // Slot centre (10,10); ink centre (10.4,9.5): a right-heavy, high
+        // symbol documents its nudge instead of bending the column.
+        var (dx, dy) = LayoutAudit.InkOffset(At(0, 0, 20, 20), At(4.4, 3.5, 12, 12));
+        Assert.Equal(0.4, dx, precision: 9);
+        Assert.Equal(-0.5, dy, precision: 9);
+    }
+
+    [Fact]
     public void Check_OffsetContentEdge_ReportsExactDelta()
     {
         var rects = new Dictionary<string, Rect>

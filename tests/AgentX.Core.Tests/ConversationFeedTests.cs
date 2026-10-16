@@ -742,6 +742,26 @@ public sealed class ConversationFeedTests
     }
 
     [Fact]
+    public void History_RestoredFailuresCountLikeLiveOnes()
+    {
+        // Pi's own persisted isError flag propagates: restored failures
+        // count in the session map exactly like live tool failures —
+        // observed evidence, never inferred from text.
+        using var response = JsonDocument.Parse(
+            """{"data":{"messages":[{"role":"user","content":"go"},{"role":"toolResult","toolCallId":"c1","toolName":"exec","content":[{"type":"text","text":"boom"}],"isError":true},{"role":"toolResult","toolCallId":"c2","toolName":"read","content":[{"type":"text","text":"ok"}],"isError":false},{"role":"bashExecution","command":"Get-Date","output":"...","isError":false}]}}""");
+        var history = PiConversation.ParseHistory(response);
+        Assert.Equal(4, history.Count);
+        Assert.True(history[1].IsError);
+        Assert.False(history[2].IsError);
+        Assert.False(history[3].IsError);
+        var feed = new ConversationFeed();
+        feed.LoadHistory(history);
+        var map = feed.BuildMap();
+        Assert.Equal(1, map.ErrorCount);
+        Assert.Contains(map.Milestones, m => m.Kind == "error");
+    }
+
+    [Fact]
     public void StreamingBatching_MatchesNaiveText_WithFewFlushes()
     {
         // Micro-benchmark for the per-character UI rebuild this slice
