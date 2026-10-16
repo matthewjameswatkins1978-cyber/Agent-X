@@ -48,11 +48,15 @@ another view's draft); failed sends never clear; the button path
 - `keybd_event` delivery without foreground remains flaky BY DESIGN
   of the harness, not the app. Human keyboard delivery was not
   observed to drop or duplicate during this pass.
-- Two-worker draft isolation and cross-restart resend were reviewed
-  in code (per-key drafts, coherent key tracking) but not exercised
-  live — no second worker was created in the isolated profiles.
-  Recommended before release: two tabs, type/switch/send/switch —
-  the restored box must be empty.
+- Two-agent draft isolation CLOSED live (repair-gate pass): a draft
+  typed on a worker did not leak to the workspace composer, restored
+  exactly on return, sent normally, and stayed cleared across further
+  switches — `view-prefs.json` shows both drafts empty afterwards.
+  Cross-RESTART resend remains unexercised (no killed-mid-draft
+  cycle); per-key persistence makes resurrection-by-design, and the
+  send path is the only author of user rows, so the remaining risk
+  is a stale draft re-sending after user confirmation — accepted
+  draft semantics, not a defect.
 
 No external input, injection, or focus theft was found. Nothing was
 dismissed: the phantom-draft defect above is the code-grounded

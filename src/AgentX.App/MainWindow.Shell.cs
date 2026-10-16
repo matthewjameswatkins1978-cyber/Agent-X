@@ -258,9 +258,111 @@ public partial class MainWindow
         };
         button.SetValue(AutomationProperties.NameProperty, $"Select {data.Name}");
         button.Click += (_, _) => SelectContextCard(data.Key);
+        button.ContextFlyout = BuildCardMenu(button);
         var view = new CardView(button, dot, name, status, data);
         button.Tag = view;
         return view;
+    }
+
+    /// Per-card contextual actions (relocated rail capabilities): Connect
+    /// on the disconnected card, Reconnect/Disconnect beside it, Remove
+    /// worker on worker cards. Every item selects its own card first
+    /// (via the captured button's live Tag) and then runs the existing
+    /// handler — no new connection paths, no new Core calls. States
+    /// refresh on open from live selection/connection.
+    private MenuFlyout BuildCardMenu(Button button)
+    {
+        var connect = new MenuItem { Header = "Connect" };
+        var reconnect = new MenuItem { Header = "Reconnect" };
+        var disconnect = new MenuItem { Header = "Disconnect" };
+        var remove = new MenuItem { Header = "Remove worker…" };
+        connect.Click += (_, e) => CardMenu_Act(button, ConnectPi_OnClick, e);
+        reconnect.Click += (_, e) => CardMenu_Act(button, ReconnectPi_OnClick, e);
+        disconnect.Click += (_, e) => CardMenu_Act(button, DisconnectPi_OnClick, e);
+        remove.Click += (_, e) => CardMenu_Act(button, RemoveWorker_OnClick, e);
+        var menu = new MenuFlyout();
+        menu.Items.Add(connect);
+        menu.Items.Add(reconnect);
+        menu.Items.Add(disconnect);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(remove);
+        menu.Opening += (_, _) => RefreshCardMenu(button, connect, reconnect, disconnect, remove);
+        // Programmatic open (composer pattern): right-click AND keyboard
+        // menu keys open at the card, never off-window; Handled suppresses
+        // any default so exactly one menu appears.
+        button.ContextRequested += (_, e) =>
+        {
+            menu.ShowAt(button);
+            e.Handled = true;
+        };
+        return menu;
+    }
+
+    private void CardMenu_Act(Button button, Action<object?, Avalonia.Interactivity.RoutedEventArgs> handler, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if ((button.Tag as CardView)?.Data is { } data)
+        {
+            SelectContextCard(data.Key);
+            handler(button, e);
+        }
+    }
+
+    /// Resolve the card's live target: a current worker by id, else the
+    /// catalog entry still behind the tab. A removed worker or entry
+    /// disables the whole menu rather than acting on stale identity.
+    private bool TryCardTarget(Button button, out PiWorker? worker, out CatalogEntry? entry)
+    {
+        worker = null;
+        entry = null;
+        if ((button.Tag as CardView)?.Data is not { } data)
+        {
+            return false;
+        }
+
+        worker = _manager?.Workers.FirstOrDefault(w => w.Id == data.Key);
+        if (worker is not null)
+        {
+            return true;
+        }
+
+        entry = WorkspaceTabs.Items.OfType<TabStripItem>()
+            .Select(t => t.Tag).OfType<CatalogEntry>()
+            .FirstOrDefault(e => e.Key == data.Key);
+        return entry is not null;
+    }
+
+    private void RefreshCardMenu(Button button, MenuItem connect, MenuItem reconnect, MenuItem disconnect, MenuItem remove)
+    {
+        if (!TryCardTarget(button, out var worker, out var entry))
+        {
+            connect.IsEnabled = reconnect.IsEnabled = disconnect.IsEnabled = remove.IsEnabled = false;
+            return;
+        }
+
+        if (worker is not null)
+        {
+            var busy = _busyWorkers.Contains(worker.Id) || _connectingWorkers.Contains(worker.Id);
+            connect.IsEnabled = !worker.IsConnected && !busy;
+            ToolTip.SetTip(connect, $"Connect worker '{WorkerViewKey.DisplayLabel(worker.Id, worker.Label)}'");
+            reconnect.IsEnabled = worker.IsConnected && !busy;
+            ToolTip.SetTip(reconnect, "Reconnect (session is persisted)");
+            disconnect.IsVisible = false;
+            remove.IsVisible = true;
+            remove.IsEnabled = !busy;
+            ToolTip.SetTip(remove, "Stop the worker's process and remove its registration (session files stay on disk)");
+        }
+        else
+        {
+            var connected = _connectedKey == entry!.Key && _conversation?.IsConnected == true;
+            connect.IsEnabled = !connected && !_connecting;
+            ToolTip.SetTip(connect, $"Connect workspace '{entry.Label}'");
+            reconnect.IsEnabled = connected;
+            ToolTip.SetTip(reconnect, "Reconnect (session is persisted)");
+            disconnect.IsVisible = true;
+            disconnect.IsEnabled = connected;
+            ToolTip.SetTip(disconnect, "Disconnect the workspace session.");
+            remove.IsVisible = false;
+        }
     }
 
     private void UpdateCardButton(CardView view, ContextCardData data)

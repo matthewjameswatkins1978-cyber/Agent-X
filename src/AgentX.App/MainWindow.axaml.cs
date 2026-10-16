@@ -174,6 +174,18 @@ public partial class MainWindow : Window
             }
         };
         PiRunStatus.IsVisible = !string.IsNullOrEmpty(PiRunStatus.Text);
+        BuildAddFlyout();
+        // Feed menu opens programmatically at the list (composer
+        // pattern): right-click AND keyboard menu keys, exactly once.
+        ConversationList.ContextRequested += (_, e) =>
+        {
+            if (ConversationList.ContextFlyout is MenuFlyout feedMenu)
+            {
+                feedMenu.ShowAt(ConversationList);
+            }
+
+            e.Handled = true;
+        };
         _feed.Changed += FeedChanged;
         _syncCoalescer = new FeedEventCoalescer(work => Dispatcher.UIThread.Post(work));
         _bridge = new FeedBridge(_feed);
@@ -244,7 +256,7 @@ public partial class MainWindow : Window
         _syncingPrefs = true;
         try
         {
-            AutoScrollMenuItem.IsChecked = _prefs.AutoScroll;
+            SettingsAutoScrollCheck.IsChecked = _prefs.AutoScroll;
         }
         finally
         {
@@ -731,6 +743,9 @@ public partial class MainWindow : Window
 
     private void UpdateTabDots()
     {
+        // Every selection/busy/connection change flows through here, so
+        // the empty-state Connect can never linger into a connected run.
+        RefreshEmptyConnect();
         var index = 0;
         foreach (var item in WorkspaceTabs.Items)
         {
@@ -779,24 +794,18 @@ public partial class MainWindow : Window
     {
         var viewedBusy = SelectedWorker is { } worker ? _busyWorkers.Contains(worker.Id) : _piBusy;
         WorkingRow.IsVisible = WorkerDisplayPolicy.ShowWorking(viewedBusy);
-        // The toolbar Stop icon exists only while the VIEWED run is active —
-        // never a permanent button, never for another worker's run.
-        StopButton.IsVisible = viewedBusy;
+        // Stop lives only on the composer Send/Stop button (plus Escape):
+        // the rail icon is gone, one guarded surface remains.
         RefreshComposerSendButton();
     }
 
-    /// Button states follow the selection: Disconnect stops the workspace
-    /// connection only (workers end via Remove worker); Remove worker acts
-    /// on worker tabs only. Refreshed with the tab dots, so every selection
-    /// and state change carries it — no scattered call sites.
+    /// Connection affordances follow the selection (card menus own their
+    /// states at open time; the empty-state Connect owns its visibility
+    /// here). Refreshed with the tab dots, so every selection and state
+    /// change carries it — no scattered call sites.
     private void RefreshConnectionButtons()
     {
-        var workerSelected = SelectedWorker is not null;
-        DisconnectMenuItem.IsEnabled = !workerSelected;
-        Avalonia.Controls.ToolTip.SetTip(DisconnectMenuItem, workerSelected
-            ? "Workers have no disconnect — Remove worker stops the selected worker's process."
-            : "Disconnect the workspace session.");
-        RemoveWorkerMenuItem.IsEnabled = workerSelected && _manager is not null;
+        RefreshEmptyConnect();
         RefreshComposerSendButton();
         // B1: the empty composer names its destination (approved Feed design).
         PiPromptBox.PlaceholderText = ComposerPlaceholder.For(
@@ -1022,11 +1031,9 @@ public partial class MainWindow : Window
             _pickingWorkspace = false;
         }
 
-        // Surface the staged confirmation: it lives on the Settings page.
-        if (_pendingWorkspacePath is not null)
-        {
-            ShowPage("Settings");
-        }
+        // The staged confirmation opens inline at the Add button (see
+        // AddWorkspaceCoreAsync) — no page detour, the workflow continues
+        // where the user pressed +.
     }
 
     // Pending explicit confirmation: the picker result is staged here and
@@ -1077,11 +1084,102 @@ public partial class MainWindow : Window
         }
 
         // Explicit confirmation step: stage, do not register. Only the
-        // Confirm button below turns a staged path into a workspace.
+        // flyout's own buttons turn a staged path into a workspace or
+        // worker; closing the flyout any other way cancels (OnClosed).
         _pendingWorkspacePath = path;
-        PendingConfirmText.Text = $"Register project at {path} ?";
-        PendingConfirmPanel.IsVisible = true;
-        StatusText.Text = "Confirm registration below — nothing has been registered yet.";
+        _addConfirmPath.Text = path;
+        Avalonia.Controls.ToolTip.SetTip(_addConfirmPath, path);
+        _addConfirmNote.Text = IsAlreadyRegistered(path)
+            ? "Already registered — confirming selects the existing project. Nothing is duplicated."
+            : "Nothing has been registered yet. Confirm to continue, or close to cancel.";
+        StatusText.Text = "Confirm at the Add panel — nothing has been registered yet.";
+        _addConfirmFlyout.ShowAt(AddContextButton);
+        return;
+    }
+
+    /// Duplicate check for the Add confirmation note: same canonical root
+    /// already in the registry selects rather than duplicates (Core stays
+    /// idempotent; the user sees which one it is before confirming).
+    private bool IsAlreadyRegistered(string path)
+    {
+        try
+        {
+            var canonical = AgentXWorkspace.CanonicalizeProjectRoot(path);
+            return WorkspaceRegistry.Load(ManagedRoot).List()
+                .Any(r => string.Equals(
+                    AgentXWorkspace.CanonicalizeProjectRoot(r.ProjectRoot),
+                    canonical, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private Flyout _addConfirmFlyout = null!;
+
+    private TextBlock _addConfirmPath = null!;
+
+    private TextBlock _addConfirmNote = null!;
+
+    /// Inline Add confirmation (repair gate): code-built so the window
+    /// owns every control — XAML flyout content is outside the window
+    /// name-scope and cannot be wired by name. Charcoal AxAction buttons
+    /// match the repaired grey-button language everywhere else.
+    private void BuildAddFlyout()
+    {
+        _addConfirmPath = new TextBlock
+        {
+            FontSize = 12,
+            Foreground = AxTheme.MutedBrush,
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            TextTrimming = Avalonia.Media.TextTrimming.CharacterEllipsis,
+            MaxLines = 3,
+        };
+        _addConfirmNote = new TextBlock
+        {
+            FontSize = 12,
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+        };
+        var workerButton = new Button { Content = "Create worker here" };
+        workerButton.Classes.Add("AxAction");
+        Avalonia.Controls.ToolTip.SetTip(workerButton,
+            "Create an independent Pi worker for the staged folder (separate process and session)");
+        workerButton.Click += CreateWorker_OnClick;
+        var registerButton = new Button { Content = "Register project" };
+        registerButton.Classes.Add("AxAction");
+        registerButton.Click += ConfirmWorkspace_OnClick;
+        var cancelButton = new Button { Content = "Cancel" };
+        cancelButton.Classes.Add("AxAction");
+        cancelButton.Click += CancelWorkspace_OnClick;
+        var actions = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8 };
+        actions.Children.Add(workerButton);
+        actions.Children.Add(registerButton);
+        actions.Children.Add(cancelButton);
+        var body = new StackPanel { Spacing = 8, MinWidth = 320, MaxWidth = 460 };
+        body.Children.Add(new TextBlock { Text = "Add project", FontWeight = Avalonia.Media.FontWeight.SemiBold, FontSize = 13 });
+        body.Children.Add(_addConfirmPath);
+        body.Children.Add(_addConfirmNote);
+        body.Children.Add(actions);
+        _addConfirmFlyout = new Flyout
+        {
+            Content = body,
+            Placement = Avalonia.Controls.PlacementMode.BottomEdgeAlignedLeft,
+        };
+        _addConfirmFlyout.Closed += AddConfirmFlyout_OnClosed;
+        AddContextButton.Flyout = _addConfirmFlyout;
+    }
+
+    /// Dismissing the Add flyout without confirming is a cancellation:
+    /// the staged path is dropped and nothing changes. Confirm/Create
+    /// clear the staging first, so their own flyout close is a no-op.
+    private void AddConfirmFlyout_OnClosed(object? sender, EventArgs e)
+    {
+        if (_pendingWorkspacePath is not null)
+        {
+            _pendingWorkspacePath = null;
+            StatusText.Text = "Registration cancelled — nothing changed.";
+        }
     }
 
     /// Create a worker for the staged folder (the Add flow's explicit
@@ -1092,7 +1190,7 @@ public partial class MainWindow : Window
     {
         var path = _pendingWorkspacePath;
         _pendingWorkspacePath = null;
-        PendingConfirmPanel.IsVisible = false;
+        _addConfirmFlyout.Hide();
         if (string.IsNullOrWhiteSpace(path))
         {
             return;
@@ -1160,7 +1258,7 @@ public partial class MainWindow : Window
     {
         var path = _pendingWorkspacePath;
         _pendingWorkspacePath = null;
-        PendingConfirmPanel.IsVisible = false;
+        _addConfirmFlyout.Hide();
         if (string.IsNullOrWhiteSpace(path))
         {
             return;
@@ -1188,12 +1286,22 @@ public partial class MainWindow : Window
 
         try
         {
+            var already = registry.List()
+                .Any(r => string.Equals(
+                    AgentXWorkspace.CanonicalizeProjectRoot(r.ProjectRoot),
+                    AgentXWorkspace.CanonicalizeProjectRoot(path), StringComparison.OrdinalIgnoreCase));
             var workspace = registry.GetOrRegister(path);
             registry.Save();
             LoadWorkspaceTabs(selectKey: workspace.Slug);
-            StatusText.Text = _conversation is not null && workspace.Slug != _connectedKey
-                ? $"Workspace '{workspace.Slug}' registered — disconnect from '{_connectedLabel}' to open it."
-                : $"Workspace '{workspace.Slug}' ready — session {workspace.SessionId}. Press Connect.";
+            StatusText.Text = already
+                ? $"Workspace '{workspace.Slug}' was already registered — selected it. Nothing duplicated."
+                : _conversation is not null && workspace.Slug != _connectedKey
+                    ? $"Workspace '{workspace.Slug}' registered — disconnect from '{_connectedLabel}' to open it."
+                    : $"Workspace '{workspace.Slug}' ready — session {workspace.SessionId}. Press Connect.";
+            // The visible card strip is not part of LoadWorkspaceTabs:
+            // without this fan-out the new card never appears (registration
+            // persisted, UI stale). Selection already moved; just mirror.
+            UpdateTabDots();
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or UnauthorizedAccessException)
         {
@@ -1204,7 +1312,7 @@ public partial class MainWindow : Window
     private void CancelWorkspace_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         _pendingWorkspacePath = null;
-        PendingConfirmPanel.IsVisible = false;
+        _addConfirmFlyout.Hide();
         StatusText.Text = "Registration cancelled — nothing changed.";
     }
 
@@ -1375,10 +1483,12 @@ public partial class MainWindow : Window
             RebuildConversationList();
             RebuildSessionMap();
             RefreshOverviewAndSettings();
-            PiRunStatus.Text = count == 0
+            // Same composer-compact rule as workspaces: the restore note
+            // rides the footer transient, never the composer row.
+            StatusText.Text = (count == 0
                 ? $"New worker session for '{label}' — no previous conversation."
-                : $"Worker '{label}' connected — restored {count} message(s). Send a prompt to continue.";
-            StatusText.Text = $"Pi runs in {worker.ProjectRoot} with your user authority.";
+                : $"Worker '{label}' connected — restored {count} message(s). Send a prompt to continue.")
+                + $" Pi runs in {worker.ProjectRoot} with your user authority.";
             RefreshDirectoryLabel();
             RefreshConnectionButtons();
             RefreshEngineSegments();
@@ -1579,10 +1689,13 @@ public partial class MainWindow : Window
             RebuildSessionMap();
             UpdateTabDots();
             RefreshOverviewAndSettings();
-            PiRunStatus.Text = history.Count == 0
+            // The restore notice rides the footer transient (auto-collapsed
+            // routine), never the composer: PiRunStatus stays empty so the
+            // empty composer keeps its compact height after a restore.
+            StatusText.Text = (history.Count == 0
                 ? $"New session for '{choice.Label}' — no previous conversation."
-                : $"Restored '{choice.Label}' with {history.Count} message(s). Send a prompt to continue.";
-            StatusText.Text = $"Pi runs in {workspace.WorkingDirectory} with your user authority.";
+                : $"Restored '{choice.Label}' with {history.Count} message(s). Send a prompt to continue.")
+                + $" Pi runs in {workspace.WorkingDirectory} with your user authority.";
             RefreshDirectoryLabel();
         }
         catch (Exception ex)
@@ -1745,6 +1858,9 @@ public partial class MainWindow : Window
         if (IsSelectedWorker(id))
         {
             PiConnectionState.Text = "Working…";
+            // A new run owns the status line: stale reconnect/restore
+            // notes vacate when work begins (the row collapses empty).
+            PiRunStatus.Text = string.Empty;
         }
 
         RefreshWorkingRow();
@@ -1883,6 +1999,9 @@ public partial class MainWindow : Window
 
         _piBusy = true;
         PiConnectionState.Text = "Working…";
+        // A new run owns the status line: stale reconnect/restore notes
+        // vacate when work begins (the row collapses empty).
+        PiRunStatus.Text = string.Empty;
         RefreshWorkingRow();
         UpdateTabDots();
 
@@ -2179,8 +2298,9 @@ public partial class MainWindow : Window
         // closes, reconciles). Pure streaming growth skips the map/overview
         // rebuild: the tick already shows the text and the live activity.
         var structural = false;
-        foreach (var entry in snapshot)
+        for (var si = 0; si < snapshot.Count; si++)
         {
+            var entry = snapshot[si];
             if (!bySeq.TryGetValue(entry.Seq, out var item))
             {
                 if (entry.Seq <= _shownSeq)
@@ -2189,8 +2309,24 @@ public partial class MainWindow : Window
                 }
 
                 item = ToViewItem(entry);
+                // Group rhythm from live neighbours (see GroupMargins):
+                // one operation joins tight, turn anchors keep air.
+                item.RowMargin = ConversationViewItem.GroupMargins(
+                    si > 0 ? snapshot[si - 1].Role : null,
+                    entry,
+                    si + 1 < snapshot.Count ? snapshot[si + 1].Role : null);
                 _conversationItems.Add(item);
                 bySeq[entry.Seq] = item;
+                // The row above just gained a neighbour below: rejoin it.
+                if (si > 0 && bySeq.TryGetValue(snapshot[si - 1].Seq, out var above)
+                    && !ReferenceEquals(above, item))
+                {
+                    above.RowMargin = ConversationViewItem.GroupMargins(
+                        si > 1 ? snapshot[si - 2].Role : null,
+                        snapshot[si - 1],
+                        entry.Role);
+                }
+
                 _shownSeq = Math.Max(_shownSeq, entry.Seq);
                 follow = true;
                 structural = true;
@@ -2449,10 +2585,16 @@ public partial class MainWindow : Window
     {
         _conversationItems.Clear();
         _shownSeq = 0;
-        foreach (var entry in ActiveFeed.Snapshot())
+        var entries = ActiveFeed.Snapshot();
+        for (var i = 0; i < entries.Count; i++)
         {
-            _conversationItems.Add(ToViewItem(entry));
-            _shownSeq = Math.Max(_shownSeq, entry.Seq);
+            var item = ToViewItem(entries[i]);
+            item.RowMargin = ConversationViewItem.GroupMargins(
+                i > 0 ? entries[i - 1].Role : null,
+                entries[i],
+                i + 1 < entries.Count ? entries[i + 1].Role : null);
+            _conversationItems.Add(item);
+            _shownSeq = Math.Max(_shownSeq, entries[i].Seq);
         }
 
         // Settled assistant rows get rich Markdown here (streaming rows get
@@ -2475,7 +2617,7 @@ public partial class MainWindow : Window
 
     private void MaybeAutoScroll()
     {
-        if (AutoScrollMenuItem.IsChecked == true && _conversationItems.Count > 0)
+        if (_prefs.AutoScroll && _conversationItems.Count > 0)
         {
             ConversationList.ScrollIntoView(_conversationItems[^1]);
         }
@@ -2662,13 +2804,13 @@ public partial class MainWindow : Window
         Add("session", OvSessionName);
         Add("add", AddContextButton);
         var infos = new List<string>();
-        Ink(infos, "rabbit", BrandIcon);
-        Ink(infos, "nav-overview", NavOverviewIcon);
-        Ink(infos, "nav-feed", NavLiveIcon);
-        Ink(infos, "nav-settings", NavSettingsIcon);
-        Ink(infos, "add", AxAddIcon);
-        Ink(infos, "search", AxSearchIcon);
-        Ink(infos, "send", ComposerSendIcon);
+        Ink(infos, rects, "rabbit", BrandIcon);
+        Ink(infos, rects, "nav-overview", NavOverviewIcon);
+        Ink(infos, rects, "nav-feed", NavLiveIcon);
+        Ink(infos, rects, "nav-settings", NavSettingsIcon);
+        Ink(infos, rects, "add", AxAddIcon);
+        Ink(infos, rects, "search", AxSearchIcon);
+        Ink(infos, rects, "send", ComposerSendIcon);
         rects["overlay"] = new Avalonia.Rect(new Avalonia.Point(0, 0), LayoutOverlay.Bounds.Size);
 
         var deviations = LayoutAudit.Check(rects).ToList();
@@ -2684,6 +2826,12 @@ public partial class MainWindow : Window
         // owns the text; the layout never overflows). Bound to the cards
         // edge: the shared content-right datum.
         deviations.AddRange(LayoutAudit.CheckClipping(rects, "cards", "status", "engine", "session", "add"));
+        // Global ink verdict: the rabbit's visible centre against the
+        // navigation ink below it (see CheckRailInk).
+        if (LayoutAudit.CheckRailInk(rects) is { } railInk)
+        {
+            deviations.Add(railInk);
+        }
         foreach (var region in new[] { "cards", "feed", "composer", "footer", "rabbit", "send", "input" })
         {
             if (rects.TryGetValue(region, out var frame))
@@ -2714,12 +2862,17 @@ public partial class MainWindow : Window
         LayoutOverlay.Children.Add(report);
     }
 
-    /// Optical-ink centre of one icon in overlay coordinates: the path
-    /// bounds (24-unit viewBox) scale uniformly into the slot and centre
-    /// there; stroke width spreads symmetrically, so the path centre is
-    /// the ink centre. Hidden icons contribute nothing (stale bounds
-    /// would indict the wrong page).
-    private void Ink(List<string> infos, string name, AxIcon? icon)
+    /// Optical-ink rect of one icon in overlay coordinates. MEASURED
+    /// rendering fits the geometry box to the slot from its TOP-LEFT
+    /// (Uniform scales to fit but does not centre — verified pixel by
+    /// pixel: full-bleed icons look centred, narrow art hugs the left).
+    /// AxIcon.RenderTransform (optical centering) then corrects per icon,
+    /// which this models by adding the live translation. The rect feeds
+    /// both the per-icon INFO line and the global rail-ink comparison,
+    /// so F12 reports rendered truth, never the layout assumption.
+    /// Hidden icons contribute nothing (stale bounds would indict the
+    /// wrong page).
+    private void Ink(List<string> infos, Dictionary<string, Avalonia.Rect> rects, string name, AxIcon? icon)
     {
         if (icon?.Data is null || !IsEffectivelyVisible(icon))
         {
@@ -2728,23 +2881,31 @@ public partial class MainWindow : Window
 
         var origin = ToOverlay(icon);
         var size = icon.Bounds.Size;
-        var scale = Math.Min(size.Width, size.Height) / 24.0;
+        var inkBox = icon.Data.Bounds;
+        if (inkBox.Width <= 0 || inkBox.Height <= 0)
+        {
+            return;
+        }
+
+        var scale = Math.Min(size.Width / inkBox.Width, size.Height / inkBox.Height);
         if (scale <= 0)
         {
             return;
         }
 
-        // Uniform stretch centres the whole 24-unit viewBox in the slot;
-        // the ink sits inside it at viewBox coordinates. (Centring the ink
-        // box itself would double-count its offset — the viewBox pad comes
-        // first, then the ink position within the viewBox.)
-        var inkBox = icon.Data.Bounds;
         var inkSize = new Avalonia.Size(inkBox.Width * scale, inkBox.Height * scale);
-        var inkOrigin = new Avalonia.Point(
-            origin.X + (size.Width - 24 * scale) / 2 + inkBox.X * scale,
-            origin.Y + (size.Height - 24 * scale) / 2 + inkBox.Y * scale);
-        var (dx, dy) = LayoutAudit.InkOffset(new Avalonia.Rect(origin, size), new Avalonia.Rect(inkOrigin, inkSize));
-        infos.Add($"INFO ink-{name} ({dx:+0.0;-0.0},{dy:+0.0;-0.0})");
+        var ink = new Avalonia.Rect(origin, inkSize);
+        // Render-time optical centering (AxIcon.RenderTransform) moves
+        // the ink after layout: the global verdict must see the final
+        // pixels, not the unshifted slot math.
+        if (icon.RenderTransform is Avalonia.Media.TranslateTransform shift)
+        {
+            ink = new Avalonia.Rect(ink.X + shift.X, ink.Y + shift.Y, ink.Width, ink.Height);
+        }
+
+        rects["ink-" + name] = ink;
+        var (dx, dy) = LayoutAudit.InkOffset(new Avalonia.Rect(origin, size), ink);
+        infos.Add($"INFO ink-{name} ({dx:+0.0;-0.0},{dy:+0.0;-0.0}) box={inkBox.X:F1},{inkBox.Y:F1},{inkBox.Width:F1},{inkBox.Height:F1}");
     }
 
     /// One datum guide per check: verticals for column edges and the rail
@@ -2816,6 +2977,9 @@ public partial class MainWindow : Window
                 Guide(deviation.Expected, TopOf(rects, "cards"), deviation.Expected, BottomOf(rects, "footer"), brush);
                 break;
             case "rail-brand":
+                Guide(deviation.Expected, TopOf(rects, "rabbit"), deviation.Expected, BottomOf(rects, "nav"), brush);
+                break;
+            case "rail-ink":
                 Guide(deviation.Expected, TopOf(rects, "rabbit"), deviation.Expected, BottomOf(rects, "nav"), brush);
                 break;
             case "send-input":
@@ -2949,10 +3113,9 @@ public partial class MainWindow : Window
         OverviewPanel.IsVisible = index == 0;
         LivePanel.IsVisible = index == 1;
         SettingsPanel.IsVisible = index == 2;
-        // Feed actions live in the rail column (final, Matthew's approved
-        // home): Feed page only. The rail is outside the content column,
-        // so the transcript keeps its full width with no side strip.
-        RailFeedActions.IsVisible = index == 1;
+        // Navigation rail holds destinations only (Overview, Feed,
+        // Settings): actions live on cards, the empty state, the feed
+        // menu and the composer — never as rail buttons.
         if (LayoutOverlay.IsVisible)
         {
             PostLayoutRefresh();
@@ -3347,10 +3510,30 @@ public partial class MainWindow : Window
         }
     }
 
+    /// The disconnected Feed offers Connect where the work starts.
+    /// Empty feed: the centered empty-state button. Non-empty feed (a
+    /// dropped connection mid-history): the composer Reconnect button
+    /// beside the status line — reachable by mouse, keyboard tab and
+    /// UIA, never menu-only. Never a Pi launch without the explicit
+    /// press (same guarded handlers).
+    private void RefreshEmptyConnect()
+    {
+        var empty = _conversationItems.Count == 0;
+        var connected = SelectedWorker is { } worker
+            ? worker.IsConnected
+            : _conversation?.IsConnected == true;
+        var busy = SelectedWorker is { } w
+            ? _busyWorkers.Contains(w.Id) || _connectingWorkers.Contains(w.Id)
+            : _piBusy || _connecting;
+        EmptyConnectButton.IsVisible = empty && !connected && !busy;
+        ComposerReconnectButton.IsVisible = !empty && !connected && !busy;
+    }
+
     private void UpdateEmptyState()
     {
         var empty = _conversationItems.Count == 0;
         EmptyStatePanel.IsVisible = empty;
+        RefreshEmptyConnect();
         if (empty && SelectedWorker is { } worker)
         {
             var label = WorkerViewKey.DisplayLabel(worker.Id, worker.Label);
@@ -3447,37 +3630,6 @@ public partial class MainWindow : Window
 
         _prefs = _prefs with { AutoScroll = SettingsAutoScrollCheck.IsChecked == true };
         SavePrefs();
-        _syncingPrefs = true;
-        try
-        {
-            AutoScrollMenuItem.IsChecked = _prefs.AutoScroll;
-        }
-        finally
-        {
-            _syncingPrefs = false;
-        }
-    }
-
-    /// Overflow-menu auto-scroll toggle (replaces the old permanent toolbar
-    /// checkbox): same pref, same sync with the Settings checkbox.
-    private void AutoScrollMenu_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-    {
-        if (_syncingPrefs)
-        {
-            return;
-        }
-
-        _prefs = _prefs with { AutoScroll = AutoScrollMenuItem.IsChecked };
-        SavePrefs();
-        _syncingPrefs = true;
-        try
-        {
-            SettingsAutoScrollCheck.IsChecked = _prefs.AutoScroll;
-        }
-        finally
-        {
-            _syncingPrefs = false;
-        }
     }
 
     private void VisibilityCombo_OnChanged(object? sender, SelectionChangedEventArgs e)

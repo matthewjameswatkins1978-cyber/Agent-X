@@ -1,4 +1,5 @@
 using AgentX.App;
+using Avalonia;
 
 namespace AgentX.App.Tests;
 
@@ -67,6 +68,24 @@ public sealed class AxDesignTests
         Assert.NotEmpty(data);
         Assert.StartsWith("M", data, StringComparison.OrdinalIgnoreCase);
         Assert.Matches(@"\A[MmLlHhVvCcSsQqTtAaZz0-9eE.\+\-\s,]*\z", data);
+    }
+
+    [Fact]
+    public void CenteringOffset_PadsNarrowArt_FullBleedIsNoop()
+    {
+        // The rabbit's 11x17.5 ink in a 20px slot: +3.7 horizontal pad,
+        // zero vertical (height-filling). Measured rendering fits the
+        // top-left-fit model this corrects.
+        var rabbit = AxIcon.CenteringOffset(new Size(20, 20), new Rect(6.5, 3.5, 11, 17.5));
+        Assert.Equal(3.714, rabbit.X, precision: 3);
+        Assert.Equal(0, rabbit.Y, precision: 9);
+        // Full-bleed icons (grid 16x16 in 18px): exactly zero, so the
+        // transform stays null and rendering is untouched.
+        var grid = AxIcon.CenteringOffset(new Size(18, 18), new Rect(4, 4, 16, 16));
+        Assert.Equal(new Vector(0, 0), grid);
+        // Degenerate inputs never move ink.
+        Assert.Equal(new Vector(0, 0), AxIcon.CenteringOffset(new Size(0, 20), new Rect(6.5, 3.5, 11, 17.5)));
+        Assert.Equal(new Vector(0, 0), AxIcon.CenteringOffset(new Size(20, 20), new Rect(0, 0, 0, 0)));
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using AgentX.App;
+using AgentX.Core;
 
 namespace AgentX.App.Tests;
 
@@ -22,6 +23,28 @@ public sealed class ContextGaugeTests
     public void FillFraction_NaN_IsEmpty()
     {
         Assert.Equal(0, ContextGauge.FillFraction(double.NaN));
+    }
+
+    [Fact]
+    public void GroupMargins_TurnAnchorsKeepAir_IntraRunJoins()
+    {
+        var assistant = new FeedEntry(1, "assistant", "text");
+        var tool = new FeedEntry(2, "tool", "[tool result: read]\nout");
+        // Inside one run: tight both sides.
+        Assert.Equal(new Avalonia.Thickness(0, 1, 0, 1), ConversationViewItem.GroupMargins("assistant", tool, "assistant"));
+        Assert.Equal(new Avalonia.Thickness(0, 1, 0, 1), ConversationViewItem.GroupMargins("tool", assistant, "tool"));
+        // Turn anchors: full rhythm whatever the neighbours.
+        var user = new FeedEntry(3, "user", "go");
+        Assert.Equal(new Avalonia.Thickness(0, 4, 0, 4), ConversationViewItem.GroupMargins("assistant", user, "assistant"));
+        var receipt = new FeedEntry(4, "receipt", "Healthy");
+        Assert.Equal(new Avalonia.Thickness(0, 4, 0, 4), ConversationViewItem.GroupMargins("tool", receipt, null));
+        // Edges: first row after a prompt keeps top air, last row before
+        // a receipt keeps bottom air.
+        Assert.Equal(new Avalonia.Thickness(0, 4, 0, 1), ConversationViewItem.GroupMargins("user", assistant, "tool"));
+        Assert.Equal(new Avalonia.Thickness(0, 1, 0, 4), ConversationViewItem.GroupMargins("tool", tool, "receipt"));
+        // Detail rows always tight, even at an edge.
+        var detail = new FeedEntry(5, "system", "[detail abc] read args");
+        Assert.Equal(new Avalonia.Thickness(0, 1, 0, 1), ConversationViewItem.GroupMargins(null, detail, null));
     }
 
     [Fact]

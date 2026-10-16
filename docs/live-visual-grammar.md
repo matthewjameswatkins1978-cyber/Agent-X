@@ -125,9 +125,19 @@ lightness intent, not claimed bit-exact terminal output.
   PASS lines). Icon ink centres report as INFO (`ink-*`), never
   verdicts: they justify — or refuse — an optical nudge inside the
   drawing. Shared column geometry is never bent for a symbol.
-- Feed actions live in the rail column (final, Matthew's approved home):
-  below navigation, Feed page only. The rail is outside the content
-  column, so the transcript keeps full width with no side strip.
+  Icon ink centres also report as INFO (`ink-*` with the runtime art
+  box); the global `rail-ink` verdict compares rendered ink centres
+  across the rail and fails loudly on drift.
+- Navigation rail holds destinations only (Overview, Feed, Settings).
+  All former rail actions relocated without loss: Connect on the
+  disconnected card's menu and the empty-state button; Reconnect and
+  Disconnect beside them on the card menu; Stop on the composer
+  button (Escape kept); Copy selected/full on the feed context menu
+  (opened programmatically at the list, composer pattern); Auto-
+  scroll lives only in Settings. Card menus select-then-act through
+  the existing handlers with per-open enable states; a dropped
+  connection with history also offers Reconnect beside the composer
+  status line (never menu-only).
 - The footer context gauge is a flat-green bottom-filling disc with a
   thin outline: green outline + fill for known percentages (sub-6%
   fills are subpixel on the 16px disc — tooltip and text carry the
@@ -135,14 +145,26 @@ lightness intent, not claimed bit-exact terminal output.
   amber outline only for genuine alert keywords. Same control anchors
   the Usage card at 20px with its own tooltip.
 - The rabbit anchor is redrawn artwork (two capped ears, round head,
-  symmetric about its centre, 20px in the 48px cell) — ink-centred by
-  construction (`ink-rabbit` ≈ 0). Section anchors (mission target,
+  symmetric about its centre, 20px in the 48px cell). MEASURED
+  finding: geometry renders top-left-fitted in its box (Uniform
+  scales to fit but does not centre — full-bleed icons hide this,
+  narrow art hugged the left by ~4px). `AxIcon` now centres every
+  icon at the system level (`CenteringOffset`, tested; null transform
+  for full-bleed), render-only so slots and datums never move. F12
+  models the same fitted-then-shifted truth (`rail-ink` PASS means
+  pixels agree). Section anchors (mission target,
   model CPU, verification check/warn, usage gauge) stay in the icon
   family at 14px; verification tint follows state.
 - Bridge detail rows (`[detail]`, `[result]`, `[progress]`) render as
   quiet attachments: tight rhythm, one step smaller, muted ink
   (`MarkdownView.Dim`, scales with feed size; ANSI colours and diff
   verdicts survive). Evidence preserved, visually grouped.
+- Feed rhythm is group-aware (`GroupMargins` from neighbour roles,
+  tested): prompts and receipts keep full turn air; rows inside one
+  run join tight; detail rows always tight. No negative margins.
+  Restored-session notices ride the footer transient, never the
+  composer; a new run vacates stale status when work begins.
+  Selection stays charcoal (Fluent focus indication untouched).
 - Overview attention is latest-word: unhealthy receipt warns (amber),
   error receipt fails (red), healthy quiets earlier errors (muted
   normal — never success-green), bare errors warn only with no receipt.

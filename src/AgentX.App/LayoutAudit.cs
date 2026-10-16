@@ -109,13 +109,43 @@ public static class LayoutAudit
     }
 
     /// Optical-ink check: the visible vector ink centre versus its slot
-    /// centre, per axis. Deliberate glyph asymmetry (the search handle,
-    /// the rabbit's ear mass) reads here as data, not failure — these are
-    /// INFO lines, never PASS/FAIL. They justify an optical nudge inside
-    /// the drawing, or document why none was made; shared column geometry
-    /// is never bent to compensate for a symbol.
+    /// centre, per axis. Deliberate glyph asymmetry (the search handle)
+    /// reads here as data, not failure — these are INFO lines, never
+    /// PASS/FAIL. They justify an optical nudge inside the drawing, or
+    /// document why none was made; shared column geometry is never bent
+    /// to compensate for a symbol.
     public static (double Dx, double Dy) InkOffset(Rect slot, Rect ink)
         => (ink.Center.X - slot.Center.X, ink.Center.Y - slot.Center.Y);
+
+    /// Global rail-ink comparison: the rabbit's ink centre against the
+    /// mean ink centre of the navigation icons below, all in one
+    /// coordinate space. Unlike the per-slot INFO lines (centred by
+    /// construction under Uniform stretch), this is a genuine verdict:
+    /// it catches a mis-seated slot, a wrong-sized cell, or art that
+    /// only LOOKS centred in its own box. Missing icons skip.
+    public static GuideDeviation? CheckRailInk(IReadOnlyDictionary<string, Rect> rects)
+    {
+        if (!rects.TryGetValue("ink-rabbit", out var rabbit))
+        {
+            return null;
+        }
+
+        var centres = new List<double>();
+        foreach (var key in new[] { "ink-nav-overview", "ink-nav-feed", "ink-nav-settings" })
+        {
+            if (rects.TryGetValue(key, out var nav))
+            {
+                centres.Add(nav.Center.X);
+            }
+        }
+
+        if (centres.Count == 0)
+        {
+            return null;
+        }
+
+        return new GuideDeviation("rail-ink", centres.Average(), rabbit.Center.X);
+    }
 
     /// Viewport fill for capped panels (Overview/Settings): at and above
     /// the reading cap the content must span exactly the cap regardless of

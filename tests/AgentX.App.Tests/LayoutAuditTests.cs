@@ -78,6 +78,26 @@ public sealed class LayoutAuditTests
     }
 
     [Fact]
+    public void CheckRailInk_ComparesGlobalInkCentres()
+    {
+        // Nav ink at 100/104/108 (mean 104); rabbit ink at 107: the
+        // verdict is the 3px global offset, wherever the slots sit.
+        var rects = new Dictionary<string, Rect>
+        {
+            ["ink-rabbit"] = At(102, 8, 10, 10),
+            ["ink-nav-overview"] = At(95, 60, 10, 10),
+            ["ink-nav-feed"] = At(99, 110, 10, 10),
+            ["ink-nav-settings"] = At(103, 500, 10, 10),
+        };
+        var verdict = LayoutAudit.CheckRailInk(rects);
+        Assert.NotNull(verdict);
+        Assert.Equal("rail-ink", verdict!.Name);
+        Assert.Equal(3, verdict.Delta, precision: 9);
+        // Missing rabbit or nav skips instead of inventing a verdict.
+        Assert.Null(LayoutAudit.CheckRailInk(new Dictionary<string, Rect>()));
+    }
+
+    [Fact]
     public void Check_OffsetContentEdge_ReportsExactDelta()
     {
         var rects = new Dictionary<string, Rect>

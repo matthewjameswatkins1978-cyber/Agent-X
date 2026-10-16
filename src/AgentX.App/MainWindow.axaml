@@ -50,6 +50,35 @@
     <Style Selector="ToggleButton.NavBtn:pointerover:not(:checked)">
       <Setter Property="Background" Value="{DynamicResource Ax.Surface2}" />
     </Style>
+    <!-- Shared action-button language (repair gate): charcoal surfaces,
+         restrained borders, shared radius, visible hover/pressed/disabled.
+         Keyboard focus indication stays on the Fluent default. -->
+    <Style Selector="Button.AxAction">
+      <Setter Property="Background" Value="{DynamicResource Ax.Surface}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Ax.Border}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="{DynamicResource Ax.Radius}" />
+      <Setter Property="Padding" Value="10,6" />
+      <Setter Property="Foreground" Value="{DynamicResource Ax.Text}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.AxAction:pointerover">
+      <Setter Property="Background" Value="{DynamicResource Ax.Surface2}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Ax.BorderStrong}" />
+    </Style>
+    <Style Selector="Button.AxAction:pressed">
+      <Setter Property="Background" Value="{DynamicResource Ax.Surface2}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Ax.Green}" />
+    </Style>
+    <Style Selector="Button.AxAction:disabled">
+      <Setter Property="Opacity" Value="0.45" />
+    </Style>
+    <!-- Restrained feed selection: rows keep their own brushes, the
+         highlight stays charcoal instead of the default bright blue.
+         Focus indication is untouched. -->
+    <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="Background" Value="{DynamicResource Ax.Surface2}" />
+    </Style>
     <!-- Selection fills are driven by the Fluent theme resource overrides in
          AxTheme.Apply (verified at runtime: template-child selectors do not
          beat the v12.1.4 ControlTheme). Root setters above remain. -->
@@ -92,62 +121,6 @@
                         ToolTip.Tip="Feed" AutomationProperties.Name="Feed">
             <app:AxIcon x:Name="NavLiveIcon" Kind="Chat" Width="18" Height="18" />
           </ToggleButton>
-        </StackPanel>
-        <!-- Feed action group (final): Matthew's approved home is the rail
-             column itself — below navigation, above Settings, Feed page
-             only. The rail column is outside the content column, so the
-             transcript keeps the full content width (no side strip, no
-             indent). Same buttons, names, handlers, flyout and states;
-             only the parent changes. -->
-        <StackPanel DockPanel.Dock="Top" x:Name="RailFeedActions" IsVisible="False" Spacing="4" Margin="0,8,0,0">
-          <Border BorderBrush="{DynamicResource Ax.Border}" BorderThickness="0,1,0,0"
-                  Margin="10,0,10,4" />
-          <Button x:Name="ConnectButton" Click="ConnectPi_OnClick" Width="40" Height="40"
-                  Background="Transparent" BorderThickness="0" Padding="0" HorizontalAlignment="Center"
-                  ToolTip.Tip="Connect the selected worker or workspace"
-                  AutomationProperties.Name="Connect">
-            <app:AxIcon Kind="Connect" Width="18" Height="18" />
-          </Button>
-          <Button x:Name="ReconnectButton" Click="ReconnectPi_OnClick" Width="40" Height="40"
-                  Background="Transparent" BorderThickness="0" Padding="0" HorizontalAlignment="Center"
-                  ToolTip.Tip="Reconnect (session is persisted)"
-                  AutomationProperties.Name="Reconnect">
-            <app:AxIcon Kind="Reconnect" Width="18" Height="18" />
-          </Button>
-          <Button x:Name="StopButton" Click="ComposerStop_OnClick" Width="40" Height="40"
-                  Background="Transparent" BorderThickness="0" Padding="0" HorizontalAlignment="Center"
-                  IsVisible="False" ToolTip.Tip="Stop current run (Escape)"
-                  AutomationProperties.Name="Stop current run">
-            <app:AxIcon Kind="Stop" Filled="True" Width="18" Height="18" />
-          </Button>
-          <Button x:Name="CopySelectedButton" Click="CopySelectedMessage_OnClick" Width="40" Height="40"
-                  Background="Transparent" BorderThickness="0" Padding="0" HorizontalAlignment="Center"
-                  ToolTip.Tip="Copy selected message (exact bytes)"
-                  AutomationProperties.Name="Copy selected message">
-            <app:AxIcon Kind="Copy" Width="18" Height="18" />
-          </Button>
-          <Button x:Name="MoreActionsButton" Width="40" Height="40"
-                  Background="Transparent" BorderThickness="0" Padding="0" HorizontalAlignment="Center"
-                  ToolTip.Tip="More actions" AutomationProperties.Name="More actions">
-            <app:AxIcon Kind="More" Filled="True" Width="18" Height="18" />
-            <Button.Flyout>
-              <MenuFlyout>
-                <MenuItem x:Name="DisconnectMenuItem" Header="Disconnect"
-                          Click="DisconnectPi_OnClick"
-                          ToolTip.Tip="Disconnect the workspace session" />
-                <MenuItem x:Name="AutoScrollMenuItem" Header="Auto-scroll" ToggleType="CheckBox"
-                          IsChecked="True" StaysOpenOnClick="True" Click="AutoScrollMenu_OnClick"
-                          ToolTip.Tip="Follow new messages automatically" />
-                <MenuItem x:Name="CopyFullMenuItem" Header="Copy full conversation"
-                          Click="CopyFullConversation_OnClick"
-                          ToolTip.Tip="Copy the whole transcript (exact bytes)" />
-                <Separator />
-                <MenuItem x:Name="RemoveWorkerMenuItem" Header="Remove worker…"
-                          Click="RemoveWorker_OnClick"
-                          ToolTip.Tip="Stop the selected worker's process and remove its registration (session files stay on disk)" />
-              </MenuFlyout>
-            </Button.Flyout>
-          </Button>
         </StackPanel>
         <StackPanel DockPanel.Dock="Bottom" Spacing="8">
           <ToggleButton x:Name="NavSettings" Classes="NavBtn" Click="Nav_OnClick" Width="40" Height="40"
@@ -276,7 +249,7 @@
                 <StackPanel Spacing="8">
                   <SelectableTextBlock x:Name="SessionMapText" Text="Connect to Pi to build the session map."
                                          TextWrapping="Wrap" FontSize="12" />
-                  <Button Content="Copy session map" Click="CopySessionMap_OnClick"
+                  <Button Classes="AxAction" Content="Copy session map" Click="CopySessionMap_OnClick"
                           HorizontalAlignment="Left" />
                 </StackPanel>
               </Expander>
@@ -285,12 +258,12 @@
                   <TextBlock Text="Large-packet transcript import, preserved byte-for-byte."
                              Foreground="{DynamicResource Ax.Muted}" FontSize="12" TextWrapping="Wrap" />
                   <WrapPanel Orientation="Horizontal" ItemSpacing="8">
-                    <Button Content="Paste packet" Click="PastePacket_OnClick" />
-                    <Button Content="Load 100k" Click="LoadSample_OnClick" />
-                    <Button Content="Load 25 MiB" Click="Load25MiB_OnClick" />
-                    <Button Content="Load 1M" Click="LoadMillionSample_OnClick" />
-                    <Button Content="Copy full text" Click="CopyFullText_OnClick" />
-                    <Button Content="Export full text" Click="ExportFullText_OnClick" />
+                    <Button Classes="AxAction" Content="Paste packet" Click="PastePacket_OnClick" />
+                    <Button Classes="AxAction" Content="Load 100k" Click="LoadSample_OnClick" />
+                    <Button Classes="AxAction" Content="Load 25 MiB" Click="Load25MiB_OnClick" />
+                    <Button Classes="AxAction" Content="Load 1M" Click="LoadMillionSample_OnClick" />
+                    <Button Classes="AxAction" Content="Copy full text" Click="CopyFullText_OnClick" />
+                    <Button Classes="AxAction" Content="Export full text" Click="ExportFullText_OnClick" />
                   </WrapPanel>
                   <ListBox x:Name="TranscriptList" Background="Transparent" BorderThickness="0"
                            MinHeight="120" MaxHeight="260">
@@ -341,6 +314,14 @@
           <ListBox x:Name="ConversationList" Background="Transparent" BorderThickness="0"
                      SelectionMode="Single" FontFamily="{DynamicResource Ax.ProseFont}"
                      FontSize="{DynamicResource Ax.FeedFontSize}">
+            <ListBox.ContextFlyout>
+              <MenuFlyout>
+                <MenuItem Header="Copy selected message" Click="CopySelectedMessage_OnClick"
+                          ToolTip.Tip="Copy the selected message (exact bytes)" />
+                <MenuItem Header="Copy full conversation" Click="CopyFullConversation_OnClick"
+                          ToolTip.Tip="Copy the whole transcript (exact bytes)" />
+              </MenuFlyout>
+            </ListBox.ContextFlyout>
               <ListBox.ItemsPanel>
                 <ItemsPanelTemplate>
                   <VirtualizingStackPanel />
@@ -430,7 +411,13 @@
             <TextBlock x:Name="EmptyStateText" Text="Connect a workspace, then ask your first question."
                        Foreground="{DynamicResource Ax.Muted}" FontSize="13" TextWrapping="Wrap"
                        HorizontalAlignment="Center" TextAlignment="Center" />
-            <!-- B1: suggestions removed — the empty state is one hint line. -->
+            <!-- Contextual connect (repair gate): the disconnected Feed
+                 offers the action where the work starts. Hidden while
+                 connected or busy (see RefreshEmptyConnect). -->
+            <Button x:Name="EmptyConnectButton" Classes="AxAction" Content="Connect"
+                    Click="ConnectPi_OnClick" IsVisible="False" HorizontalAlignment="Center"
+                    ToolTip.Tip="Connect the selected worker or workspace"
+                    AutomationProperties.Name="Connect" />
           </StackPanel>
         </Grid>
 
@@ -438,8 +425,19 @@
                 CornerRadius="{DynamicResource Ax.Radius}" Padding="6"
                 Background="{DynamicResource Ax.Surface}">
           <StackPanel Spacing="6">
-            <TextBlock x:Name="PiRunStatus" Text="" Foreground="{DynamicResource Ax.Muted}"
-                       FontSize="12" TextWrapping="Wrap" />
+            <!-- Composer reconnect (repair gate): a dropped connection with
+                 a non-empty feed offers Reconnect right where the status
+                 demands it — reachable by mouse, keyboard tab and UIA,
+                 never menu-only. Hidden while connected, busy or empty
+                 (the empty state owns that case). -->
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+              <TextBlock x:Name="PiRunStatus" Text="" Foreground="{DynamicResource Ax.Muted}"
+                         FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" />
+              <Button Grid.Column="1" x:Name="ComposerReconnectButton" Classes="AxAction" Content="Reconnect"
+                      Click="ReconnectPi_OnClick" IsVisible="False" VerticalAlignment="Center"
+                      ToolTip.Tip="Reconnect the selected worker or workspace (session is persisted)"
+                      AutomationProperties.Name="Reconnect" />
+            </Grid>
             <!-- The text box is the interface: full composer width, keyboard-first.
                  Chord + Escape handled in code (PreviewKeyDown tunnel): XAML cannot
                  attach tunnel events. Send/Stop also lives on the button at the
@@ -534,22 +532,12 @@
           <TextBlock x:Name="ManagedPathsText" Text="" Foreground="{DynamicResource Ax.Muted}"
                      FontSize="12" TextWrapping="Wrap" />
           <StackPanel Orientation="Horizontal" Spacing="8">
-            <Button Content="Open sessions folder" Click="OpenSessions_OnClick" />
-            <Button Content="Open registry folder" Click="OpenRegistry_OnClick" />
+            <Button Classes="AxAction" Content="Open sessions folder" Click="OpenSessions_OnClick" />
+            <Button Classes="AxAction" Content="Open registry folder" Click="OpenRegistry_OnClick" />
           </StackPanel>
           <TextBlock Text="Workspace registration" FontWeight="SemiBold" />
-          <Button x:Name="AddWorkspaceButton" Content="Add project…" Click="AddWorkspace_OnClick"
+          <Button x:Name="AddWorkspaceButton" Classes="AxAction" Content="Add project…" Click="AddWorkspace_OnClick"
                   HorizontalAlignment="Left" />
-          <StackPanel x:Name="PendingConfirmPanel" Spacing="6" IsVisible="False">
-            <TextBlock x:Name="PendingConfirmText" Text="" Foreground="{DynamicResource Ax.Yellow}"
-                       FontSize="12" TextWrapping="Wrap" />
-            <StackPanel Orientation="Horizontal" Spacing="8">
-              <Button Content="Confirm registration" Click="ConfirmWorkspace_OnClick" />
-              <Button Content="Create worker here" Click="CreateWorker_OnClick"
-                      ToolTip.Tip="Create an independent Pi worker for the staged folder (separate process and session)" />
-              <Button Content="Cancel" Click="CancelWorkspace_OnClick" />
-            </StackPanel>
-          </StackPanel>
           <TextBlock Text="Engine" FontWeight="SemiBold" />
           <TextBlock x:Name="PiInfoText" Text="Pi engine not connected."
                      Foreground="{DynamicResource Ax.Muted}" FontSize="12" TextWrapping="Wrap" />

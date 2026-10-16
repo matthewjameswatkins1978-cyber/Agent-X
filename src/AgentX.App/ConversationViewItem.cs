@@ -58,6 +58,11 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
         var (toolName, toolSuffix) = ToolDisplay(header, seq);
         _toolName = toolName;
         _toolSuffix = toolSuffix;
+        // Neighbours unknown yet: detail rows start tight, everything else
+        // full. The sync pass applies GroupMargins once the row lands.
+        RowMargin = IsDetailRow
+            ? new Avalonia.Thickness(0, 1, 0, 1)
+            : new Avalonia.Thickness(0, 4, 0, 4);
         RefreshExpansion();
     }
 
@@ -103,12 +108,46 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
     /// compactions and plain notices stay full rows.
     public bool IsDetailRow => Role == "system" && IsDetailPrefix(FullText);
 
-    /// Row rhythm: detail rows sit tight (1px) so a call, its detail, its
-    /// result and the response read as one operation; all other rows keep
-    /// the shared 4px rhythm. One property, no per-control nudges.
-    public Avalonia.Thickness RowMargin => IsDetailRow
-        ? new Avalonia.Thickness(0, 1, 0, 1)
-        : new Avalonia.Thickness(0, 4, 0, 4);
+    private Avalonia.Thickness _rowMargin = new(0, 4, 0, 4);
+
+    /// Row rhythm, set by the host from neighbour roles (see
+    /// <see cref="GroupMargins"/>): turn anchors keep the full 4px
+    /// rhythm, rows inside one run join tight. Detail rows stay tight
+    /// always. Assigned, never guessed — no negative margins anywhere.
+    public Avalonia.Thickness RowMargin
+    {
+        get => _rowMargin;
+        set
+        {
+            if (_rowMargin != value)
+            {
+                _rowMargin = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RowMargin)));
+            }
+        }
+    }
+
+    /// Group-aware rhythm from neighbour roles. Turn anchors (user
+    /// prompts, receipts) always keep full margins; detail rows always
+    /// join tight; every other row joins whatever came before unless a
+    /// turn boundary intervenes. Pure so the rhythm is tested, not
+    /// eyeballed.
+    internal static Avalonia.Thickness GroupMargins(string? prevRole, FeedEntry entry, string? nextRole)
+    {
+        if (entry.Role is "tool" or "system" && IsDetailPrefix(entry.Text))
+        {
+            return new Avalonia.Thickness(0, 1, 0, 1);
+        }
+
+        if (entry.Role is "user" or "receipt")
+        {
+            return new Avalonia.Thickness(0, 4, 0, 4);
+        }
+
+        var top = prevRole is null or "user" or "receipt" ? 4 : 1;
+        var bottom = nextRole is null or "user" or "receipt" ? 4 : 1;
+        return new Avalonia.Thickness(0, top, 0, bottom);
+    }
 
     internal static bool IsDetailPrefix(string? text)
     {

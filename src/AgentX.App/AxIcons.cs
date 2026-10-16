@@ -154,6 +154,28 @@ public sealed class AxIcon : Avalonia.Controls.Shapes.Path
     public static readonly StyledProperty<IBrush?> TintProperty =
         AvaloniaProperty.Register<AxIcon, IBrush?>(nameof(Tint));
 
+    /// Centering translation for Uniform-fit geometry. Measured rendering
+    /// fits the ink box to the slot from its top-left, so narrow or tall
+    /// art (the rabbit) would hug the top-left while full-bleed icons look
+    /// centred. This pad centres every icon in its slot at the system
+    /// level — no per-icon nudges, no slot changes. Full-bleed icons
+    /// compute zero and keep a null transform. Pure so it is tested.
+    internal static Vector CenteringOffset(Size slot, Rect ink)
+    {
+        if (slot.Width <= 0 || slot.Height <= 0 || ink.Width <= 0 || ink.Height <= 0)
+        {
+            return new Vector(0, 0);
+        }
+
+        var scale = Math.Min(slot.Width / ink.Width, slot.Height / ink.Height);
+        if (!(scale > 0) || double.IsInfinity(scale))
+        {
+            return new Vector(0, 0);
+        }
+
+        return new Vector((slot.Width - ink.Width * scale) / 2, (slot.Height - ink.Height * scale) / 2);
+    }
+
     static AxIcon()
     {
         KindProperty.Changed.AddClassHandler<AxIcon>((c, _) => c.Refresh());
@@ -193,6 +215,37 @@ public sealed class AxIcon : Avalonia.Controls.Shapes.Path
         set => SetValue(TintProperty, value);
     }
 
+    protected override Size ArrangeOverride(Size finalSize)
+    {
+        var arranged = base.ArrangeOverride(finalSize);
+        ApplyOpticalCentering(finalSize);
+        return arranged;
+    }
+
+    /// Render-only centering (never layout): the transform moves ink
+    /// without moving the slot, so every datum check keeps measuring the
+    /// untouched geometry. Skipped while unlaid-out or full-bleed.
+    private void ApplyOpticalCentering(Size size)
+    {
+        var offset = Data is null ? new Vector(0, 0) : CenteringOffset(size, Data.Bounds);
+        if (offset.X == 0 && offset.Y == 0)
+        {
+            if (RenderTransform is not null)
+            {
+                RenderTransform = null;
+            }
+
+            return;
+        }
+
+        if (RenderTransform is not TranslateTransform current
+            || Math.Abs(current.X - offset.X) > 0.001
+            || Math.Abs(current.Y - offset.Y) > 0.001)
+        {
+            RenderTransform = new TranslateTransform(offset.X, offset.Y);
+        }
+    }
+
     private void Refresh()
     {
         try
@@ -203,6 +256,8 @@ public sealed class AxIcon : Avalonia.Controls.Shapes.Path
         {
             Data = null;
         }
+
+        ApplyOpticalCentering(Bounds.Size);
 
         var ink = Tint ?? AxTheme.IconBrush;
         if (Filled)
