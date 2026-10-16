@@ -118,6 +118,14 @@ public sealed class CoreEngineSettingsRuntime : IEngineSettingsRuntime
 
     public string UnavailableReason => DescribeUnavailable() ?? string.Empty;
 
+    public bool CanConfigureModels => DescribeModelsUnavailable(_currentWorker()) is null;
+
+    public string ModelUnavailableReason => DescribeModelsUnavailable(_currentWorker()) ?? string.Empty;
+
+    public bool CanConfigureThinking => DescribeThinkingUnavailable(_currentWorker()) is null;
+
+    public string ThinkingUnavailableReason => DescribeThinkingUnavailable(_currentWorker()) ?? string.Empty;
+
     private IWorkerEngineSettings? Current() => _currentWorker();
 
     /// <summary>Live availability: null when configurable, else the honest reason.</summary>
@@ -150,6 +158,86 @@ public sealed class CoreEngineSettingsRuntime : IEngineSettingsRuntime
     }
 
     /// <summary>
+    /// Per-dimension availability (list-AND-set pairing): a chooser must
+    /// never offer choices that fail on selection. List-only connections
+    /// report an honest unavailable reason instead of selectable options.
+    /// Static so the GUI can evaluate a CAPTURED worker (chooser binding)
+    /// with the same rules the live properties apply to the current one.
+    /// </summary>
+    public static string? DescribeModelsUnavailable(IWorkerEngineSettings? worker)
+    {
+        if (worker is null)
+        {
+            return "No worker is selected.";
+        }
+
+        if (!worker.IsConnected)
+        {
+            return "The selected worker is not connected to Pi.";
+        }
+
+        PiRpcCapabilities? caps = worker.Capabilities;
+        if (caps is null)
+        {
+            return "The selected worker's capabilities are not probed yet; connect first.";
+        }
+
+        if (caps.AvailableModels && caps.SetModel)
+        {
+            return null;
+        }
+
+        if (caps.AvailableModels && !caps.SetModel)
+        {
+            return "This Pi connection can list models but cannot apply a model change.";
+        }
+
+        if (!caps.AvailableModels && caps.SetModel)
+        {
+            return "This Pi connection cannot list models, so there is nothing to choose from.";
+        }
+
+        return "This Pi connection does not report model selection support.";
+    }
+
+    /// <summary>Thinking half of the list-and-set pairing (see above).</summary>
+    public static string? DescribeThinkingUnavailable(IWorkerEngineSettings? worker)
+    {
+        if (worker is null)
+        {
+            return "No worker is selected.";
+        }
+
+        if (!worker.IsConnected)
+        {
+            return "The selected worker is not connected to Pi.";
+        }
+
+        PiRpcCapabilities? caps = worker.Capabilities;
+        if (caps is null)
+        {
+            return "The selected worker's capabilities are not probed yet; connect first.";
+        }
+
+        if (caps.AvailableThinkingLevels && caps.SetThinkingLevel)
+        {
+            return null;
+        }
+
+        if (caps.AvailableThinkingLevels && !caps.SetThinkingLevel)
+        {
+            return "This Pi connection can list thinking levels but cannot apply a change.";
+        }
+
+        if (!caps.AvailableThinkingLevels && caps.SetThinkingLevel)
+        {
+            return "This Pi connection cannot list thinking levels, so there is nothing to choose from.";
+        }
+
+        return "This Pi connection does not report thinking-level selection support.";
+    }
+
+    /// <summary>
     /// Resolve once per operation: a selection change mid-call can never
     /// retarget an in-flight operation onto a different worker. A null
     /// provider result is this runtime's own case; every other failure
@@ -177,4 +265,19 @@ public sealed class CoreEngineSettingsRuntime : IEngineSettingsRuntime
 
     public Task SelectThinkingLevelAsync(string level, CancellationToken cancellationToken)
         => RequireWorker(nameof(SelectThinkingLevelAsync)).SetThinkingLevelAsync(level, cancellationToken);
+}
+
+/// <summary>
+/// Chooser binding rule: a model/thinking chooser is bound to the worker
+/// whose options it loaded. A choice may apply only while that same worker
+/// is still selected; after a tab switch the displayed choice must never
+/// land on another worker. The GUI captures the worker id at open, hides
+/// open choosers on selection change, and re-verifies this rule at both
+/// list-render and selection time.
+/// </summary>
+public static class EngineChooserPolicy
+{
+    public static bool MayApplyTo(string capturedWorkerId, string? currentWorkerId)
+        => currentWorkerId is not null
+            && string.Equals(capturedWorkerId, currentWorkerId, StringComparison.Ordinal);
 }

@@ -598,6 +598,7 @@ public partial class MainWindow : Window
     /// refusal, no process action — a foreground run continues on any tab.
     private void SwitchToWorker(PiWorker worker)
     {
+        CloseEngineChoosers();
         SaveWorkerViewState(_lastViewKey);
         _lastViewKey = WorkerViewKey.ForWorker(worker.Id);
         _selectedWorkerId = worker.Id;
@@ -824,6 +825,10 @@ public partial class MainWindow : Window
         {
             return;
         }
+
+        // End any bound chooser interaction: the open chooser belongs to
+        // the previous tab and must not offer its choices to this one.
+        CloseEngineChoosers();
 
         // Worker tabs bypass the workspace coordinator entirely: its
         // connected-pins-the-tab rule belongs to the single-connection
@@ -4121,11 +4126,14 @@ public partial class MainWindow : Window
             : $"({engine.Provider ?? "?"}) {engine.Model}";
         ThinkingButton.Content = engine.Thinking is null ? "Thinking: —" : engine.Thinking;
         UsageText.Text = engine.Messages is { } messages ? $"messages {messages:N0}" : "messages —";
-        var engineTip = _settingsRuntime.CanConfigure
+        var modelTip = _settingsRuntime.CanConfigureModels
             ? "Click to change (verified Core operation)"
-            : $"Selection pending: {_settingsRuntime.UnavailableReason}";
-        Avalonia.Controls.ToolTip.SetTip(ModelButton, $"Engine model. {engineTip}");
-        Avalonia.Controls.ToolTip.SetTip(ThinkingButton, $"Thinking level. {engineTip}");
+            : $"Selection unavailable: {_settingsRuntime.ModelUnavailableReason}";
+        var thinkingTip = _settingsRuntime.CanConfigureThinking
+            ? "Click to change (verified Core operation)"
+            : $"Selection unavailable: {_settingsRuntime.ThinkingUnavailableReason}";
+        Avalonia.Controls.ToolTip.SetTip(ModelButton, $"Engine model. {modelTip}");
+        Avalonia.Controls.ToolTip.SetTip(ThinkingButton, $"Thinking level. {thinkingTip}");
     }
 
     /// <summary>
@@ -4213,129 +4221,222 @@ public partial class MainWindow : Window
         return panel;
     }
 
+    /// <summary>
+    /// Close any open engine chooser: a tab switch ends the bound
+    /// interaction, so a stale choice can never apply to another worker.
+    /// The click-time <see cref="EngineChooserPolicy"/> check is the
+    /// backstop; this is the primary close on selection change.
+    /// </summary>
+    private void CloseEngineChoosers()
+    {
+        _modelFlyout?.Hide();
+        _thinkingFlyout?.Hide();
+    }
+
+    private static Avalonia.Controls.StackPanel EngineNotePanel(string title, string current, string note)
+    {
+        var panel = new Avalonia.Controls.StackPanel { Spacing = 6 };
+        panel.Children.Add(new Avalonia.Controls.TextBlock
+        {
+            Text = title,
+            FontSize = 12,
+            FontWeight = Avalonia.Media.FontWeight.Bold,
+        });
+        panel.Children.Add(new Avalonia.Controls.TextBlock
+        {
+            Text = current,
+            FontSize = 12,
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+        });
+        panel.Children.Add(new Avalonia.Controls.TextBlock
+        {
+            Text = note,
+            Foreground = new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#82889A")),
+            FontSize = 12,
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+        });
+        return panel;
+    }
+
     private async void ModelButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        _modelFlyout ??= new Avalonia.Controls.Flyout();
+        // Capture the worker for the FULL interaction: every later list
+        // and select call goes through this bound instance, never through
+        // the current-tab provider, so a tab switch mid-load or
+        // pre-selection cannot retarget the choice onto another worker.
+        var captured = SelectedWorker;
         var engine = ActiveEngine();
-        _modelFlyout.Content = BuildEngineFlyoutPanel("Engine model",
-            engine.Model is null
-                ? "No engine connected."
-                : $"Current: ({engine.Provider ?? "?"}) {engine.Model}");
+        var current = engine.Model is null
+            ? "No engine connected."
+            : $"Current: ({engine.Provider ?? "?"}) {engine.Model}";
+        _modelFlyout ??= new Avalonia.Controls.Flyout();
+        _modelFlyout.Content = BuildEngineFlyoutPanel("Engine model", current);
         _modelFlyout.ShowAt(ModelButton);
-        if (!_settingsRuntime.CanConfigure)
+        if (captured is null)
         {
             return;
         }
 
+        var bound = new PiWorkerEngineSettings(captured);
+        var capturedId = captured.Id;
+        if (CoreEngineSettingsRuntime.DescribeModelsUnavailable(bound) is { } unavailable)
+        {
+            _modelFlyout.Content = EngineNotePanel("Engine model", current, unavailable);
+            return;
+        }
+
+        IReadOnlyList<PiModelOption> options;
         try
         {
-            var models = await _settingsRuntime.ListModelsAsync(CancellationToken.None).ConfigureAwait(false);
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                var panel = BuildEngineFlyoutPanel("Engine model",
-                    engine.Model is null ? "No engine connected." : $"Current: ({engine.Provider ?? "?"}) {engine.Model}");
-                // Replace the trailing "Loading…" row with the real choices.
-                panel.Children.RemoveAt(panel.Children.Count - 1);
-                if (models.Count == 0)
-                {
-                    panel.Children.Add(new Avalonia.Controls.TextBlock { Text = "This connection reported no models.", FontSize = 12 });
-                }
-
-                foreach (var m in models)
-                {
-                    var caption = $"({m.Provider}) {m.DisplayName}";
-                    var item = new Button { Content = caption };
-                    item.Classes.Add("AxAction");
-                    var provider = m.Provider;
-                    var modelId = m.ModelId;
-                    item.Click += async (_, _) =>
-                    {
-                        try
-                        {
-                            await _settingsRuntime.SelectModelAsync(provider, modelId, CancellationToken.None).ConfigureAwait(false);
-                            await Dispatcher.UIThread.InvokeAsync(() =>
-                            {
-                                _modelFlyout.Hide();
-                                RefreshEngineSegments();
-                                RefreshOverviewAndSettings();
-                                StatusText.Text = $"Model switched to ({provider}) {modelId} — confirmed by engine state.";
-                            });
-                        }
-                        catch (Exception ex)
-                        {
-                            await Dispatcher.UIThread.InvokeAsync(() => StatusText.Text = $"Model switch failed: {ex.Message}");
-                        }
-                    };
-                    panel.Children.Add(item);
-                }
-
-                _modelFlyout.Content = panel;
-            });
+            options = await bound.GetModelsAsync(CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Cannot list models: {ex.Message}";
+            await Dispatcher.UIThread.InvokeAsync(() => StatusText.Text = $"Cannot list models: {ex.Message}");
+            return;
         }
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (!EngineChooserPolicy.MayApplyTo(capturedId, SelectedWorker?.Id))
+            {
+                _modelFlyout.Content = EngineNotePanel("Engine model", current,
+                    "Worker changed while loading — reopen the chooser for the current worker. Nothing applied.");
+                return;
+            }
+
+            var panel = BuildEngineFlyoutPanel("Engine model", current);
+            // Replace the trailing "Loading…" row with the real choices.
+            panel.Children.RemoveAt(panel.Children.Count - 1);
+            if (options.Count == 0)
+            {
+                panel.Children.Add(new Avalonia.Controls.TextBlock { Text = "This connection reported no models.", FontSize = 12 });
+            }
+
+            foreach (var m in options)
+            {
+                var caption = $"({m.Provider}) {m.Name}";
+                var item = new Button { Content = caption };
+                item.Classes.Add("AxAction");
+                var provider = m.Provider;
+                var modelId = m.Id;
+                item.Click += async (_, _) =>
+                {
+                    if (!EngineChooserPolicy.MayApplyTo(capturedId, SelectedWorker?.Id))
+                    {
+                        _modelFlyout.Hide();
+                        StatusText.Text = "Worker changed — reopen the chooser for the current worker. Nothing applied.";
+                        return;
+                    }
+
+                    try
+                    {
+                        await bound.SetModelAsync(provider, modelId, CancellationToken.None).ConfigureAwait(false);
+                        await Dispatcher.UIThread.InvokeAsync(() =>
+                        {
+                            _modelFlyout.Hide();
+                            RefreshEngineSegments();
+                            RefreshOverviewAndSettings();
+                            StatusText.Text = $"Model switched to ({provider}) {modelId} — confirmed by engine state.";
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        await Dispatcher.UIThread.InvokeAsync(() => StatusText.Text = $"Model switch failed: {ex.Message}");
+                    }
+                };
+                panel.Children.Add(item);
+            }
+
+            _modelFlyout.Content = panel;
+        });
     }
 
     private async void ThinkingButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        _thinkingFlyout ??= new Avalonia.Controls.Flyout();
+        // Same worker binding as the model chooser: capture once, verify
+        // at render and at selection, never resolve the current tab late.
+        var captured = SelectedWorker;
         var engine = ActiveEngine();
-        _thinkingFlyout.Content = BuildEngineFlyoutPanel("Thinking level",
-            engine.Thinking is null ? "No engine connected." : $"Current: {engine.Thinking}");
+        var current = engine.Thinking is null ? "No engine connected." : $"Current: {engine.Thinking}";
+        _thinkingFlyout ??= new Avalonia.Controls.Flyout();
+        _thinkingFlyout.Content = BuildEngineFlyoutPanel("Thinking level", current);
         _thinkingFlyout.ShowAt(ThinkingButton);
-        if (!_settingsRuntime.CanConfigure)
+        if (captured is null)
         {
             return;
         }
 
+        var bound = new PiWorkerEngineSettings(captured);
+        var capturedId = captured.Id;
+        if (CoreEngineSettingsRuntime.DescribeThinkingUnavailable(bound) is { } unavailable)
+        {
+            _thinkingFlyout.Content = EngineNotePanel("Thinking level", current, unavailable);
+            return;
+        }
+
+        IReadOnlyList<string> levels;
         try
         {
-            var levels = await _settingsRuntime.ListThinkingLevelsAsync(CancellationToken.None).ConfigureAwait(false);
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                var panel = BuildEngineFlyoutPanel("Thinking level",
-                    engine.Thinking is null ? "No engine connected." : $"Current: {engine.Thinking}");
-                panel.Children.RemoveAt(panel.Children.Count - 1);
-                if (levels.Count == 0)
-                {
-                    panel.Children.Add(new Avalonia.Controls.TextBlock { Text = "This model reported no thinking levels.", FontSize = 12 });
-                }
-
-                foreach (var level in levels)
-                {
-                    var item = new Button { Content = level };
-                    item.Classes.Add("AxAction");
-                    var captured = level;
-                    item.Click += async (_, _) =>
-                    {
-                        try
-                        {
-                            await _settingsRuntime.SelectThinkingLevelAsync(captured, CancellationToken.None).ConfigureAwait(false);
-                            await Dispatcher.UIThread.InvokeAsync(() =>
-                            {
-                                _thinkingFlyout.Hide();
-                                RefreshEngineSegments();
-                                RefreshOverviewAndSettings();
-                                StatusText.Text = $"Thinking level switched to {captured} — confirmed by engine state.";
-                            });
-                        }
-                        catch (Exception ex)
-                        {
-                            await Dispatcher.UIThread.InvokeAsync(() => StatusText.Text = $"Thinking switch failed: {ex.Message}");
-                        }
-                    };
-                    panel.Children.Add(item);
-                }
-
-                _thinkingFlyout.Content = panel;
-            });
+            levels = await bound.GetThinkingLevelsAsync(CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Cannot list thinking levels: {ex.Message}";
+            await Dispatcher.UIThread.InvokeAsync(() => StatusText.Text = $"Cannot list thinking levels: {ex.Message}");
+            return;
         }
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (!EngineChooserPolicy.MayApplyTo(capturedId, SelectedWorker?.Id))
+            {
+                _thinkingFlyout.Content = EngineNotePanel("Thinking level", current,
+                    "Worker changed while loading — reopen the chooser for the current worker. Nothing applied.");
+                return;
+            }
+
+            var panel = BuildEngineFlyoutPanel("Thinking level", current);
+            panel.Children.RemoveAt(panel.Children.Count - 1);
+            if (levels.Count == 0)
+            {
+                panel.Children.Add(new Avalonia.Controls.TextBlock { Text = "This model reported no thinking levels.", FontSize = 12 });
+            }
+
+            foreach (var level in levels)
+            {
+                var item = new Button { Content = level };
+                item.Classes.Add("AxAction");
+                var capturedLevel = level;
+                item.Click += async (_, _) =>
+                {
+                    if (!EngineChooserPolicy.MayApplyTo(capturedId, SelectedWorker?.Id))
+                    {
+                        _thinkingFlyout.Hide();
+                        StatusText.Text = "Worker changed — reopen the chooser for the current worker. Nothing applied.";
+                        return;
+                    }
+
+                    try
+                    {
+                        await bound.SetThinkingLevelAsync(capturedLevel, CancellationToken.None).ConfigureAwait(false);
+                        await Dispatcher.UIThread.InvokeAsync(() =>
+                        {
+                            _thinkingFlyout.Hide();
+                            RefreshEngineSegments();
+                            RefreshOverviewAndSettings();
+                            StatusText.Text = $"Thinking level switched to {capturedLevel} — confirmed by engine state.";
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        await Dispatcher.UIThread.InvokeAsync(() => StatusText.Text = $"Thinking switch failed: {ex.Message}");
+                    }
+                };
+                panel.Children.Add(item);
+            }
+
+            _thinkingFlyout.Content = panel;
+        });
     }
 
     private async Task DisconnectPiAsync()
