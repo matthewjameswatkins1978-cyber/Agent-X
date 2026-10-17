@@ -2344,7 +2344,7 @@ public partial class MainWindow : Window
             StopFlushTimerIfIdle();
             FlushLive(); // Keep whatever streamed before cancellation — never drop partial work.
             _feed.EndAssistantTurn(_liveSeq, null);
-            _feed.AddSystemNotice("Run cancelled — partial streamed text above is kept as-is. History refreshes on next connect.");
+            _feed.AddCancelNotice("Run cancelled — partial streamed text above is kept as-is. History refreshes on next connect.");
             _feed.SetActivity(null);
             RebuildSessionMap();
             RefreshOverviewAndSettings();
@@ -3228,7 +3228,7 @@ public partial class MainWindow : Window
     /// Effective visibility: Avalonia keeps IsVisible true on children of
     /// a hidden panel (only rendering skips them), while their bounds go
     /// stale — so any explicitly hidden ancestor disqualifies the subtree.
-    private static bool IsEffectivelyVisible(Avalonia.Controls.Control element)
+    private static new bool IsEffectivelyVisible(Avalonia.Controls.Control element)
     {
         Avalonia.Visual? node = element;
         while (node is not null)
@@ -3552,10 +3552,20 @@ public partial class MainWindow : Window
         }
         else
         {
-            var healthy = !receipt.IsError && receipt.Note != "needs review";
-            OvVerifyTitle.Text = healthy ? "Latest run healthy" : receipt.IsError ? "Run failed" : "Run needs review";
-            OvVerifyIcon.Kind = healthy ? AxIconKind.Check : AxIconKind.Warn;
-            OvVerifyIcon.Tint = healthy ? AxTheme.GreenBrush : receipt.IsError ? AxTheme.RedBrush : AxTheme.YellowBrush;
+            // Health is literal: only a "healthy" receipt note earns the
+            // title. A neutral settle ("no reply") is neither success
+            // nor failure — it says so, quietly.
+            var healthy = !receipt.IsError && receipt.Note == "healthy";
+            var needsReview = receipt.Note == "needs review";
+            OvVerifyTitle.Text = healthy ? "Latest run healthy"
+                : receipt.IsError ? "Run failed"
+                : needsReview ? "Run needs review"
+                : "Turn complete — no reply text";
+            OvVerifyIcon.Kind = healthy || (!receipt.IsError && !needsReview) ? AxIconKind.Check : AxIconKind.Warn;
+            OvVerifyIcon.Tint = healthy ? AxTheme.GreenBrush
+                : receipt.IsError ? AxTheme.RedBrush
+                : needsReview ? AxTheme.YellowBrush
+                : AxTheme.MutedBrush;
             OvVerifyDetail.Text = receipt.Text;
         }
 

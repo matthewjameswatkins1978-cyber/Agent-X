@@ -311,12 +311,21 @@ public sealed class ConversationFeed
 
             if (receipt is not null)
             {
+                // Three honest states: settled runs with unresolved
+                // problems need review (amber); runs that never completed
+                // fail (red); an empty settle is neutral and anything else
+                // is healthy. Recovered tool errors stay visible as tool
+                // rows and in the error count — the receipt just refuses
+                // to bill them as a current failure.
+                var needsReview = receipt.Aborted || receipt.UnresolvedErrorCount > 0;
+                var failed = receipt.Aborted || !receipt.Settled;
+                var note = needsReview ? "needs review" : !receipt.HasReply ? "no reply" : "healthy";
                 _entries.Add(new FeedEntry(
                     _nextSeq++,
                     "receipt",
                     receipt.Display,
-                    Note: receipt.RunHealthy ? "healthy" : "needs review",
-                    IsError: !receipt.RunHealthy));
+                    Note: note,
+                    IsError: failed));
             }
         }
 
@@ -814,6 +823,13 @@ public sealed class ConversationFeed
 
     public long AddSystemNotice(string text)
         => Add(new FeedEntry(NextSeq(), "system", text));
+
+    /// Cancellation notice: a distinct note so attention can tell "the
+    /// latest run was cancelled" apart from "the latest settled run
+    /// failed" — the cancelled run earned no health signal either way,
+    /// and a stale receipt must never speak for it.
+    public long AddCancelNotice(string text)
+        => Add(new FeedEntry(NextSeq(), "system", text, Note: "cancelled"));
 
     public void SetActivity(string? activity)
     {

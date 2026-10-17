@@ -44,7 +44,9 @@ public sealed record PiToolActivity(
 /// <summary>
 /// Outcome of one prompt run. Idle (Pi has no automatic work left) is not the
 /// same as healthy, and healthy is not the same as externally verified: only
-/// a settled, non-aborted run with no observed errors counts as healthy.
+/// a settled, non-aborted run with no UNRESOLVED errors and a non-empty
+/// reply counts as healthy. Recovered tool errors stay on the record but
+/// never demand review; an empty settle is neutral, never success.
 /// Whether the task output passes acceptance checks is a separate question
 /// answered outside this receipt.
 /// </summary>
@@ -55,15 +57,83 @@ public sealed record PiRunReceipt(
     int AssistantChars,
     int MessageCount)
 {
-    public bool RunHealthy => Settled && !Aborted && ErrorCount == 0;
+    /// Observed error events with no later observed recovery in the same
+    /// run: a failed tool call followed by a successful one counts as
+    /// recovered (the agent demonstrably moved past it); abort/transport,
+    /// extension and message errors never do. Defaults to
+    /// <see cref="ErrorCount"/> so directly constructed receipts keep the
+    /// historical all-unresolved meaning. Only this count — never the raw
+    /// observed total — can demand human review.
+    public int UnresolvedErrorCount { get; init; } = ErrorCount;
+
+    /// Whether Pi produced any reply text. An empty settle is a neutral
+    /// completion, never a healthy run: no outcome is claimed either way.
+    public bool HasReply => AssistantChars > 0;
+
+    public bool RunHealthy => Settled && !Aborted && UnresolvedErrorCount == 0 && HasReply;
 
     public string Display => !Settled
         ? "Not settled — Pi may still have automatic work pending."
         : Aborted
             ? "Aborted — task did not complete."
-            : ErrorCount > 0
-                ? $"Settled with {ErrorCount} problem{(ErrorCount == 1 ? "" : "s")} — review before trusting this answer."
-                : "Healthy — settled cleanly with no observed errors. (Output correctness needs separate acceptance checks.)";
+            : UnresolvedErrorCount > 0
+                ? $"Settled with {UnresolvedErrorCount} problem{(UnresolvedErrorCount == 1 ? "" : "s")} ({ErrorCount} observed) — review before trusting this answer."
+                : !HasReply
+                    ? "Turn complete — Pi provided no reply text; no task outcome claimed."
+                    : ErrorCount > 0
+                        ? $"Settled with {ErrorCount} recovered tool error{(ErrorCount == 1 ? "" : "s")} — failures preserved in the feed; output correctness needs separate acceptance checks."
+                        : "Healthy — settled cleanly with no observed errors. (Output correctness needs separate acceptance checks.)";
+}
+
+/// Per-run error accounting for <see cref="PiConversation.SendAsync"/>.
+/// Every observed failure is kept as evidence; only failures with no later
+/// observed recovery stay unresolved: a successful tool completion proves
+/// the agent moved past earlier tool failures, so they must not demand
+/// human review. Extension, message and retry-exhaustion errors never
+/// recover this way. Sequential use only (one instance per run, fed from
+/// the event callback).
+internal sealed class RunOutcomeTracker
+{
+    public int ObservedErrors { get; private set; }
+
+    public int UnresolvedErrors => _pendingToolFailures + _hardErrors;
+
+    public void Add(PiRpcEventArgs args)
+    {
+        try
+        {
+            var root = args.Record.RootElement;
+            var type = PiRpcFraming.GetEventType(args.Record);
+            if (type == "tool_execution_end")
+            {
+                if (root.TryGetProperty("isError", out var isError)
+                    && isError.ValueKind == JsonValueKind.True)
+                {
+                    ObservedErrors++;
+                    _pendingToolFailures++;
+                }
+                else
+                {
+                    _pendingToolFailures = 0;
+                }
+
+                return;
+            }
+
+            if (PiConversation.IsHardRunError(args.Record))
+            {
+                ObservedErrors++;
+                _hardErrors++;
+            }
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or JsonException)
+        {
+            // A malformed event must never break error accounting.
+        }
+    }
+
+    private int _pendingToolFailures;
+    private int _hardErrors;
 }
 
 /// <summary>
@@ -339,10 +409,10 @@ public sealed class PiConversation : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(message);
-        var errors = 0;
+        var outcomes = new RunOutcomeTracker();
         var client = Client;
 
-        void Counter(object? sender, PiRpcEventArgs args) => CountRunError(args, ref errors);
+        void Counter(object? sender, PiRpcEventArgs args) => outcomes.Add(args);
         client.EventReceived += Counter;
         try
         {
@@ -357,9 +427,12 @@ public sealed class PiConversation : IAsyncDisposable
             var receipt = new PiRunReceipt(
                 Settled: true,
                 Aborted: aborted,
-                ErrorCount: errors,
+                ErrorCount: outcomes.ObservedErrors,
                 AssistantChars: text.Length,
-                MessageCount: state.MessageCount);
+                MessageCount: state.MessageCount)
+            {
+                UnresolvedErrorCount = outcomes.UnresolvedErrors,
+            };
             LastReceipt = receipt;
             await RefreshHistoryAsync(CancellationToken.None).ConfigureAwait(false);
 
@@ -621,6 +694,8 @@ public sealed class PiConversation : IAsyncDisposable
 
     internal static void CountRunError(PiRpcEventArgs args, ref int errors)
     {
+        // Observed-error counting only: whether a failure was later
+        // recovered is per-run state owned by RunOutcomeTracker below.
         try
         {
             var root = args.Record.RootElement;
@@ -635,30 +710,8 @@ public sealed class PiConversation : IAsyncDisposable
                     }
 
                     break;
-                case "extension_error":
-                    errors++;
-                    break;
-                case "message_update":
-                    if (root.TryGetProperty("assistantMessageEvent", out var nested)
-                        && nested.TryGetProperty("type", out var nestedType)
-                        && nestedType.GetString() == "error")
-                    {
-                        errors++;
-                    }
-
-                    break;
-                case "message_end":
-                    if (root.TryGetProperty("message", out var message)
-                        && message.TryGetProperty("stopReason", out var stop)
-                        && stop.GetString() == "error")
-                    {
-                        errors++;
-                    }
-
-                    break;
-                case "auto_retry_end":
-                    if (root.TryGetProperty("success", out var success)
-                        && success.ValueKind == JsonValueKind.False)
+                default:
+                    if (IsHardRunError(args.Record))
                     {
                         errors++;
                     }
@@ -669,6 +722,35 @@ public sealed class PiConversation : IAsyncDisposable
         catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or JsonException)
         {
             // A malformed event must never break error accounting.
+        }
+    }
+
+    /// Non-tool run errors: extension failures, agent message errors and
+    /// exhausted auto-retries. These never recover within a run — only a
+    /// later successful tool completion proves the agent moved past a TOOL
+    /// failure. Shared by the observed counter above and the tracker's
+    /// unresolved accounting so the two can never disagree on what counts.
+    /// Callers hold the malformed-record guard (KeyNotFound/Json/Invalid).
+    internal static bool IsHardRunError(JsonDocument record)
+    {
+        var root = record.RootElement;
+        switch (PiRpcFraming.GetEventType(record))
+        {
+            case "extension_error":
+                return true;
+            case "message_update":
+                return root.TryGetProperty("assistantMessageEvent", out var nested)
+                    && nested.TryGetProperty("type", out var nestedType)
+                    && nestedType.GetString() == "error";
+            case "message_end":
+                return root.TryGetProperty("message", out var message)
+                    && message.TryGetProperty("stopReason", out var stop)
+                    && stop.GetString() == "error";
+            case "auto_retry_end":
+                return root.TryGetProperty("success", out var success)
+                    && success.ValueKind == JsonValueKind.False;
+            default:
+                return false;
         }
     }
 

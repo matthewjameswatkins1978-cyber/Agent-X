@@ -719,7 +719,7 @@ public sealed class PiWorker : IAsyncDisposable
         catch (OperationCanceledException)
         {
             Feed.EndAssistantTurn(seq, null);
-            Feed.AddSystemNotice(
+            Feed.AddCancelNotice(
                 "Run cancelled — partial streamed text above is kept as-is; history reconciles on the next run or reconnect.");
             throw;
         }

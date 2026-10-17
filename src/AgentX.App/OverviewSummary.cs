@@ -33,22 +33,62 @@ public enum ActivityOutcome
 public static class OverviewSummary
 {
     /// <summary>
-    /// Title-row attention: the latest receipt is the latest word. An
-    /// unhealthy settle warns; a healthy one quiets earlier errors (they
-    /// stay visible under Verification and in the timeline — never
-    /// discarded, just not mistaken for a new failure). Only when no run
-    /// has settled do bare session errors raise attention on their own.
+    /// Title-row attention: the latest receipt is the latest word about
+    /// its own run — but never about a LATER one. Errors after the latest
+    /// settle belong to the current unsettled run and warn on their own;
+    /// a trailing cancellation replaces a stale receipt instead of letting
+    /// it speak. A settled run with only recovered tool errors stays quiet
+    /// (the failures remain under Verification and in the timeline); an
+    /// empty settle is neutral, never a success claim. Only runs with no
+    /// settle at all bill bare session errors to attention.
     /// </summary>
     public static AttentionState AttentionFor(
         bool connected, bool busy, IReadOnlyList<FeedEntry> entries, int errorCount)
     {
-        FeedEntry? receipt = null;
-        foreach (var entry in entries)
+        if (busy)
         {
-            if (entry.Role == "receipt")
+            return new AttentionState("Working — run in progress.", AttentionLevel.Ok);
+        }
+
+        FeedEntry? receipt = null;
+        var receiptIndex = -1;
+        for (var i = 0; i < entries.Count; i++)
+        {
+            if (entries[i].Role == "receipt")
             {
-                receipt = entry;
+                receipt = entries[i];
+                receiptIndex = i;
             }
+        }
+
+        var errorsAfter = 0;
+        var cancelledAfter = false;
+        for (var i = receiptIndex + 1; i < entries.Count; i++)
+        {
+            if (entries[i].Role != "receipt" && entries[i].IsError)
+            {
+                errorsAfter++;
+            }
+
+            if (entries[i].Note == "cancelled")
+            {
+                cancelledAfter = true;
+            }
+        }
+
+        if (cancelledAfter && errorsAfter == 0)
+        {
+            return new AttentionState(
+                "Last run cancelled — run did not complete and earned no health signal.",
+                AttentionLevel.Guidance);
+        }
+
+        if (errorsAfter > 0)
+        {
+            var afterPlural = errorsAfter == 1 ? "event" : "events";
+            return new AttentionState(
+                $"{errorsAfter} error {afterPlural} since the last settled run — review before trusting.",
+                AttentionLevel.Warning);
         }
 
         if (receipt is not null)
@@ -58,9 +98,17 @@ public static class OverviewSummary
                 return new AttentionState($"Failed: {Short(receipt.Text, 90)}", AttentionLevel.Failed);
             }
 
-            return receipt.Note == "needs review"
-                ? new AttentionState($"Needs review: {Short(receipt.Text, 90)}", AttentionLevel.Warning)
-                : new AttentionState("No attention requested.", AttentionLevel.Ok);
+            if (receipt.Note == "needs review")
+            {
+                return new AttentionState($"Needs review: {Short(receipt.Text, 90)}", AttentionLevel.Warning);
+            }
+
+            if (receipt.Note == "no reply")
+            {
+                return new AttentionState("Turn complete — no reply text from Pi.", AttentionLevel.Ok);
+            }
+
+            return new AttentionState("No attention requested.", AttentionLevel.Ok);
         }
 
         if (errorCount > 0)
@@ -72,11 +120,6 @@ public static class OverviewSummary
         if (!connected)
         {
             return new AttentionState("Not connected — press Connect on the Feed page.", AttentionLevel.Guidance);
-        }
-
-        if (busy)
-        {
-            return new AttentionState("Working — run in progress.", AttentionLevel.Ok);
         }
 
         return new AttentionState("No attention requested.", AttentionLevel.Ok);
@@ -184,11 +227,15 @@ public static class OverviewSummary
 
         if (receipt is not null)
         {
+            // A neutral settle ("no reply" or any future non-review note)
+            // records no outcome: Unknown, honestly — never Healthy.
             return receipt.IsError
                 ? ActivityOutcome.Failed
                 : receipt.Note == "needs review"
                     ? ActivityOutcome.NeedsReview
-                    : ActivityOutcome.Healthy;
+                    : receipt.Note == "healthy"
+                        ? ActivityOutcome.Healthy
+                        : ActivityOutcome.Unknown;
         }
 
         return failedTool ? ActivityOutcome.Failed : ActivityOutcome.Unknown;
