@@ -108,6 +108,13 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
     /// compactions and plain notices stay full rows.
     public bool IsDetailRow => Role == "system" && IsDetailPrefix(FullText);
 
+    /// View-layer density rule (presentation only — the feed keeps every
+    /// row): transport detail rows must not read as ordinary chat lines,
+    /// so normal conversation folds them away. Full Trace reveals them;
+    /// tool rows keep their own expanders and the tap retains everything.
+    internal static bool ShouldShow(FeedEntry entry, bool showDiagnostics)
+        => showDiagnostics || !(entry.Role == "system" && IsDetailPrefix(entry.Text));
+
     private Avalonia.Thickness _rowMargin = new(0, 4, 0, 4);
 
     /// Row rhythm, set by the host from neighbour roles (see
@@ -322,6 +329,69 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
 
     /// Plain dim rows: system/bridge/receipt rows that are not compaction.
     public bool IsPlainSystemRow => IsSystemRow && !IsCompaction;
+
+    private bool _isFinalReport;
+
+    /// The run's settled closing word: an assistant row immediately
+    /// followed by a receipt. Position only, never content — restored
+    /// history carries no receipts and cancelled turns end in notices,
+    /// so neither outlines. Assigned by the host during sync.
+    public bool IsFinalReport
+    {
+        get => _isFinalReport;
+        set
+        {
+            if (_isFinalReport != value)
+            {
+                _isFinalReport = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsFinalReport)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPlainAssistant)));
+            }
+        }
+    }
+
+    /// Assistant rows that are not the final report (the ordinary case).
+    public bool IsPlainAssistant => IsAssistant && !IsFinalReport;
+
+    /// Position test for the final-report outline: the visible entry at
+    /// index is an assistant row closed by a receipt in the same cluster
+    /// (a later user prompt ends the cluster first). Live turns stream
+    /// into the row opened BEFORE the tools run, so adjacency is not the
+    /// test — cluster membership is. Restored history carries no receipts
+    /// and cancelled turns end in notices, so neither outlines.
+    internal static bool ClosesReport(IReadOnlyList<FeedEntry> visible, int index, bool showDiagnostics)
+    {
+        if (index < 0 || index >= visible.Count || visible[index].Role != "assistant")
+        {
+            return false;
+        }
+
+        for (var i = index + 1; i < visible.Count; i++)
+        {
+            if (!ShouldShow(visible[i], showDiagnostics))
+            {
+                continue;
+            }
+
+            if (visible[i].Role == "receipt")
+            {
+                return true;
+            }
+
+            if (visible[i].Role == "user")
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    /// Streaming caret: a subtle block cursor on the live assistant row so
+    /// readers see genuine Pi deltas landing. View-only — FullText (the
+    /// copy source) never carries it, and it vanishes on settle.
+    internal static string StreamingDisplay(string displayText, bool isStreaming)
+        => isStreaming ? displayText + " ▍" : displayText;
 
     public string FullText
     {

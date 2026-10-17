@@ -358,7 +358,7 @@
                         </StackPanel>
                       </Border>
                     </Grid>
-                    <StackPanel IsVisible="{Binding IsAssistant}" Spacing="2">
+                    <StackPanel IsVisible="{Binding IsPlainAssistant}" Spacing="2">
                       <app:MarkdownView Markdown="{Binding Markdown}" TextWrapping="Wrap"
                                             FontSize="14" />
                       <SelectableTextBlock IsVisible="{Binding Markdown, Converter={x:Static conv:ObjectConverters.IsNull}}"
@@ -367,6 +367,20 @@
                                                  FontSize="{DynamicResource Ax.FeedFontSize}"
                                                  LineHeight="{DynamicResource Ax.FeedLineHeight}" />
                     </StackPanel>
+                    <!-- Settled closing word: one subtle outline, never a box
+                         for ordinary messages. Content stays selectable. -->
+                    <Border IsVisible="{Binding IsFinalReport}" BorderBrush="{DynamicResource Ax.Border}"
+                            BorderThickness="1" CornerRadius="{DynamicResource Ax.Radius}" Padding="10,8">
+                      <StackPanel Spacing="2">
+                        <app:MarkdownView Markdown="{Binding Markdown}" TextWrapping="Wrap"
+                                              FontSize="14" />
+                        <SelectableTextBlock IsVisible="{Binding Markdown, Converter={x:Static conv:ObjectConverters.IsNull}}"
+                                                   Text="{Binding DisplayText}" TextWrapping="Wrap"
+                                                   FontFamily="{DynamicResource Ax.ProseFont}"
+                                                   FontSize="{DynamicResource Ax.FeedFontSize}"
+                                                   LineHeight="{DynamicResource Ax.FeedLineHeight}" />
+                      </StackPanel>
+                    </Border>
                     <!-- Tool: tinted block, muted hairline, 3px state edge,
                          Pi name header + dim suffix, diff-tinted mono body. -->
                     <Grid IsVisible="{Binding IsTool}" ColumnDefinitions="3,*">
@@ -501,7 +515,7 @@
                     IsCheckedChanged="SettingsAutoScrollCheck_OnChanged" />
           <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
             <TextBlock Text="Detail level" VerticalAlignment="Center"
-                       ToolTip.Tip="Compact hides tool detail rows. Detailed (default) shows operations inline. Full trace adds diagnostics." />
+                       ToolTip.Tip="Compact stops new tool detail rows. Detailed folds transport details away (tool expanders keep them). Full trace shows every diagnostic row." />
             <ComboBox Grid.Column="1" x:Name="VisibilityCombo" MinWidth="160"
                       SelectionChanged="VisibilityCombo_OnChanged" />
           </Grid>

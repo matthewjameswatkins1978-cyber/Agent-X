@@ -2581,6 +2581,7 @@ public partial class MainWindow : Window
         }
 
         var follow = false;
+        var showDiagnostics = ShowDiagnostics();
         // Structural = anything derived views must re-read (new rows, tool
         // closes, reconciles). Pure streaming growth skips the map/overview
         // rebuild: the tick already shows the text and the live activity.
@@ -2588,6 +2589,14 @@ public partial class MainWindow : Window
         for (var si = 0; si < snapshot.Count; si++)
         {
             var entry = snapshot[si];
+            if (!ConversationViewItem.ShouldShow(entry, showDiagnostics))
+            {
+                // Folded transport detail: no view row, but the sequence
+                // frontier still advances past it.
+                _shownSeq = Math.Max(_shownSeq, entry.Seq);
+                continue;
+            }
+
             if (!bySeq.TryGetValue(entry.Seq, out var item))
             {
                 if (entry.Seq <= _shownSeq)
@@ -2596,22 +2605,60 @@ public partial class MainWindow : Window
                 }
 
                 item = ToViewItem(entry);
-                // Group rhythm from live neighbours (see GroupMargins):
-                // one operation joins tight, turn anchors keep air.
+                // Group rhythm from VISIBLE neighbours (folded detail rows
+                // take no space): one operation joins tight, turn anchors
+                // keep air.
                 item.RowMargin = ConversationViewItem.GroupMargins(
-                    si > 0 ? snapshot[si - 1].Role : null,
+                    VisibleNeighborRole(snapshot, si, -1, showDiagnostics),
                     entry,
-                    si + 1 < snapshot.Count ? snapshot[si + 1].Role : null);
+                    VisibleNeighborRole(snapshot, si, 1, showDiagnostics));
+                item.IsFinalReport = ConversationViewItem.ClosesReport(snapshot, si, showDiagnostics);
                 _conversationItems.Add(item);
                 bySeq[entry.Seq] = item;
-                // The row above just gained a neighbour below: rejoin it.
-                if (si > 0 && bySeq.TryGetValue(snapshot[si - 1].Seq, out var above)
-                    && !ReferenceEquals(above, item))
+                // A fresh receipt closes its cluster's assistant (the row
+                // opened before the tools ran, possibly far above); the
+                // row above also gained a neighbour below: rejoin it.
+                if (entry.Role == "receipt")
                 {
-                    above.RowMargin = ConversationViewItem.GroupMargins(
-                        si > 1 ? snapshot[si - 2].Role : null,
-                        snapshot[si - 1],
-                        entry.Role);
+                    for (var pi = si - 1; pi >= 0; pi--)
+                    {
+                        if (!ConversationViewItem.ShouldShow(snapshot[pi], showDiagnostics))
+                        {
+                            continue;
+                        }
+
+                        if (snapshot[pi].Role == "user")
+                        {
+                            break;
+                        }
+
+                        if (snapshot[pi].Role == "assistant"
+                            && bySeq.TryGetValue(snapshot[pi].Seq, out var prev)
+                            && prev.Kind == FeedBlockKind.Assistant)
+                        {
+                            prev.IsFinalReport = true;
+                            break;
+                        }
+                    }
+                }
+
+                for (var pi = si - 1; pi >= 0; pi--)
+                {
+                    if (!ConversationViewItem.ShouldShow(snapshot[pi], showDiagnostics))
+                    {
+                        continue;
+                    }
+
+                    if (bySeq.TryGetValue(snapshot[pi].Seq, out var above)
+                        && !ReferenceEquals(above, item))
+                    {
+                        above.RowMargin = ConversationViewItem.GroupMargins(
+                            VisibleNeighborRole(snapshot, pi, -1, showDiagnostics),
+                            snapshot[pi],
+                            entry.Role);
+                    }
+
+                    break;
                 }
 
                 _shownSeq = Math.Max(_shownSeq, entry.Seq);
@@ -2670,7 +2717,7 @@ public partial class MainWindow : Window
             && ConversationViewItem.HistoryToolPresentation(entry.Note, entry.Text) is { } historyStripped
             ? historyStripped.DisplayBody
             : body;
-        item.DisplayText = item.IsExpanded ? FeedEntry.TruncateExpanded(entry.Text) : FeedEntry.TruncateForDisplay(displaySource, cap);
+        item.DisplayText = item.IsExpanded ? FeedEntry.TruncateExpanded(entry.Text) : ConversationViewItem.StreamingDisplay(FeedEntry.TruncateForDisplay(displaySource, cap), entry.IsStreaming && item.Kind == FeedBlockKind.Assistant);
         if (item.Kind == FeedBlockKind.Assistant && !entry.IsStreaming && entry.Text.Length > 0 && item.Markdown is null)
         {
             item.Markdown = MarkdownLite.Parse(entry.Text);
@@ -2686,6 +2733,27 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Visibility preference to bridge level (Detailed default).</summary>
+    /// The view additionally folds historic detail rows unless Full (see
+    /// ConversationViewItem.ShouldShow); the combo handler rebuilds the
+    /// list so the change applies at once.
+    private bool ShowDiagnostics() => _prefs.Visibility == "Full";
+
+    /// Previous/next VISIBLE feed role around an index (folded transport
+    /// detail takes no space in rhythm or report detection).
+    private static string? VisibleNeighborRole(
+        IReadOnlyList<FeedEntry> snapshot, int index, int step, bool showDiagnostics)
+    {
+        for (var i = index; i >= 0 && i < snapshot.Count; i += step)
+        {
+            if (ConversationViewItem.ShouldShow(snapshot[i], showDiagnostics))
+            {
+                return snapshot[i].Role;
+            }
+        }
+
+        return null;
+    }
+
     private void ApplyVisibility()
     {
         _bridge.Level = _prefs.Visibility switch
@@ -2752,7 +2820,7 @@ public partial class MainWindow : Window
             entry.Seq,
             entry.Role,
             BuildHeader(entry, kind),
-            FeedEntry.TruncateForDisplay(displaySource, cap),
+            ConversationViewItem.StreamingDisplay(FeedEntry.TruncateForDisplay(displaySource, cap), entry.IsStreaming && kind == FeedBlockKind.Assistant),
             entry.Text,
             kind,
             entry.IsStreaming,
@@ -2873,15 +2941,26 @@ public partial class MainWindow : Window
         _conversationItems.Clear();
         _shownSeq = 0;
         var entries = ActiveFeed.Snapshot();
-        for (var i = 0; i < entries.Count; i++)
+        var showDiagnostics = ShowDiagnostics();
+        var visible = new List<FeedEntry>(entries.Count);
+        foreach (var candidate in entries)
         {
-            var item = ToViewItem(entries[i]);
+            if (ConversationViewItem.ShouldShow(candidate, showDiagnostics))
+            {
+                visible.Add(candidate);
+            }
+        }
+
+        for (var i = 0; i < visible.Count; i++)
+        {
+            var item = ToViewItem(visible[i]);
             item.RowMargin = ConversationViewItem.GroupMargins(
-                i > 0 ? entries[i - 1].Role : null,
-                entries[i],
-                i + 1 < entries.Count ? entries[i + 1].Role : null);
+                i > 0 ? visible[i - 1].Role : null,
+                visible[i],
+                i + 1 < visible.Count ? visible[i + 1].Role : null);
+            item.IsFinalReport = ConversationViewItem.ClosesReport(visible, i, showDiagnostics);
             _conversationItems.Add(item);
-            _shownSeq = Math.Max(_shownSeq, entries[i].Seq);
+            _shownSeq = Math.Max(_shownSeq, visible[i].Seq);
         }
 
         // Settled assistant rows get rich Markdown here (streaming rows get
@@ -2902,9 +2981,55 @@ public partial class MainWindow : Window
         UpdateEmptyState();
     }
 
+    /// Follow-logic: honour the AutoScroll preference but never yank the
+    /// reader away from older messages. Pure for tests; the host supplies
+    /// live viewer metrics and falls back to the preference alone while
+    /// the viewer is not realized.
+    internal static bool ShouldFollow(bool autoScrollPref, double offsetY, double viewportH, double extentH)
+    {
+        if (!autoScrollPref)
+        {
+            return false;
+        }
+
+        if (viewportH <= 0 || extentH <= 0)
+        {
+            return true;
+        }
+
+        return offsetY + viewportH >= extentH - 32;
+    }
+
+    private (double Viewport, double Extent) ConversationScrollMetrics()
+    {
+        try
+        {
+            var viewer = ConversationList
+                .GetVisualDescendants()
+                .OfType<Avalonia.Controls.ScrollViewer>()
+                .FirstOrDefault();
+            if (viewer is null)
+            {
+                return (0, 0);
+            }
+
+            return (viewer.Viewport.Height, viewer.Extent.Height);
+        }
+        catch
+        {
+            return (0, 0);
+        }
+    }
+
     private void MaybeAutoScroll()
     {
-        if (_prefs.AutoScroll && _conversationItems.Count > 0)
+        if (_conversationItems.Count == 0)
+        {
+            return;
+        }
+
+        var metrics = ConversationScrollMetrics();
+        if (ShouldFollow(_prefs.AutoScroll, ConversationScrollOffset(), metrics.Viewport, metrics.Extent))
         {
             ConversationList.ScrollIntoView(_conversationItems[^1]);
         }
@@ -3950,6 +4075,9 @@ public partial class MainWindow : Window
             _syncingPrefs = false;
         }
 
+        // The view folds historic detail rows (see ShouldShow): rebuild so
+        // the new level applies to existing rows at once, not just new ones.
+        RebuildConversationList();
         RebuildSessionMap();
         if (OverviewPanel.IsVisible)
         {
