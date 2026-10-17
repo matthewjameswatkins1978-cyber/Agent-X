@@ -35,6 +35,9 @@ public sealed class PiSessionTests
     {
         var ephemeral = PiRpcOptions.Default();
         Assert.Contains("--no-session", ephemeral.Arguments, StringComparison.Ordinal);
+        Assert.Contains("--no-extensions", ephemeral.Arguments, StringComparison.Ordinal);
+        Assert.Contains("--no-skills", ephemeral.Arguments, StringComparison.Ordinal);
+        Assert.Equal(3, ephemeral.Arguments.Split("--extension", StringSplitOptions.None).Length - 1);
         Assert.Null(ephemeral.WorkingDirectory);
 
         var root = Path.Combine(Path.GetTempPath(), $"agentx-{Guid.NewGuid():N}");
