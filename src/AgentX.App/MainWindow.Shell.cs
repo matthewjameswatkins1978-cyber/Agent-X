@@ -624,8 +624,11 @@ public partial class MainWindow
         }
     }
 
-    /// Step selection through feed rows whose display text contains the
-    /// query, wrapping around. No match leaves selection untouched.
+    /// Step selection through feed rows whose full text contains the
+    /// query, wrapping around. Searches the FEED (not just the visible
+    /// rows) so folded detail rows and truncated output stay discoverable;
+    /// a folded match is materialized as an explicitly revealed row.
+    /// No match leaves selection untouched.
     private void FindStep(int direction)
     {
         var query = FindBox.Text;
@@ -634,21 +637,183 @@ public partial class MainWindow
             return;
         }
 
-        var items = ConversationList.Items.OfType<ConversationViewItem>().ToList();
-        if (items.Count == 0)
+        var entries = ActiveFeed.Snapshot();
+        var selectedSeq = (ConversationList.SelectedItem as ConversationViewItem)?.Seq;
+        var at = FindNextMatch(entries, selectedSeq, query, direction);
+        if (at < 0)
         {
             return;
         }
 
-        var selected = ConversationList.SelectedIndex;
-        for (var step = 1; step <= items.Count; step++)
+        var item = EnsureViewRow(entries[at]);
+        if (item is null)
         {
-            var at = ((selected + (direction * step)) % items.Count + items.Count) % items.Count;
-            if (items[at].DisplayText?.Contains(query, StringComparison.OrdinalIgnoreCase) == true)
+            return;
+        }
+
+        ConversationList.SelectedItem = item;
+        ConversationList.ScrollIntoView(item);
+    }
+
+    /// Index of the next matching entry from the anchor, wrapping around;
+    /// -1 when nothing matches. Pure for tests. Matches full text so
+    /// folded and truncated content stays findable.
+    internal static int FindNextMatch(
+        IReadOnlyList<FeedEntry> entries, long? anchorSeq, string query, int direction)
+    {
+        if (entries.Count == 0 || string.IsNullOrWhiteSpace(query))
+        {
+            return -1;
+        }
+
+        var step = direction >= 0 ? 1 : -1;
+        var start = -1;
+        if (anchorSeq is { } seq)
+        {
+            for (var i = 0; i < entries.Count; i++)
             {
-                ConversationList.SelectedIndex = at;
-                ConversationList.ScrollIntoView(items[at]);
-                return;
+                if (entries[i].Seq == seq)
+                {
+                    start = i;
+                    break;
+                }
+            }
+        }
+
+        if (start < 0 && step < 0)
+        {
+            start = 0;
+        }
+
+        for (var k = 1; k <= entries.Count; k++)
+        {
+            var at = ((start + (step * k)) % entries.Count + entries.Count) % entries.Count;
+            if (entries[at].Text.Contains(query, StringComparison.OrdinalIgnoreCase))
+            {
+                return at;
+            }
+        }
+
+        return -1;
+    }
+
+    /// View row for a feed entry, materializing folded rows on explicit
+    /// find navigation. Inserted in snapshot order with visible-neighbor
+    /// rhythm; later syncs update it in place and rebuilds stay the
+    /// source of truth.
+    private ConversationViewItem? EnsureViewRow(FeedEntry entry)
+    {
+        foreach (var existing in _conversationItems)
+        {
+            if (existing.Seq == entry.Seq)
+            {
+                return existing;
+            }
+        }
+
+        var entries = ActiveFeed.Snapshot();
+        var showDiagnostics = ShowDiagnostics();
+        var entryIndex = -1;
+        var before = 0;
+        for (var i = 0; i < entries.Count; i++)
+        {
+            if (entries[i].Seq == entry.Seq)
+            {
+                entryIndex = i;
+                break;
+            }
+
+            if (ConversationViewItem.ShouldShow(entries[i], showDiagnostics))
+            {
+                before++;
+            }
+        }
+
+        if (entryIndex < 0)
+        {
+            return null;
+        }
+
+        var prevRole = VisibleNeighborRole(entries, entryIndex, -1, showDiagnostics);
+        var nextRole = VisibleNeighborRole(entries, entryIndex, 1, showDiagnostics);
+        var item = ToViewItem(entry);
+        item.RowMargin = ConversationViewItem.GroupMargins(prevRole, entry, nextRole);
+        item.IsFinalReport = ConversationViewItem.ClosesReport(entries, entryIndex, showDiagnostics);
+        var at = Math.Min(before, _conversationItems.Count);
+        _conversationItems.Insert(at, item);
+        RejoinSeam(entries, entryIndex, entry, at, showDiagnostics);
+        return item;
+    }
+
+    /// Rhythm + report outline around an inserted row: the row above gets
+    /// its new visible neighbour below, the row below its new neighbour
+    /// above, and a revealed receipt closes its cluster's assistant.
+    private void RejoinSeam(
+        IReadOnlyList<FeedEntry> entries, int entryIndex, FeedEntry entry, int at, bool showDiagnostics)
+    {
+        if (at > 0)
+        {
+            var aboveItem = _conversationItems[at - 1];
+            for (var pi = entryIndex - 1; pi >= 0; pi--)
+            {
+                if (!ConversationViewItem.ShouldShow(entries[pi], showDiagnostics))
+                {
+                    continue;
+                }
+
+                aboveItem.RowMargin = ConversationViewItem.GroupMargins(
+                    VisibleNeighborRole(entries, pi, -1, showDiagnostics),
+                    entries[pi],
+                    entry.Role);
+                break;
+            }
+        }
+
+        if (at + 1 < _conversationItems.Count)
+        {
+            var belowItem = _conversationItems[at + 1];
+            for (var ni = entryIndex + 1; ni < entries.Count; ni++)
+            {
+                if (!ConversationViewItem.ShouldShow(entries[ni], showDiagnostics))
+                {
+                    continue;
+                }
+
+                belowItem.RowMargin = ConversationViewItem.GroupMargins(
+                    entry.Role,
+                    entries[ni],
+                    VisibleNeighborRole(entries, ni, 1, showDiagnostics));
+                break;
+            }
+        }
+
+        if (entry.Role == "receipt")
+        {
+            for (var pi = entryIndex - 1; pi >= 0; pi--)
+            {
+                if (!ConversationViewItem.ShouldShow(entries[pi], showDiagnostics))
+                {
+                    continue;
+                }
+
+                if (entries[pi].Role == "user")
+                {
+                    break;
+                }
+
+                if (entries[pi].Role == "assistant")
+                {
+                    foreach (var candidate in _conversationItems)
+                    {
+                        if (candidate.Seq == entries[pi].Seq && candidate.Kind == FeedBlockKind.Assistant)
+                        {
+                            candidate.IsFinalReport = true;
+                            break;
+                        }
+                    }
+
+                    break;
+                }
             }
         }
     }

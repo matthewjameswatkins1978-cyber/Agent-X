@@ -142,4 +142,30 @@ public sealed class FeedPresentationTests
         Assert.Equal("Tools: read", group.Summary);
         Assert.Equal(ActivityOutcome.Healthy, group.Outcome);
     }
+
+    [Fact]
+    public void FindNextMatch_StepsWrapsAndReachesFoldedText()
+    {
+        var entries = new FeedEntry[]
+        {
+            Row(1, "user", "go"),
+            Row(2, "assistant", "working"),
+            Row(3, "system", "[detail ab12] read args: path=src/Foo.cs"),
+            Row(4, "receipt", "Healthy", "healthy"),
+        };
+        // Full-text match inside a folded detail row, from the top.
+        Assert.Equal(2, MainWindow.FindNextMatch(entries, anchorSeq: 1, query: "src/Foo", direction: 1));
+        // Wraps past the end back to the detail row.
+        Assert.Equal(2, MainWindow.FindNextMatch(entries, anchorSeq: 4, query: "src/Foo", direction: 1));
+        // Backward from the receipt lands on the detail row.
+        Assert.Equal(2, MainWindow.FindNextMatch(entries, anchorSeq: 4, query: "src/Foo", direction: -1));
+        // No anchor: forward starts at the first row, backward at the last.
+        Assert.Equal(0, MainWindow.FindNextMatch(entries, anchorSeq: null, query: "go", direction: 1));
+        Assert.Equal(3, MainWindow.FindNextMatch(entries, anchorSeq: null, query: "Healthy", direction: -1));
+        // Unknown anchor behaves like no anchor; empty query and no match fail closed.
+        Assert.Equal(0, MainWindow.FindNextMatch(entries, anchorSeq: 999, query: "go", direction: 1));
+        Assert.Equal(-1, MainWindow.FindNextMatch(entries, anchorSeq: 1, query: "   ", direction: 1));
+        Assert.Equal(-1, MainWindow.FindNextMatch(entries, anchorSeq: 1, query: "absent", direction: 1));
+        Assert.Equal(-1, MainWindow.FindNextMatch(Array.Empty<FeedEntry>(), anchorSeq: null, query: "go", direction: 1));
+    }
 }
