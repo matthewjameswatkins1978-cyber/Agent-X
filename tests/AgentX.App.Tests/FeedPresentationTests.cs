@@ -118,4 +118,28 @@ public sealed class FeedPresentationTests
     {
         Assert.Equal(expected, MainWindow.ShouldFollow(pref, offsetY, viewportH, extentH));
     }
+
+    [Fact]
+    public void TimelineAndMap_StayFreeOfTransportRows()
+    {
+        // Transport detail lives in the feed as evidence but must not leak
+        // into the timeline or the session map as ordinary activity.
+        var feed = new ConversationFeed();
+        feed.AddUser("go");
+        var turn = feed.BeginAssistantTurn();
+        feed.AppendDelta(turn, "working");
+        feed.AddToolStart("read", "src/Foo.cs", "src/Foo.cs", isMutating: false, callId: "c1");
+        feed.AddToolEnd("read", isError: false, callId: "c1");
+        feed.AddSystemNotice("[detail ab12] read args: path=src/Foo.cs");
+        feed.AddSystemNotice("[result ab12] Tool read: finished in 12 ms.");
+        feed.EndAssistantTurn(turn, new PiRunReceipt(true, false, 0, 7, 2));
+        var entries = feed.Snapshot();
+        var map = feed.BuildMap();
+        Assert.Equal(0, map.ErrorCount);
+        Assert.DoesNotContain(map.Milestones, m => m.Title.Contains("[detail", StringComparison.Ordinal));
+        Assert.DoesNotContain(map.Milestones, m => m.Title.Contains("[result", StringComparison.Ordinal));
+        var group = Assert.Single(OverviewSummary.GroupActivity(entries, false, 10));
+        Assert.Equal("Tools: read", group.Summary);
+        Assert.Equal(ActivityOutcome.Healthy, group.Outcome);
+    }
 }
