@@ -165,4 +165,39 @@ public sealed class TrustworthyRunStatusTests
         var attention = OverviewSummary.AttentionFor(true, false, entries, 1);
         Assert.Equal(AttentionLevel.Ok, attention.Level);
     }
+
+    [Fact]
+    public void OverviewFeedAndOutline_AgreeOnRecoveredRun()
+    {
+        // Live-demo shape: assistant streamed before the tools ran, one
+        // failure recovered, healthy receipt closes the cluster.
+        var entries = new FeedEntry[]
+        {
+            Row(1, "user", "go"),
+            Row(2, "assistant", "working\n## Report"),
+            Row(3, "tool", "Tool edit failed.", "failed: edit", true),
+            Row(4, "tool", "Tool edit finished.", "finished: edit"),
+            Row(5, "receipt", "Settled with 1 recovered tool error.", "healthy"),
+        };
+        Assert.Equal(AttentionLevel.Ok, OverviewSummary.AttentionFor(true, false, entries, 1).Level);
+        var group = Assert.Single(OverviewSummary.GroupActivity(entries, false, 10));
+        Assert.Equal(ActivityOutcome.Healthy, group.Outcome);
+        Assert.True(ConversationViewItem.ClosesReport(entries, 1, showDiagnostics: false));
+    }
+
+    [Fact]
+    public void OverviewFeedAndOutline_AgreeOnUnresolvedRun()
+    {
+        var entries = new FeedEntry[]
+        {
+            Row(1, "user", "go"),
+            Row(2, "assistant", "tried"),
+            Row(3, "tool", "Tool exec failed.", "failed: exec", true),
+            Row(4, "receipt", "Settled with 1 problem (1 observed).", "needs review"),
+        };
+        Assert.Equal(AttentionLevel.Warning, OverviewSummary.AttentionFor(true, false, entries, 1).Level);
+        var group = Assert.Single(OverviewSummary.GroupActivity(entries, false, 10));
+        Assert.Equal(ActivityOutcome.NeedsReview, group.Outcome);
+        Assert.True(ConversationViewItem.ClosesReport(entries, 1, showDiagnostics: false));
+    }
 }
