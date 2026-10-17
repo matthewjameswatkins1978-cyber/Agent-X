@@ -3228,7 +3228,7 @@ public partial class MainWindow : Window
     /// Effective visibility: Avalonia keeps IsVisible true on children of
     /// a hidden panel (only rendering skips them), while their bounds go
     /// stale — so any explicitly hidden ancestor disqualifies the subtree.
-    private static bool IsEffectivelyVisible(Avalonia.Controls.Control element)
+    private static new bool IsEffectivelyVisible(Avalonia.Controls.Control element)
     {
         Avalonia.Visual? node = element;
         while (node is not null)
