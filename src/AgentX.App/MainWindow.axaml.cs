@@ -3517,18 +3517,52 @@ public partial class MainWindow : Window
 
     /// Stop the flush tick only when nothing streams anywhere: concurrent
     /// worker runs share the tick with the workspace run.
+    /// <summary>Live-activity dot: breathes through the palette while a
+    /// run is genuinely live (worker or workspace), still the moment it
+    /// settles. Driven by the flush tick and every settle path — motion
+    /// exists if and only if work is happening. Dedicated brush instance:
+    /// theme brushes are shared, so this never recolors the app.</summary>
+    private long _pulseTick;
+    private readonly Avalonia.Media.SolidColorBrush _activityBrush =
+        new(Avalonia.Media.Color.Parse("#6B7280"));
+
+    private bool IsAgentBusy() => _busyWorkers.Count > 0 || _piBusy;
+
+    private void RefreshActivityDot()
+    {
+        if (!ReferenceEquals(ActivityDot.Fill, _activityBrush))
+        {
+            ActivityDot.Fill = _activityBrush;
+        }
+
+        if (IsAgentBusy())
+        {
+            _pulseTick++;
+            _activityBrush.Color = ActivityPulse.ColorFor(_pulseTick, busy: true);
+            Avalonia.Controls.ToolTip.SetTip(ActivityDot, "Agent working — live run in progress");
+        }
+        else
+        {
+            _activityBrush.Color = ActivityPulse.ColorFor(_pulseTick, busy: false);
+            Avalonia.Controls.ToolTip.SetTip(ActivityDot, "Agent idle");
+        }
+    }
+
     private void StopFlushTimerIfIdle()
     {
         if (_busyWorkers.Count == 0 && !_piBusy)
         {
             _flushTimer.Stop();
         }
+
+        RefreshActivityDot();
     }
 
     /// <summary>Move buffered deltas into the feed (10 Hz, not per delta).
     /// The feed's Changed post drives SyncFeedView; no direct UI work here.</summary>
     private void FlushLive()
     {
+        RefreshActivityDot();
         // Worker sinks: Core already appended every delta to the worker feed
         // on the RPC thread, so flushing here only bounds the buffers and
         // keeps lifetime totals for the status line. No feed writes from
