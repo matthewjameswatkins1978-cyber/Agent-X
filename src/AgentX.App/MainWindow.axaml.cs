@@ -4847,6 +4847,32 @@ public partial class MainWindow : Window
                     var item = new Button { Content = caption };
                     item.Classes.Add("AxAction");
                     Avalonia.Controls.ToolTip.SetTip(item, $"Model id: {m.Id}");
+                    item.KeyDown += (_, e) =>
+                    {
+                        // Full keyboard loop: Down/Up walks the choices,
+                        // Up from the first returns to search, Escape leaves.
+                        if (e.Key == Avalonia.Input.Key.Down || e.Key == Avalonia.Input.Key.Up)
+                        {
+                            var siblings = choicesBox.Children.OfType<Button>().ToList();
+                            var at = siblings.IndexOf(item);
+                            var next = e.Key == Avalonia.Input.Key.Down ? at + 1 : at - 1;
+                            if (next < 0)
+                            {
+                                searchBox.Focus();
+                            }
+                            else if (next < siblings.Count)
+                            {
+                                siblings[next].Focus();
+                            }
+
+                            e.Handled = true;
+                        }
+                        else if (e.Key == Avalonia.Input.Key.Escape)
+                        {
+                            _modelFlyout.Hide();
+                            e.Handled = true;
+                        }
+                    };
                     var provider = m.Provider;
                     var modelId = m.Id;
                     item.Click += async (_, _) =>
@@ -4894,6 +4920,12 @@ public partial class MainWindow : Window
                 {
                     var first = choicesBox.Children.OfType<Button>().FirstOrDefault();
                     first?.Focus();
+                    e.Handled = true;
+                }
+                else if (e.Key == Avalonia.Input.Key.Up)
+                {
+                    var last = choicesBox.Children.OfType<Button>().LastOrDefault();
+                    last?.Focus();
                     e.Handled = true;
                 }
                 else if (e.Key == Avalonia.Input.Key.Escape)
