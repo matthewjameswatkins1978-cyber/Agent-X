@@ -3060,6 +3060,7 @@ public partial class MainWindow : Window
     /// the reader scrolls away, never by merely reaching the bottom.
     private bool _jumpPending;
     private double _lastFeedOffset;
+    private double _lastFeedExtent;
 
     /// Pressing Go means "watch this run": latch follow so the first
     /// deltas land in view even if the reader was parked upstairs.
@@ -3081,13 +3082,20 @@ public partial class MainWindow : Window
     /// over — drop any pending jump/follow latch, then track visibility.
     private void FeedScroller_OnScrollChanged(object? sender, Avalonia.Controls.ScrollChangedEventArgs e)
     {
-        var now = _feedScroller?.Offset.Y ?? 0;
-        if (now < _lastFeedOffset - 1)
+        // Layout also moves the offset: folding, truncation and Markdown
+        // swaps shrink the extent and the viewer clamps along. Only an
+        // upward move BEYOND the extent shrink is the reader grabbing —
+        // a clamped offset drops by at most the shrink amount.
+        var viewer = _feedScroller;
+        var now = viewer?.Offset.Y ?? 0;
+        var extent = viewer?.Extent.Height ?? 0;
+        if (now < _lastFeedOffset - 1 && now - _lastFeedOffset < extent - _lastFeedExtent)
         {
             _jumpPending = false;
         }
 
         _lastFeedOffset = now;
+        _lastFeedExtent = extent;
         UpdateJumpToLiveVisibility();
     }
 
@@ -3111,6 +3119,7 @@ public partial class MainWindow : Window
 
         _feedScroller = viewer;
         _lastFeedOffset = viewer.Offset.Y;
+        _lastFeedExtent = viewer.Extent.Height;
         _feedScroller.ScrollChanged += FeedScroller_OnScrollChanged;
     }
 
