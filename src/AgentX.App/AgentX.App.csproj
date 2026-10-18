@@ -31,4 +31,6 @@
       <_Parameter1>AgentX.App.Tests</_Parameter1>
     </AssemblyAttribute>
   </ItemGroup>
+  <!-- Compile-time build identity (commit/branch/time); see BuildIdentity.targets. -->
+  <Import Project="BuildIdentity.targets" />
 </Project>

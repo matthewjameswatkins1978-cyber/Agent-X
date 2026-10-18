@@ -679,7 +679,7 @@
                      Foreground="{DynamicResource Ax.Muted}" FontSize="12"
                      VerticalAlignment="Center" />
         </Grid>
-        <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
+        <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="8">
           <TextBlock x:Name="UsageText" Grid.Column="0" Text="messages —"
                      Foreground="{DynamicResource Ax.Muted}" FontSize="12"
                      VerticalAlignment="Center"
@@ -697,6 +697,14 @@
                   Click="ThinkingButton_OnClick"
                   ToolTip.Tip="Thinking level (selection pending the Core operation)"
                   AutomationProperties.Name="Thinking level"
+                  Foreground="{DynamicResource Ax.Muted}" Background="Transparent" BorderThickness="0"
+                  Padding="4,0" FontSize="12" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="5" Text="•" Foreground="#6B7280" FontSize="12"
+                       VerticalAlignment="Center" />
+          <Button x:Name="VersionButton" Grid.Column="6" Content="Agent X"
+                  Click="VersionButton_OnClick"
+                  ToolTip.Tip="Build identity"
+                  AutomationProperties.Name="Build identity"
                   Foreground="{DynamicResource Ax.Muted}" Background="Transparent" BorderThickness="0"
                   Padding="4,0" FontSize="12" VerticalAlignment="Center" />
         </Grid>

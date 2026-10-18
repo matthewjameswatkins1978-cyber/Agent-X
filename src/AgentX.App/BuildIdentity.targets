@@ -1,0 +1,47 @@
+<Project>
+  <!--
+    Compile-time build identity for Agent X preview builds. Queries git for
+    the commit/branch/dirty state (degrading to unknown/detached/clean when
+    git is missing or the source is a plain copy, so such builds never fail)
+    and always stamps the UTC build time — which keeps same-commit builds
+    distinguishable without advancing the product version. Emits
+    BuildIdentity.g.cs with plain constants into the intermediate directory
+    (never the source tree), so the binary always describes the source and
+    moment that produced it — never the repository's current HEAD — and the
+    identity survives copying the built files elsewhere.
+  -->
+  <Target Name="GenerateBuildIdentity" BeforeTargets="CoreCompile">
+    <Exec Command="git -C &quot;$(MSBuildProjectDirectory)/../..&quot; rev-parse HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitHeadSha" />
+    </Exec>
+    <Exec Command="git -C &quot;$(MSBuildProjectDirectory)/../..&quot; rev-parse --short=7 HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitShortSha" />
+    </Exec>
+    <Exec Command="git -C &quot;$(MSBuildProjectDirectory)/../..&quot; branch --show-current" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitBranchName" />
+    </Exec>
+    <Exec Command="git -C &quot;$(MSBuildProjectDirectory)/../..&quot; status --porcelain=v1 --untracked-files=normal" ConsoleToMSBuild="true" IgnoreExitCode="true" StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" ItemName="GitStatusLines" />
+    </Exec>
+    <PropertyGroup>
+      <BuildCommitSha Condition="'$(GitHeadSha)' != ''">$(GitHeadSha)</BuildCommitSha>
+      <BuildCommitSha Condition="'$(GitHeadSha)' == ''">unknown</BuildCommitSha>
+      <BuildShortSha Condition="'$(GitShortSha)' != ''">$(GitShortSha)</BuildShortSha>
+      <BuildShortSha Condition="'$(GitShortSha)' == ''">unknown</BuildShortSha>
+      <BuildBranch Condition="'$(GitBranchName)' != ''">$(GitBranchName)</BuildBranch>
+      <BuildBranch Condition="'$(GitBranchName)' == ''">detached</BuildBranch>
+      <BuildSourceDirty Condition="'@(GitStatusLines)' != ''">true</BuildSourceDirty>
+      <BuildSourceDirty Condition="'@(GitStatusLines)' == ''">false</BuildSourceDirty>
+      <BuildTimestamp>$([System.DateTime]::UtcNow.ToString("o"))</BuildTimestamp>
+      <BuildDisplayVersion Condition="'$(VersionSuffix)' != ''">$(VersionPrefix)-$(VersionSuffix)</BuildDisplayVersion>
+      <BuildDisplayVersion Condition="'$(VersionSuffix)' == ''">$(VersionPrefix)</BuildDisplayVersion>
+      <BuildChannel Condition="'$(VersionSuffix)' != ''">Preview</BuildChannel>
+      <BuildChannel Condition="'$(VersionSuffix)' == '' and '$(Configuration)' == 'Release'">Production</BuildChannel>
+      <BuildChannel Condition="'$(VersionSuffix)' == '' and '$(Configuration)' != 'Release'">Development</BuildChannel>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(IntermediateOutputPath)BuildIdentity.g.cs" Overwrite="true" Encoding="UTF-8" Lines="// &lt;auto-generated /&gt; Agent X build identity: regenerated every compilation.;internal static class BuildIdentity;{;public const string ProductVersion = &quot;$(VersionPrefix)&quot;%3B;public const string PreviewSuffix = &quot;$(VersionSuffix)&quot;%3B;public const string DisplayVersion = &quot;$(BuildDisplayVersion)&quot;%3B;public const string CommitSha = &quot;$(BuildCommitSha)&quot;%3B;public const string ShortSha = &quot;$(BuildShortSha)&quot;%3B;public const string Branch = &quot;$(BuildBranch)&quot;%3B;public const string BuiltAtUtc = &quot;$(BuildTimestamp)&quot;%3B;public const string Configuration = &quot;$(Configuration)&quot;%3B;public const bool SourceDirty = $(BuildSourceDirty)%3B;public const string Channel = &quot;$(BuildChannel)&quot;%3B;}" />
+    <ItemGroup>
+      <Compile Include="$(IntermediateOutputPath)BuildIdentity.g.cs" />
+    </ItemGroup>
+  </Target>
+</Project>

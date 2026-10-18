@@ -159,6 +159,7 @@ public partial class MainWindow : Window
             () => SelectedWorker is { } w ? new PiWorkerEngineSettings(w) : null);
         InitializeComponent();
         ConversationList.ItemsSource = _conversationItems;
+        RefreshVersionLabel();
         // Empty state follows the collection itself: any add/clear on the UI
         // thread updates it, on every page, with no scattered call sites.
         _conversationItems.CollectionChanged += (_, _) => UpdateEmptyState();
@@ -4214,8 +4215,7 @@ public partial class MainWindow : Window
                 : _conversation?.IsConnected == true
                     ? $"{EngineSummary()} Session: {_connectedWorkspace?.SessionId ?? _connectedKey}."
                     : "Pi engine not connected. Provider authentication lives in Pi itself; Agent X never copies credentials.";
-            var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
-            AppVersionText.Text = $"Agent X desktop (Avalonia UI) — app version {version?.ToString() ?? "dev"}. Pi engine 1.1.0 external, unmodified.";
+            AppVersionText.Text = $"Agent X desktop (Avalonia UI) — {BuildInfo.LiveShortLabel()}. Pi engine 1.1.0 external, unmodified.";
         }
         finally
         {
@@ -4630,6 +4630,63 @@ public partial class MainWindow : Window
             : $"Selection unavailable: {_settingsRuntime.ThinkingUnavailableReason}";
         Avalonia.Controls.ToolTip.SetTip(ModelButton, $"Engine model. {modelTip}");
         Avalonia.Controls.ToolTip.SetTip(ThinkingButton, $"Thinking level. {thinkingTip}");
+    }
+
+    private Avalonia.Controls.Flyout? _versionFlyout;
+
+    /// Footer build stamp: compile-time identity, never the live repo.
+    private void RefreshVersionLabel()
+    {
+        VersionButton.Content = BuildInfo.LiveShortLabel();
+        Avalonia.Controls.ToolTip.SetTip(VersionButton, $"Build identity. {BuildInfo.LiveShortLabel()}");
+    }
+
+    private void VersionButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        _versionFlyout ??= new Avalonia.Controls.Flyout();
+        var panel = new Avalonia.Controls.StackPanel { Spacing = 6 };
+        panel.Children.Add(new Avalonia.Controls.TextBlock
+        {
+            Text = "Build identity",
+            FontSize = 12,
+            FontWeight = Avalonia.Media.FontWeight.Bold,
+        });
+        panel.Children.Add(new Avalonia.Controls.TextBlock
+        {
+            Text = BuildInfo.LiveDetailText(),
+            FontSize = 12,
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            FontFamily = AxTheme.MonoFont,
+        });
+        var copy = new Avalonia.Controls.Button { Content = "Copy build info" };
+        copy.Classes.Add("AxAction");
+        copy.Click += async (_, _) =>
+        {
+            var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+            if (clipboard is null)
+            {
+                StatusText.Text = "Clipboard access is unavailable on this platform.";
+                return;
+            }
+
+            var transfer = new DataTransfer();
+            transfer.Add(DataTransferItem.CreateText(BuildInfo.LiveDetailText()));
+            await clipboard.SetDataAsync(transfer);
+            await clipboard.FlushAsync();
+            _versionFlyout.Hide();
+            StatusText.Text = "Copied build info to the clipboard.";
+        };
+        panel.Children.Add(copy);
+        panel.KeyDown += (_, e) =>
+        {
+            if (e.Key == Avalonia.Input.Key.Escape)
+            {
+                _versionFlyout.Hide();
+                e.Handled = true;
+            }
+        };
+        _versionFlyout.Content = panel;
+        _versionFlyout.ShowAt(VersionButton);
     }
 
     /// <summary>

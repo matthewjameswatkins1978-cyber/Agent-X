@@ -1,0 +1,17 @@
+<Project>
+  <!--
+    Canonical Agent X product version (Matthew's v0.<feature>.<fix> rule:
+    MINOR for features, PATCH for fixes). Applies to every assembly in src/.
+    Preview knob: leave PreviewNumber empty (default) for a -preview suffix,
+    set /p:PreviewNumber=4 for -preview.4, or /p:PreviewNumber=none for no
+    suffix (production/development by configuration). Drive the suffix ONLY
+    through PreviewNumber; the full build identity (commit/branch/time) is
+    stamped separately by BuildIdentity.targets in AgentX.App.
+  -->
+  <PropertyGroup>
+    <VersionPrefix Condition="'$(VersionPrefix)' == ''">0.2.0</VersionPrefix>
+    <VersionSuffix Condition="'$(PreviewNumber)' == ''">preview</VersionSuffix>
+    <VersionSuffix Condition="'$(PreviewNumber)' == 'none'"></VersionSuffix>
+    <VersionSuffix Condition="'$(PreviewNumber)' != '' and '$(PreviewNumber)' != 'none'">preview.$(PreviewNumber)</VersionSuffix>
+  </PropertyGroup>
+</Project>
