@@ -514,6 +514,15 @@
                  attach tunnel events. Send/Stop also lives on the button at the
                  right of the input row and in the context menu (right-click) —
                  the chord stays discoverable in tooltips. -->
+            <!-- Slash-command menu: suggestions while the composer starts
+                 with "/". Focus never leaves the box; the tunnel key
+                 handler drives highlight, completion and execution. Hidden
+                 whenever the text is not slash-first or nothing matches. -->
+            <ListBox x:Name="SlashMenu" IsVisible="False" MaxHeight="132"
+                     Background="#161B22" BorderBrush="{DynamicResource Ax.Border}"
+                     BorderThickness="1" CornerRadius="6" Padding="2" FontSize="12"
+                     SelectionChanged="SlashMenu_OnSelectionChanged" Tapped="SlashMenu_OnTapped"
+                     AutomationProperties.Name="Slash commands" />
             <!-- Composer row: the box takes the width and grows upward with
                  content (Auto row at the page bottom); the send chord stays
                  visible at the right, muted. -->
@@ -553,7 +562,7 @@
               <Button Grid.Column="1" x:Name="ComposerSendButton" Classes="AxIconBtn"
                       Click="ComposerSendButton_OnClick" Width="32" Height="32"
                       VerticalAlignment="Center" IsEnabled="False"
-                      ToolTip.Tip="Send message (Ctrl+Enter)"
+                      ToolTip.Tip="Send message (Enter)"
                       AutomationProperties.Name="Send message">
                 <app:AxIcon x:Name="ComposerSendIcon" Kind="Send" Width="16" Height="16" />
               </Button>

@@ -2310,6 +2310,15 @@ public partial class MainWindow : Window
 
     private async void SendPrompt_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
+        // Slash commands never reach Pi: help, unknown-command and picker
+        // routes are consumed here, before any worker branch, busy flag or
+        // connection guard — so /help answers while idle or disconnected
+        // and a command can never mark a run busy.
+        if (await TryExecuteSlashAsync().ConfigureAwait(false))
+        {
+            return;
+        }
+
         // Worker tabs send on the selected worker only — byte-identical
         // prompt content via the same composer. Never the workspace path.
         if (SelectedWorker is { } worker)
@@ -2483,7 +2492,7 @@ public partial class MainWindow : Window
         // Slash menu states arrive with the menu slice; until then the menu
         // is never open and those branches stay dormant.
         var action = ComposerActionPolicy.DecideComposerKey(
-            e.Key, e.KeyModifiers, slashOpen: false, hasHighlight: false, IsComposerBusy());
+            e.Key, e.KeyModifiers, SlashMenu.IsVisible, _slashHighlight >= 0, IsComposerBusy());
         switch (action)
         {
             case ComposerActionPolicy.ComposerKeyAction.Send:
@@ -2498,6 +2507,26 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 CancelPrompt_OnClick(sender, new Avalonia.Interactivity.RoutedEventArgs());
                 break;
+            case ComposerActionPolicy.ComposerKeyAction.AcceptSuggestion:
+                e.Handled = true;
+                ExecuteSlashSuggestion();
+                break;
+            case ComposerActionPolicy.ComposerKeyAction.CompleteSuggestion:
+                e.Handled = true;
+                CompleteSlashSuggestion();
+                break;
+            case ComposerActionPolicy.ComposerKeyAction.DismissSuggestions:
+                e.Handled = true;
+                CloseSlashMenu();
+                break;
+            case ComposerActionPolicy.ComposerKeyAction.SuggestPrevious:
+                e.Handled = true;
+                MoveSlashHighlight(-1);
+                break;
+            case ComposerActionPolicy.ComposerKeyAction.SuggestNext:
+                e.Handled = true;
+                MoveSlashHighlight(1);
+                break;
             default:
                 break;
         }
@@ -2506,6 +2535,265 @@ public partial class MainWindow : Window
     /// True while the viewed tab has an active run (worker or workspace).
     private bool IsComposerBusy()
         => SelectedWorker?.Id is { } busyId ? _busyWorkers.Contains(busyId) : _piBusy;
+
+    // --- Slash-command menu + local execution. The menu is suggest-only:
+    // focus never leaves the composer, and every command routes to an
+    // existing picker or answer — slash text never reaches Pi as a prompt.
+    private List<ComposerActionPolicy.SlashCommand> _slashSuggestions = new();
+    private int _slashHighlight = -1;
+    private string? _modelPickerPreset;
+    private bool _slashInvoked;
+
+    /// Flyout anchor for engine pickers: the footer buttons live in a
+    /// hidden legacy panel, so slash-invoked pickers anchor to the visible
+    /// composer instead of an unmeasured control. Both ShowAt calls run in
+    /// their handler's synchronous prefix, so the flag reads exact.
+    private Avalonia.Controls.Control EnginePickerAnchor(
+        bool fromSlash, Avalonia.Controls.Control fallback)
+        => fromSlash ? PiPromptBox : fallback;
+
+    private void RefreshSlashMenu()
+    {
+        var parsed = ComposerActionPolicy.ParseSlashCommand(PiPromptBox.Text);
+        if (parsed is null)
+        {
+            CloseSlashMenu();
+            return;
+        }
+
+        _slashSuggestions = ComposerActionPolicy.FilterSlashCommands(parsed.Value.Name).ToList();
+        if (_slashSuggestions.Count == 0)
+        {
+            CloseSlashMenu();
+            return;
+        }
+
+        SlashMenu.ItemsSource = _slashSuggestions
+            .Select(c => "/" + c.Name + " — " + c.Description)
+            .ToList();
+        _slashHighlight = 0;
+        SlashMenu.SelectedIndex = 0;
+        SlashMenu.IsVisible = true;
+    }
+
+    private void CloseSlashMenu()
+    {
+        SlashMenu.IsVisible = false;
+        SlashMenu.ItemsSource = null;
+        _slashSuggestions = new();
+        _slashHighlight = -1;
+    }
+
+    private void MoveSlashHighlight(int delta)
+    {
+        if (_slashSuggestions.Count == 0)
+        {
+            return;
+        }
+
+        _slashHighlight = (_slashHighlight + delta + _slashSuggestions.Count) % _slashSuggestions.Count;
+        SlashMenu.SelectedIndex = _slashHighlight;
+    }
+
+    private void SlashMenu_OnSelectionChanged(object? sender, Avalonia.Controls.SelectionChangedEventArgs e)
+    {
+        if (SlashMenu.SelectedIndex >= 0)
+        {
+            _slashHighlight = SlashMenu.SelectedIndex;
+        }
+    }
+
+    private void SlashMenu_OnTapped(object? sender, Avalonia.Input.TappedEventArgs e)
+        => ExecuteSlashSuggestion();
+
+    /// Enter on a highlight: complete the box to the chosen command (kept
+    /// args ride along) and run it through the single send-path router.
+    private void ExecuteSlashSuggestion()
+    {
+        if (_slashHighlight < 0 || _slashHighlight >= _slashSuggestions.Count)
+        {
+            return;
+        }
+
+        var name = _slashSuggestions[_slashHighlight].Name;
+        var args = ComposerActionPolicy.ParseSlashCommand(PiPromptBox.Text)?.Args ?? string.Empty;
+        PiPromptBox.Text = args.Length == 0 ? "/" + name + " " : "/" + name + " " + args;
+        PiPromptBox.CaretIndex = PiPromptBox.Text?.Length ?? 0;
+        _ = TryExecuteSlashAsync();
+    }
+
+    /// Tab on a highlight: complete the text only, leaving execution to a
+    /// later Enter. Menu re-filters around the completed command.
+    private void CompleteSlashSuggestion()
+    {
+        if (_slashHighlight < 0 || _slashHighlight >= _slashSuggestions.Count)
+        {
+            return;
+        }
+
+        var name = _slashSuggestions[_slashHighlight].Name;
+        var args = ComposerActionPolicy.ParseSlashCommand(PiPromptBox.Text)?.Args ?? string.Empty;
+        PiPromptBox.Text = args.Length == 0 ? "/" + name + " " : "/" + name + " " + args;
+        PiPromptBox.CaretIndex = PiPromptBox.Text?.Length ?? 0;
+    }
+
+    private void InvokeModelPicker()
+    {
+        _slashInvoked = true;
+        try
+        {
+            ModelButton_OnClick(this, new Avalonia.Interactivity.RoutedEventArgs());
+        }
+        finally
+        {
+            _slashInvoked = false;
+        }
+    }
+
+    private void InvokeThinkingPicker()
+    {
+        _slashInvoked = true;
+        try
+        {
+            ThinkingButton_OnClick(this, new Avalonia.Interactivity.RoutedEventArgs());
+        }
+        finally
+        {
+            _slashInvoked = false;
+        }
+    }
+
+    /// Slash entry: consume the composer text when it is a command and
+    /// route it locally — pickers, answers, honest notices. True means
+    /// handled (send paths must return); slash text never reaches Pi.
+    /// Handled commands clear via the single accept path; unknown or
+    /// failed commands preserve the text for correction.
+    private async Task<bool> TryExecuteSlashAsync()
+    {
+        var raw = PromptInput.Prepare(PiPromptBox.Text);
+        if (raw is null)
+        {
+            return false;
+        }
+
+        raw = ComposerActionPolicy.UnescapeSlashLiteral(raw);
+        var parsed = ComposerActionPolicy.ParseSlashCommand(raw);
+        if (parsed is null)
+        {
+            return false;
+        }
+
+        var (name, args) = parsed.Value;
+        if (name.Length == 0)
+        {
+            return true;
+        }
+
+        if (ComposerActionPolicy.FindSlashCommand(name) is null)
+        {
+            ActiveFeed.AddSystemNotice(
+                $"Unknown command /{name}. Agent X commands: /model, /thinking, /help. " +
+                "Start a prompt with // to send a literal slash.");
+            return true;
+        }
+
+        switch (name.ToLowerInvariant())
+        {
+            case "help":
+                ActiveFeed.AddSystemNotice(
+                    "Agent X commands: /model [filter] (opens the model picker), " +
+                    "/thinking [level] (applies the level, or opens the picker), /help (this text). " +
+                    "Keys: Enter sends, Alt+Enter or Shift+Enter inserts a newline, " +
+                    "Ctrl+Enter also sends, Escape stops the run. " +
+                    "A leading // sends a literal slash.");
+                AcceptComposerDraft(raw);
+                return true;
+            case "model":
+                _modelPickerPreset = args.Length == 0 ? null : args;
+                InvokeModelPicker();
+                AcceptComposerDraft(raw);
+                return true;
+            case "thinking":
+                if (args.Length == 0)
+                {
+                    InvokeThinkingPicker();
+                    AcceptComposerDraft(raw);
+                    return true;
+                }
+
+                if (await TryApplyThinkingLevelAsync(args).ConfigureAwait(false))
+                {
+                    AcceptComposerDraft(raw);
+                }
+
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /// /thinking <level>: exact case-insensitive match against the live
+    /// levels applies directly (busy refused, mismatch reported); anything
+    /// else falls back to the picker via the caller. Workspace tabs have no
+    /// direct switch path — same as the picker — so they open it instead.
+    private async Task<bool> TryApplyThinkingLevelAsync(string level)
+    {
+        var captured = SelectedWorker;
+        if (captured is null)
+        {
+            // Workspace tabs have no direct switch path — same as the
+            // picker — so opening it counts as handled (caller clears).
+            InvokeThinkingPicker();
+            return true;
+        }
+
+        var bound = new PiWorkerEngineSettings(captured);
+        IReadOnlyList<string> levels;
+        try
+        {
+            levels = await bound.GetThinkingLevelsAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            ActiveFeed.AddSystemNotice($"Could not list thinking levels: {ex.Message} — text preserved.");
+            return false;
+        }
+
+        var match = levels.FirstOrDefault(l => l.Equals(level, StringComparison.OrdinalIgnoreCase));
+        if (match is null)
+        {
+            ActiveFeed.AddSystemNotice(
+                $"Unknown thinking level \"{level}\". Available: {string.Join(", ", levels)}.");
+            return false;
+        }
+
+        var capturedId = captured.Id;
+        if (_busyWorkers.Contains(capturedId))
+        {
+            ActiveFeed.AddSystemNotice(
+                "A run is in progress on this worker — thinking changes apply when it is idle. Nothing applied.");
+            return false;
+        }
+
+        try
+        {
+            await bound.SetThinkingLevelAsync(match, CancellationToken.None).ConfigureAwait(false);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                RefreshEngineSegments();
+                RefreshOverviewAndSettings();
+                StatusText.Text = SelectedWorker?.Id == capturedId
+                    ? $"Thinking level switched to {match} — confirmed by engine state."
+                    : $"Thinking level switched on the other worker to {match} — select it to confirm.";
+            });
+            return true;
+        }
+        catch (Exception ex)
+        {
+            ActiveFeed.AddSystemNotice($"Thinking switch failed: {ex.Message} — text preserved.");
+            return false;
+        }
+    }
 
     private async void CancelPrompt_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
@@ -2608,6 +2896,7 @@ public partial class MainWindow : Window
     private void PiPromptBox_OnTextChanged(object? sender, Avalonia.Controls.TextChangedEventArgs e)
     {
         RefreshComposerSendButton();
+        RefreshSlashMenu();
     }
 
     private void ComposerCut_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => PiPromptBox.Cut();
@@ -4777,7 +5066,7 @@ public partial class MainWindow : Window
             : $"Current: ({engine.Provider ?? "?"}) {engine.Model}";
         _modelFlyout ??= new Avalonia.Controls.Flyout();
         _modelFlyout.Content = BuildEngineFlyoutPanel("Engine model", current);
-        _modelFlyout.ShowAt(ModelButton);
+        _modelFlyout.ShowAt(EnginePickerAnchor(_slashInvoked, ModelButton));
         if (captured is null)
         {
             return;
@@ -4831,6 +5120,13 @@ public partial class MainWindow : Window
             var choicesBox = new Avalonia.Controls.StackPanel { Spacing = 2 };
             panel.Children.Add(searchBox);
             panel.Children.Add(choicesBox);
+            // Slash filter preset: /model <query> opens the picker already
+            // narrowed. One-shot — a later manual open starts unfiltered.
+            if (_modelPickerPreset is { } preset)
+            {
+                searchBox.Text = preset;
+                _modelPickerPreset = null;
+            }
 
             void RenderChoices()
             {
@@ -4933,7 +5229,7 @@ public partial class MainWindow : Window
         var current = engine.Thinking is null ? "No engine connected." : $"Current: {engine.Thinking}";
         _thinkingFlyout ??= new Avalonia.Controls.Flyout();
         _thinkingFlyout.Content = BuildEngineFlyoutPanel("Thinking level", current);
-        _thinkingFlyout.ShowAt(ThinkingButton);
+        _thinkingFlyout.ShowAt(EnginePickerAnchor(_slashInvoked, ThinkingButton));
         if (captured is null)
         {
             return;

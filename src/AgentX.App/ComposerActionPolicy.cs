@@ -125,4 +125,9 @@ public static class ComposerActionPolicy
         => SlashCommands
             .Where(c => c.Name.StartsWith(fragment, StringComparison.OrdinalIgnoreCase))
             .ToList();
+
+    /// "//" escapes to a literal leading slash: strip one and send the
+    /// rest as an ordinary prompt. Anything else passes through untouched.
+    public static string UnescapeSlashLiteral(string text)
+        => text.StartsWith("//", StringComparison.Ordinal) ? text[1..] : text;
 }

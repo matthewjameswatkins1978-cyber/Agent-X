@@ -146,4 +146,14 @@ public sealed class ComposerActionPolicyTests
         Assert.Equal("model", Assert.Single(one).Name);
         Assert.Empty(ComposerActionPolicy.FilterSlashCommands("zzz"));
     }
+
+    [Theory]
+    [InlineData("//literal", "/literal")]
+    [InlineData("///x", "//x")]
+    [InlineData("/model", "/model")]
+    [InlineData("plain", "plain")]
+    public void UnescapeSlashLiteral_StripsOneEscapeSlash(string text, string expected)
+    {
+        Assert.Equal(expected, ComposerActionPolicy.UnescapeSlashLiteral(text));
+    }
 }
