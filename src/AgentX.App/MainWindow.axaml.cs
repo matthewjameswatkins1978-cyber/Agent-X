@@ -2153,6 +2153,7 @@ public partial class MainWindow : Window
         }
 
         UpdateTabDots();
+        LatchFollowOnSend();
         try
         {
             var (text, receipt) = await worker.SendAsync(message, progress);
@@ -2302,6 +2303,7 @@ public partial class MainWindow : Window
         var sink = new RunProgressSink();
         _liveAccumulator = sink.Accumulator;
         IProgress<string> progress = sink;
+        LatchFollowOnSend();
 
         try
         {
@@ -3055,6 +3057,37 @@ public partial class MainWindow : Window
     /// layout, so position-based code must honour it instead of restoring
     /// the pre-click offset. Cleared once the bottom is actually seen.
     private bool _jumpPending;
+    private double _lastFeedOffset;
+
+    /// Pressing Go means "watch this run": latch follow so the first
+    /// deltas land in view even if the reader was parked upstairs.
+    /// Scrolling up afterwards breaks away as usual.
+    private void LatchFollowOnSend()
+    {
+        if (_conversationItems.Count == 0)
+        {
+            return;
+        }
+
+        _jumpPending = true;
+        ConversationList.ScrollIntoView(_conversationItems[^1]);
+        UpdateJumpToLiveVisibility();
+    }
+
+    /// Manual grab beats automation: a programmatic ScrollIntoView only
+    /// ever moves down, so a distinct upward move is the reader taking
+    /// over — drop any pending jump/follow latch, then track visibility.
+    private void FeedScroller_OnScrollChanged(object? sender, Avalonia.Controls.ScrollChangedEventArgs e)
+    {
+        var now = _feedScroller?.Offset.Y ?? 0;
+        if (now < _lastFeedOffset - 1)
+        {
+            _jumpPending = false;
+        }
+
+        _lastFeedOffset = now;
+        UpdateJumpToLiveVisibility();
+    }
 
     /// Resolve the feed scroller once it exists and follow its movement so
     /// the Jump control tracks manual scrolling without polling.
@@ -3075,7 +3108,8 @@ public partial class MainWindow : Window
         }
 
         _feedScroller = viewer;
-        _feedScroller.ScrollChanged += (_, _) => UpdateJumpToLiveVisibility();
+        _lastFeedOffset = viewer.Offset.Y;
+        _feedScroller.ScrollChanged += FeedScroller_OnScrollChanged;
     }
 
     private void UpdateJumpToLiveVisibility()
