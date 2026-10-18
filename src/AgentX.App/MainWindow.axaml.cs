@@ -2593,6 +2593,10 @@ public partial class MainWindow : Window
 
         _slashHighlight = (_slashHighlight + delta + _slashSuggestions.Count) % _slashSuggestions.Count;
         SlashMenu.SelectedIndex = _slashHighlight;
+        if (SlashMenu.SelectedItem is { } selected)
+        {
+            SlashMenu.ScrollIntoView(selected);
+        }
     }
 
     private void SlashMenu_OnSelectionChanged(object? sender, Avalonia.Controls.SelectionChangedEventArgs e)
@@ -5313,6 +5317,29 @@ public partial class MainWindow : Window
             {
                 var item = new Button { Content = level };
                 item.Classes.Add("AxAction");
+                item.KeyDown += (_, e) =>
+                {
+                    // Keyboard-first like the model chooser: Down/Up walks
+                    // the levels, Escape leaves. A focused Button chooses
+                    // with Enter/Space through its own activation.
+                    if (e.Key == Avalonia.Input.Key.Down || e.Key == Avalonia.Input.Key.Up)
+                    {
+                        var siblings = panel.Children.OfType<Button>().ToList();
+                        var at = siblings.IndexOf(item);
+                        var next = e.Key == Avalonia.Input.Key.Down ? at + 1 : at - 1;
+                        if (next >= 0 && next < siblings.Count)
+                        {
+                            siblings[next].Focus();
+                        }
+
+                        e.Handled = true;
+                    }
+                    else if (e.Key == Avalonia.Input.Key.Escape)
+                    {
+                        _thinkingFlyout.Hide();
+                        e.Handled = true;
+                    }
+                };
                 var capturedLevel = level;
                 item.Click += async (_, _) =>
                 {
@@ -5358,6 +5385,7 @@ public partial class MainWindow : Window
                 }
             };
             _thinkingFlyout.Content = panel;
+            panel.Children.OfType<Button>().FirstOrDefault()?.Focus();
         });
     }
 

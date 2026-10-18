@@ -639,7 +639,7 @@
             BorderThickness="0,1,0,0" Padding="0,6,0,0" Background="Transparent">
       <StackPanel Spacing="2">
         <StackPanel x:Name="FooterTransient" />
-        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+        <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="8">
           <Grid Grid.Column="0" ColumnDefinitions="Auto,*" ColumnSpacing="6" VerticalAlignment="Center">
             <app:AxIcon Grid.Column="0" Kind="Branch" Width="14" Height="14" VerticalAlignment="Center" />
             <TextBlock Grid.Column="1" x:Name="FooterContextText" Text="Main" FontSize="12"
@@ -655,6 +655,22 @@
                   AutomationProperties.Name="Context">
             <app:ContextGauge x:Name="FooterGauge" Width="16" Height="16" />
           </Button>
+          <TextBlock Grid.Column="3" Text="•" Foreground="#6B7280" FontSize="12"
+                       VerticalAlignment="Center" />
+          <Button x:Name="ModelButton" Grid.Column="4" Content="Model: —"
+                  Click="ModelButton_OnClick"
+                  ToolTip.Tip="Engine model (selection pending the Core operation)"
+                  AutomationProperties.Name="Engine model"
+                  Foreground="{DynamicResource Ax.Muted}" Background="Transparent" BorderThickness="0"
+                  Padding="4,0" FontSize="12" VerticalAlignment="Center" />
+          <TextBlock Grid.Column="5" Text="•" Foreground="#6B7280" FontSize="12"
+                       VerticalAlignment="Center" />
+          <Button x:Name="ThinkingButton" Grid.Column="6" Content="Thinking: —"
+                  Click="ThinkingButton_OnClick"
+                  ToolTip.Tip="Thinking level (selection pending the Core operation)"
+                  AutomationProperties.Name="Thinking level"
+                  Foreground="{DynamicResource Ax.Muted}" Background="Transparent" BorderThickness="0"
+                  Padding="4,0" FontSize="12" VerticalAlignment="Center" />
         </Grid>
         <!-- Legacy footer segments: hidden write-model for Checkpoint A.
              StatusText is reparented into FooterTransient in code so all
@@ -688,26 +704,12 @@
                      Foreground="{DynamicResource Ax.Muted}" FontSize="12"
                      VerticalAlignment="Center" />
         </Grid>
-        <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
+        <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="8">
           <TextBlock x:Name="UsageText" Grid.Column="0" Text="messages —"
                      Foreground="{DynamicResource Ax.Muted}" FontSize="12"
                      VerticalAlignment="Center"
                      ToolTip.Tip="Genuine engine message count. Token/cost context is unavailable." />
           <Border Grid.Column="1" />
-          <Button x:Name="ModelButton" Grid.Column="2" Content="Model: —"
-                  Click="ModelButton_OnClick"
-                  ToolTip.Tip="Engine model (selection pending the Core operation)"
-                  AutomationProperties.Name="Engine model"
-                  Foreground="{DynamicResource Ax.Muted}" Background="Transparent" BorderThickness="0"
-                  Padding="4,0" FontSize="12" VerticalAlignment="Center" />
-          <TextBlock Grid.Column="3" Text="•" Foreground="#6B7280" FontSize="12"
-                     VerticalAlignment="Center" />
-          <Button x:Name="ThinkingButton" Grid.Column="4" Content="Thinking: —"
-                  Click="ThinkingButton_OnClick"
-                  ToolTip.Tip="Thinking level (selection pending the Core operation)"
-                  AutomationProperties.Name="Thinking level"
-                  Foreground="{DynamicResource Ax.Muted}" Background="Transparent" BorderThickness="0"
-                  Padding="4,0" FontSize="12" VerticalAlignment="Center" />
         </Grid>
         </StackPanel>
       </StackPanel>
