@@ -544,7 +544,7 @@
                   <MenuItem Header="Paste" InputGesture="Ctrl+V" Click="ComposerPaste_OnClick" />
                   <MenuItem Header="Select all" InputGesture="Ctrl+A" Click="ComposerSelectAll_OnClick" />
                   <Separator />
-                  <MenuItem x:Name="ComposerSendItem" Header="Send message" InputGesture="Ctrl+Enter" Click="ComposerSend_OnClick" />
+                  <MenuItem x:Name="ComposerSendItem" Header="Send message" InputGesture="Enter" Click="ComposerSend_OnClick" />
                   <MenuItem x:Name="ComposerStopItem" Header="Stop current run" InputGesture="Escape" Click="ComposerStop_OnClick" />
                 </MenuFlyout>
               </TextBox.ContextFlyout>

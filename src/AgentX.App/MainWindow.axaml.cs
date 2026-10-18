@@ -2875,7 +2875,7 @@ public partial class MainWindow : Window
         {
             ComposerSendIcon.Kind = AxIconKind.Send;
             ComposerSendIcon.Filled = false;
-            Avalonia.Controls.ToolTip.SetTip(ComposerSendButton, "Send message (Ctrl+Enter)");
+            Avalonia.Controls.ToolTip.SetTip(ComposerSendButton, "Send message (Enter)");
             ComposerSendButton.SetValue(Avalonia.Automation.AutomationProperties.NameProperty, "Send message");
         }
     }
