@@ -312,6 +312,7 @@
         </Border>
         <Grid Grid.Row="1">
           <ListBox x:Name="ConversationList" Background="Transparent" BorderThickness="0"
+                     AutoScrollToSelectedItem="False"
                      SelectionMode="Single" FontFamily="{DynamicResource Ax.ProseFont}"
                      FontSize="{DynamicResource Ax.FeedFontSize}">
             <ListBox.ContextFlyout>
@@ -433,6 +434,13 @@
                     ToolTip.Tip="Connect the selected worker or workspace"
                     AutomationProperties.Name="Connect" />
           </StackPanel>
+          <!-- Jump to Live: appears only when the reader has scrolled up.
+               One action returns to the bottom and resumes following. -->
+          <Button x:Name="JumpToLiveButton" Classes="AxAction" Content="Jump to live"
+                  Click="JumpToLive_OnClick" IsVisible="False"
+                  HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,16,16"
+                  ToolTip.Tip="Return to the latest message and resume following"
+                  AutomationProperties.Name="Jump to live" />
         </Grid>
 
         <Border x:Name="ComposerBox" Grid.Row="2" BorderBrush="{DynamicResource Ax.Border}" BorderThickness="1"

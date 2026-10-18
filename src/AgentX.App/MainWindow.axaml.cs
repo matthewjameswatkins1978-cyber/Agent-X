@@ -2938,6 +2938,12 @@ public partial class MainWindow : Window
 
     private void RebuildConversationList()
     {
+        // Preserve reading position across rebuilds (tab switches and
+        // appearance changes recreate every row): only a first fill jumps
+        // to the end. A posted per-tab offset restore may still override
+        // this afterwards; without one, the reader stays where they were.
+        var wasEmpty = _conversationItems.Count == 0;
+        var savedOffset = wasEmpty ? 0 : ConversationScrollOffset();
         _conversationItems.Clear();
         _shownSeq = 0;
         var entries = ActiveFeed.Snapshot();
@@ -2975,10 +2981,19 @@ public partial class MainWindow : Window
 
         if (_conversationItems.Count > 0)
         {
-            ConversationList.ScrollIntoView(_conversationItems[^1]);
+            if (wasEmpty)
+            {
+                ConversationList.ScrollIntoView(_conversationItems[^1]);
+            }
+            else
+            {
+                SetConversationScrollOffset(savedOffset);
+            }
         }
 
+        EnsureFeedScroller();
         UpdateEmptyState();
+        UpdateJumpToLiveVisibility();
     }
 
     /// Follow-logic: honour the AutoScroll preference but never yank the
@@ -3021,18 +3036,73 @@ public partial class MainWindow : Window
         }
     }
 
+    /// Jump-to-Live visibility rule: offer the jump whenever rows exist
+    /// and the reader is not pinned to the bottom. Pure for tests.
+    internal static bool ShouldShowJumpToLive(int itemCount, double offsetY, double viewportH, double extentH)
+        => itemCount > 0 && !ShouldFollow(true, offsetY, viewportH, extentH);
+
+    private Avalonia.Controls.ScrollViewer? _feedScroller;
+
+    /// Resolve the feed scroller once it exists and follow its movement so
+    /// the Jump control tracks manual scrolling without polling.
+    private void EnsureFeedScroller()
+    {
+        if (_feedScroller is not null)
+        {
+            return;
+        }
+
+        var viewer = ConversationList
+            .GetVisualDescendants()
+            .OfType<Avalonia.Controls.ScrollViewer>()
+            .FirstOrDefault();
+        if (viewer is null)
+        {
+            return;
+        }
+
+        _feedScroller = viewer;
+        _feedScroller.ScrollChanged += (_, _) => UpdateJumpToLiveVisibility();
+    }
+
+    private void UpdateJumpToLiveVisibility()
+    {
+        var metrics = ConversationScrollMetrics();
+        var show = ShouldShowJumpToLive(
+            _conversationItems.Count, ConversationScrollOffset(), metrics.Viewport, metrics.Extent);
+        JumpToLiveButton?.IsVisible = show;
+    }
+
     private void MaybeAutoScroll()
+    {
+        if (_conversationItems.Count == 0)
+        {
+            UpdateJumpToLiveVisibility();
+            return;
+        }
+
+        EnsureFeedScroller();
+        var metrics = ConversationScrollMetrics();
+        if (ShouldFollow(_prefs.AutoScroll, ConversationScrollOffset(), metrics.Viewport, metrics.Extent))
+        {
+            ConversationList.ScrollIntoView(_conversationItems[^1]);
+        }
+
+        UpdateJumpToLiveVisibility();
+    }
+
+    /// Explicit reader action: jump to the latest message. Following
+    /// resumes by position when the preference allows — nothing is
+    /// latched, so this never fights manual scrolling.
+    private void JumpToLive_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (_conversationItems.Count == 0)
         {
             return;
         }
 
-        var metrics = ConversationScrollMetrics();
-        if (ShouldFollow(_prefs.AutoScroll, ConversationScrollOffset(), metrics.Viewport, metrics.Extent))
-        {
-            ConversationList.ScrollIntoView(_conversationItems[^1]);
-        }
+        ConversationList.ScrollIntoView(_conversationItems[^1]);
+        UpdateJumpToLiveVisibility();
     }
 
     /// Stop the flush tick only when nothing streams anywhere: concurrent

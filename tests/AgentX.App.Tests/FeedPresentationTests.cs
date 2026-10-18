@@ -168,4 +168,51 @@ public sealed class FeedPresentationTests
         Assert.Equal(-1, MainWindow.FindNextMatch(entries, anchorSeq: 1, query: "absent", direction: 1));
         Assert.Equal(-1, MainWindow.FindNextMatch(Array.Empty<FeedEntry>(), anchorSeq: null, query: "go", direction: 1));
     }
+
+    [Theory]
+    [InlineData(0, 900, 100, 1000, false)]  // empty feed: no button
+    [InlineData(5, 900, 100, 1000, false)]  // pinned to bottom: no button
+    [InlineData(5, 0, 100, 1000, true)]     // reading history: offer the jump
+    [InlineData(5, 0, 0, 0, false)]         // no geometry yet: hidden until layout
+    public void JumpToLive_ShowsOnlyWhenUnpinned(
+        int itemCount, double offsetY, double viewportH, double extentH, bool expected)
+    {
+        Assert.Equal(expected, MainWindow.ShouldShowJumpToLive(itemCount, offsetY, viewportH, extentH));
+    }
+
+    [Fact]
+    public void LongFeed_MapsHundredsOfToolRows()
+    {
+        // Hundreds of tool calls plus Studio rows and transport detail:
+        // the view mapping stays exact and transport stays out of sight.
+        var feed = new ConversationFeed();
+        for (var i = 0; i < 100; i++)
+        {
+            feed.AddUser($"task {i}");
+            var turn = feed.BeginAssistantTurn();
+            feed.AppendDelta(turn, $"answer {i}");
+            foreach (var tool in new[] { "read", "edit", "powershell" })
+            {
+                feed.AddToolStart(tool, $"op {i}", null, isMutating: false, callId: $"c{i}-{tool}");
+                feed.AddToolEnd(tool, isError: false, callId: $"c{i}-{tool}");
+            }
+
+            feed.AddToolStart("studio_checkpoint", $"checkpoint {i}", null, isMutating: false, callId: $"sc-{i}");
+            feed.AddToolEnd("studio_checkpoint", isError: false, callId: $"sc-{i}");
+            feed.AddSystemNotice($"[detail ab{i:x}] read args: path=src/Foo.cs");
+            feed.AddSystemNotice($"[result ab{i:x}] Tool read: finished in 12 ms.");
+            feed.EndAssistantTurn(turn, new PiRunReceipt(true, false, 0, 8, 2));
+        }
+
+        var entries = feed.Snapshot();
+        Assert.True(entries.Count > 700);
+        var visible = entries.Where(e => ConversationViewItem.ShouldShow(e, showDiagnostics: false)).ToList();
+        Assert.Equal(entries.Count - 200, visible.Count);
+        Assert.DoesNotContain(visible, e => e.Text.StartsWith("[detail ", StringComparison.Ordinal));
+        Assert.DoesNotContain(visible, e => e.Text.StartsWith("[result ", StringComparison.Ordinal));
+        // Studio rows flow through the same tool mapping without errors.
+        Assert.Equal(100, visible.Count(e => e.Role == "tool" && (e.Note ?? string.Empty).Contains("studio_checkpoint", StringComparison.Ordinal)));
+        var map = feed.BuildMap();
+        Assert.Equal(0, map.ErrorCount);
+    }
 }
