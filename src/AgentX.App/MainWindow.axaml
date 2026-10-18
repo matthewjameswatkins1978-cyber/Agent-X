@@ -73,6 +73,14 @@
     <Style Selector="Button.AxAction:disabled">
       <Setter Property="Opacity" Value="0.45" />
     </Style>
+    <!-- Picker choices: the keyboard position must always be visible.
+         Pointer hover keeps the shared surface; keyboard focus carries
+         the same surface plus an unmissable accent edge, because the
+         Fluent default focus cue disappears inside flyouts. -->
+    <Style Selector="Button.AxChoice:focus">
+      <Setter Property="Background" Value="{DynamicResource Ax.Surface2}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Ax.Green}" />
+    </Style>
     <!-- Restrained feed selection: rows keep their own brushes, the
          highlight stays charcoal instead of the default bright blue.
          Focus indication is untouched. -->

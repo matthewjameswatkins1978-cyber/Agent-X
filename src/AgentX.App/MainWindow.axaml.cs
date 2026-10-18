@@ -5176,6 +5176,7 @@ public partial class MainWindow : Window
                     var caption = (isCurrent ? "\u25CF " : "") + $"({m.Provider}) {m.Name}";
                     var item = new Button { Content = caption };
                     item.Classes.Add("AxAction");
+                    item.Classes.Add("AxChoice");
                     Avalonia.Controls.ToolTip.SetTip(item, $"Model id: {m.Id}");
                     item.AddHandler(
                         Avalonia.Input.InputElement.KeyDownEvent,
@@ -5363,6 +5364,7 @@ public partial class MainWindow : Window
             {
                 var item = new Button { Content = level };
                 item.Classes.Add("AxAction");
+                item.Classes.Add("AxChoice");
                 item.AddHandler(
                     Avalonia.Input.InputElement.KeyDownEvent,
                     new EventHandler<Avalonia.Input.KeyEventArgs>((_, e) =>
