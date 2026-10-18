@@ -4986,6 +4986,22 @@ public partial class MainWindow : Window
     private Avalonia.Controls.Flyout? _modelFlyout;
     private Avalonia.Controls.Flyout? _thinkingFlyout;
 
+    /// Picker search field in the app's charcoal language: surface fill,
+    /// restrained border, shared radius. Theme resources with dark
+    /// fallbacks so a missing key can never render a raw box.
+    private static void StylePickerSearch(Avalonia.Controls.TextBox box)
+    {
+        var app = Avalonia.Application.Current;
+        object? Pick(string key) => app is not null && app.TryGetResource(key, out var value) ? value : null;
+        box.Background = Pick("Ax.Surface") as Avalonia.Media.IBrush
+            ?? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#161B22"));
+        box.BorderBrush = Pick("Ax.Border") as Avalonia.Media.IBrush
+            ?? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#30363D"));
+        box.BorderThickness = new Avalonia.Thickness(1);
+        box.CornerRadius = Pick("Ax.Radius") as Avalonia.CornerRadius? ?? new Avalonia.CornerRadius(6);
+        box.Padding = new Avalonia.Thickness(8, 4);
+    }
+
     /// <summary>
     /// Real engine flyout: current value is genuine (get_state); when the
     /// Core runtime reports configurable, the live lists render as real
@@ -4995,7 +5011,7 @@ public partial class MainWindow : Window
     /// </summary>
     private Avalonia.Controls.StackPanel BuildEngineFlyoutPanel(string title, string current)
     {
-        var panel = new Avalonia.Controls.StackPanel { Spacing = 6 };
+        var panel = new Avalonia.Controls.StackPanel { Spacing = 6, MinWidth = 300 };
         panel.Children.Add(new Avalonia.Controls.TextBlock
         {
             Text = title,
@@ -5034,7 +5050,7 @@ public partial class MainWindow : Window
 
     private static Avalonia.Controls.StackPanel EngineNotePanel(string title, string current, string note)
     {
-        var panel = new Avalonia.Controls.StackPanel { Spacing = 6 };
+        var panel = new Avalonia.Controls.StackPanel { Spacing = 6, MinWidth = 300 };
         panel.Children.Add(new Avalonia.Controls.TextBlock
         {
             Text = title,
@@ -5064,6 +5080,7 @@ public partial class MainWindow : Window
         // the current-tab provider, so a tab switch mid-load or
         // pre-selection cannot retarget the choice onto another worker.
         var captured = SelectedWorker;
+        var returnFocus = _slashInvoked ? (Avalonia.Controls.Control)PiPromptBox : ModelButton;
         var engine = ActiveEngine();
         var current = engine.Model is null
             ? "No engine connected."
@@ -5124,6 +5141,9 @@ public partial class MainWindow : Window
             var choicesBox = new Avalonia.Controls.StackPanel { Spacing = 2 };
             panel.Children.Add(searchBox);
             panel.Children.Add(choicesBox);
+            StylePickerSearch(searchBox);
+            var currentId = _knownModelId;
+            var rendered = new System.Collections.Generic.List<(PiModelOption Option, Button Item)>();
             // Slash filter preset: /model <query> opens the picker already
             // narrowed. One-shot — a later manual open starts unfiltered.
             if (_modelPickerPreset is { } preset)
@@ -5136,6 +5156,7 @@ public partial class MainWindow : Window
             {
                 var query = searchBox.Text ?? string.Empty;
                 choicesBox.Children.Clear();
+                rendered.Clear();
                 var matches = options.Where(m => EngineModelFilter.Matches(m, query)).ToList();
                 if (matches.Count == 0)
                 {
@@ -5151,12 +5172,15 @@ public partial class MainWindow : Window
 
                 foreach (var m in matches)
                 {
-                    var caption = $"({m.Provider}) {m.Name}";
+                    var isCurrent = m.Id == currentId;
+                    var caption = (isCurrent ? "\u25CF " : "") + $"({m.Provider}) {m.Name}";
                     var item = new Button { Content = caption };
                     item.Classes.Add("AxAction");
                     Avalonia.Controls.ToolTip.SetTip(item, $"Model id: {m.Id}");
-                    item.KeyDown += (_, e) =>
-                    {
+                    item.AddHandler(
+                        Avalonia.Input.InputElement.KeyDownEvent,
+                        new EventHandler<Avalonia.Input.KeyEventArgs>((_, e) =>
+                        {
                         // Full keyboard loop: Down/Up walks the choices,
                         // Up from the first returns to search, Escape leaves.
                         if (e.Key == Avalonia.Input.Key.Down || e.Key == Avalonia.Input.Key.Up)
@@ -5178,9 +5202,12 @@ public partial class MainWindow : Window
                         else if (e.Key == Avalonia.Input.Key.Escape)
                         {
                             _modelFlyout.Hide();
+                            returnFocus.Focus();
                             e.Handled = true;
                         }
-                    };
+                    }),
+                Avalonia.Interactivity.RoutingStrategies.Tunnel,
+                handledEventsToo: true);
                     var provider = m.Provider;
                     var modelId = m.Id;
                     item.Click += async (_, _) =>
@@ -5218,30 +5245,48 @@ public partial class MainWindow : Window
                         }
                     };
                     choicesBox.Children.Add(item);
+                    rendered.Add((m, item));
                 }
             }
 
             searchBox.TextChanged += (_, _) => RenderChoices();
-            searchBox.KeyDown += (_, e) =>
-            {
-                if (e.Key == Avalonia.Input.Key.Down)
+            searchBox.AddHandler(
+                Avalonia.Input.InputElement.KeyDownEvent,
+                new EventHandler<Avalonia.Input.KeyEventArgs>((_, e) =>
                 {
-                    var first = choicesBox.Children.OfType<Button>().FirstOrDefault();
-                    first?.Focus();
-                    e.Handled = true;
-                }
-                else if (e.Key == Avalonia.Input.Key.Up)
-                {
-                    var last = choicesBox.Children.OfType<Button>().LastOrDefault();
-                    last?.Focus();
-                    e.Handled = true;
-                }
-                else if (e.Key == Avalonia.Input.Key.Escape)
-                {
-                    _modelFlyout.Hide();
-                    e.Handled = true;
-                }
-            };
+                    // Tunnel with handledEventsToo: the TextBox consumes
+                    // arrows and Enter in its own class handling, so a
+                    // bubble subscription never fires. Arrows start from
+                    // the current model, Enter chooses it (or the first
+                    // match), Escape leaves and returns focus.
+                    if (e.Key == Avalonia.Input.Key.Down)
+                    {
+                        var at = rendered.FindIndex(t => t.Option.Id == currentId);
+                        var target = at >= 0 ? rendered[at].Item : rendered.FirstOrDefault().Item;
+                        target?.Focus();
+                        e.Handled = true;
+                    }
+                    else if (e.Key == Avalonia.Input.Key.Up)
+                    {
+                        rendered.LastOrDefault().Item?.Focus();
+                        e.Handled = true;
+                    }
+                    else if (e.Key == Avalonia.Input.Key.Enter)
+                    {
+                        var at = rendered.FindIndex(t => t.Option.Id == currentId);
+                        var pick = at >= 0 ? rendered[at] : rendered.FirstOrDefault();
+                        pick.Item?.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.Button.ClickEvent));
+                        e.Handled = true;
+                    }
+                    else if (e.Key == Avalonia.Input.Key.Escape)
+                    {
+                        _modelFlyout.Hide();
+                        returnFocus.Focus();
+                        e.Handled = true;
+                    }
+                }),
+                Avalonia.Interactivity.RoutingStrategies.Tunnel,
+                handledEventsToo: true);
             panel.KeyDown += (_, e) =>
             {
                 if (e.Key == Avalonia.Input.Key.Escape)
@@ -5261,6 +5306,7 @@ public partial class MainWindow : Window
         // Same worker binding as the model chooser: capture once, verify
         // at render and at selection, never resolve the current tab late.
         var captured = SelectedWorker;
+        var returnFocus = _slashInvoked ? (Avalonia.Controls.Control)PiPromptBox : ThinkingButton;
         var engine = ActiveEngine();
         var current = engine.Thinking is null ? "No engine connected." : $"Current: {engine.Thinking}";
         _thinkingFlyout ??= new Avalonia.Controls.Flyout();
@@ -5317,8 +5363,10 @@ public partial class MainWindow : Window
             {
                 var item = new Button { Content = level };
                 item.Classes.Add("AxAction");
-                item.KeyDown += (_, e) =>
-                {
+                item.AddHandler(
+                    Avalonia.Input.InputElement.KeyDownEvent,
+                    new EventHandler<Avalonia.Input.KeyEventArgs>((_, e) =>
+                    {
                     // Keyboard-first like the model chooser: Down/Up walks
                     // the levels, Escape leaves. A focused Button chooses
                     // with Enter/Space through its own activation.
@@ -5337,9 +5385,12 @@ public partial class MainWindow : Window
                     else if (e.Key == Avalonia.Input.Key.Escape)
                     {
                         _thinkingFlyout.Hide();
+                        returnFocus.Focus();
                         e.Handled = true;
                     }
-                };
+                }),
+                Avalonia.Interactivity.RoutingStrategies.Tunnel,
+                handledEventsToo: true);
                 var capturedLevel = level;
                 item.Click += async (_, _) =>
                 {
@@ -5385,7 +5436,9 @@ public partial class MainWindow : Window
                 }
             };
             _thinkingFlyout.Content = panel;
-            panel.Children.OfType<Button>().FirstOrDefault()?.Focus();
+            var currentLevel = engine.Thinking;
+            (panel.Children.OfType<Button>().FirstOrDefault(b => (b.Content as string) == currentLevel)
+                ?? panel.Children.OfType<Button>().FirstOrDefault())?.Focus();
         });
     }
 
