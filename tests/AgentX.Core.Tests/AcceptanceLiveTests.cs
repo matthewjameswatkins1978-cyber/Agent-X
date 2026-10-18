@@ -84,4 +84,39 @@ public sealed class AcceptanceLiveTests
             Cleanup(root);
         }
     }
+
+    [Fact]
+    public async Task CancelledBeforeAcceptance_NeverSignalsAccept()
+    {
+        // A prompt that never reaches Pi acceptance must never retire the
+        // composer draft: the callback is the acceptance signal, and it
+        // stays silent here. The token is cancelled upfront, so no prompt
+        // is even written (SendCommandAsync observes cancellation before
+        // its first write).
+        if (!PiAvailable())
+        {
+            return;
+        }
+
+        var root = TempRoot();
+        using var budget = new CancellationTokenSource(Budget);
+        try
+        {
+            await using var manager = new PiWorkerManager(root);
+            var worker = manager.CreateWorker(ProjectDir(root, "proj"), "Agent ONE");
+            await worker.ConnectAsync(budget.Token);
+            using var doomed = new CancellationTokenSource();
+            doomed.Cancel();
+            var accepted = 0;
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => worker.SendAsync(
+                "this prompt is cancelled first", null, doomed.Token,
+                onPromptAccepted: () => Interlocked.Increment(ref accepted)));
+            Assert.Equal(0, accepted);
+            _output.WriteLine("ACCEPT: pre-cancelled send never signalled acceptance.");
+        }
+        finally
+        {
+            Cleanup(root);
+        }
+    }
 }
