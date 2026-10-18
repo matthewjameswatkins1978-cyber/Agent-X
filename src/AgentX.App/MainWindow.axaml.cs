@@ -3053,9 +3053,11 @@ public partial class MainWindow : Window
 
     private Avalonia.Controls.ScrollViewer? _feedScroller;
 
-    /// A Jump-to-Live click still landing: ScrollIntoView applies after
-    /// layout, so position-based code must honour it instead of restoring
-    /// the pre-click offset. Cleared once the bottom is actually seen.
+    /// A follow intent for the live run: set by Send and Jump-to-Live,
+    /// honoured by every rebuild and flush tick. ScrollIntoView lands
+    /// after layout and growing content unseats position-follow, so this
+    /// persists for the run duration — cleared when the run settles or
+    /// the reader scrolls away, never by merely reaching the bottom.
     private bool _jumpPending;
     private double _lastFeedOffset;
 
@@ -3117,10 +3119,6 @@ public partial class MainWindow : Window
         var metrics = ConversationScrollMetrics();
         var show = ShouldShowJumpToLive(
             _conversationItems.Count, ConversationScrollOffset(), metrics.Viewport, metrics.Extent);
-        if (!show)
-        {
-            _jumpPending = false;
-        }
         JumpToLiveButton?.IsVisible = show;
     }
 
@@ -3142,10 +3140,9 @@ public partial class MainWindow : Window
         UpdateJumpToLiveVisibility();
     }
 
-    /// Explicit reader action: jump to the latest message. The jump is
-    /// latched until the bottom is actually seen, so a rebuild or flush
-    /// landing mid-flight honours it instead of restoring the old offset.
-    /// Manual scrolling afterwards is untouched — the latch is already gone.
+    /// Explicit reader action: jump to the latest message. The follow
+    /// intent persists for the run duration — cleared when the run
+    /// settles or the reader scrolls away, never by merely arriving.
     private void JumpToLive_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (_conversationItems.Count == 0)
@@ -3165,13 +3162,48 @@ public partial class MainWindow : Window
         if (_busyWorkers.Count == 0 && !_piBusy)
         {
             _flushTimer.Stop();
+            _jumpPending = false;
         }
+
+        RefreshActivityDot();
     }
 
     /// <summary>Move buffered deltas into the feed (10 Hz, not per delta).
     /// The feed's Changed post drives SyncFeedView; no direct UI work here.</summary>
+    /// <summary>Live-activity dot: breathes through the palette while a
+    /// run is genuinely live (worker or workspace), still the moment it
+    /// settles. Driven by the flush tick and every settle path — motion
+    /// exists if and only if work is happening. Dedicated brush instance:
+    /// theme brushes are shared, so this never recolors the app.</summary>
+    private long _pulseTick;
+    private readonly Avalonia.Media.SolidColorBrush _activityBrush =
+        new(Avalonia.Media.Color.Parse("#6B7280"));
+
+    private bool IsAgentBusy() => _busyWorkers.Count > 0 || _piBusy;
+
+    private void RefreshActivityDot()
+    {
+        if (!ReferenceEquals(ActivityDot.Fill, _activityBrush))
+        {
+            ActivityDot.Fill = _activityBrush;
+        }
+
+        if (IsAgentBusy())
+        {
+            _pulseTick++;
+            _activityBrush.Color = ActivityPulse.ColorFor(_pulseTick, busy: true);
+            Avalonia.Controls.ToolTip.SetTip(ActivityDot, "Agent working — live run in progress");
+        }
+        else
+        {
+            _activityBrush.Color = ActivityPulse.ColorFor(_pulseTick, busy: false);
+            Avalonia.Controls.ToolTip.SetTip(ActivityDot, "Agent idle");
+        }
+    }
+
     private void FlushLive()
     {
+        RefreshActivityDot();
         // Worker sinks: Core already appended every delta to the worker feed
         // on the RPC thread, so flushing here only bounds the buffers and
         // keeps lifetime totals for the status line. No feed writes from
