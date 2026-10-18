@@ -268,6 +268,28 @@ public sealed class CoreEngineSettingsRuntime : IEngineSettingsRuntime
 }
 
 /// <summary>
+/// Search filter for the model picker: substring match across provider,
+/// display name and engine id — the metadata Pi actually reports. Pricing
+/// and availability are never invented; an empty query matches everything.
+/// </summary>
+public static class EngineModelFilter
+{
+    public static bool Matches(PiModelOption option, string query)
+    {
+        ArgumentNullException.ThrowIfNull(option);
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return true;
+        }
+
+        var q = query.Trim();
+        return option.Provider.Contains(q, StringComparison.OrdinalIgnoreCase)
+            || option.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
+            || option.Id.Contains(q, StringComparison.OrdinalIgnoreCase);
+    }
+}
+
+/// <summary>
 /// Chooser binding rule: a model/thinking chooser is bound to the worker
 /// whose options it loaded. A choice may apply only while that same worker
 /// is still selected; after a tab switch the displayed choice must never

@@ -4783,6 +4783,15 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Never retarget a running worker: listing is harmless, but a
+        // mid-run switch could interrupt or reroute live work.
+        if (_busyWorkers.Contains(captured.Id))
+        {
+            _modelFlyout.Content = EngineNotePanel("Engine model", current,
+                "A run is in progress on this worker — model changes apply when it is idle. Nothing applied.");
+            return;
+        }
+
         IReadOnlyList<PiModelOption> options;
         try
         {
@@ -4804,49 +4813,106 @@ public partial class MainWindow : Window
             }
 
             var panel = BuildEngineFlyoutPanel("Engine model", current);
-            // Replace the trailing "Loading…" row with the real choices.
+            // Replace the trailing "Loading…" row with search + choices.
             panel.Children.RemoveAt(panel.Children.Count - 1);
-            if (options.Count == 0)
+            var searchBox = new Avalonia.Controls.TextBox
             {
-                panel.Children.Add(new Avalonia.Controls.TextBlock { Text = "This connection reported no models.", FontSize = 12 });
-            }
+                PlaceholderText = "Search models…",
+                FontSize = 12,
+            };
+            var choicesBox = new Avalonia.Controls.StackPanel { Spacing = 2 };
+            panel.Children.Add(searchBox);
+            panel.Children.Add(choicesBox);
 
-            foreach (var m in options)
+            void RenderChoices()
             {
-                var caption = $"({m.Provider}) {m.Name}";
-                var item = new Button { Content = caption };
-                item.Classes.Add("AxAction");
-                var provider = m.Provider;
-                var modelId = m.Id;
-                item.Click += async (_, _) =>
+                var query = searchBox.Text ?? string.Empty;
+                choicesBox.Children.Clear();
+                var matches = options.Where(m => EngineModelFilter.Matches(m, query)).ToList();
+                if (matches.Count == 0)
                 {
-                    if (!EngineChooserPolicy.MayApplyTo(capturedId, SelectedWorker?.Id))
+                    choicesBox.Children.Add(new Avalonia.Controls.TextBlock
                     {
-                        _modelFlyout.Hide();
-                        StatusText.Text = "Worker changed — reopen the chooser for the current worker. Nothing applied.";
-                        return;
-                    }
+                        Text = string.IsNullOrWhiteSpace(query)
+                            ? "This connection reported no models."
+                            : $"No models match \"{query.Trim()}\".",
+                        FontSize = 12,
+                    });
+                    return;
+                }
 
-                    try
+                foreach (var m in matches)
+                {
+                    var caption = $"({m.Provider}) {m.Name}";
+                    var item = new Button { Content = caption };
+                    item.Classes.Add("AxAction");
+                    Avalonia.Controls.ToolTip.SetTip(item, $"Model id: {m.Id}");
+                    var provider = m.Provider;
+                    var modelId = m.Id;
+                    item.Click += async (_, _) =>
                     {
-                        await bound.SetModelAsync(provider, modelId, CancellationToken.None).ConfigureAwait(false);
-                        await Dispatcher.UIThread.InvokeAsync(() =>
+                        if (!EngineChooserPolicy.MayApplyTo(capturedId, SelectedWorker?.Id))
                         {
                             _modelFlyout.Hide();
-                            RefreshEngineSegments();
-                            RefreshOverviewAndSettings();
-                            StatusText.Text = $"Model switched to ({provider}) {modelId} — confirmed by engine state.";
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        await Dispatcher.UIThread.InvokeAsync(() => StatusText.Text = $"Model switch failed: {ex.Message}");
-                    }
-                };
-                panel.Children.Add(item);
+                            StatusText.Text = "Worker changed — reopen the chooser for the current worker. Nothing applied.";
+                            return;
+                        }
+
+                        // A run may have started while choosing: never
+                        // retarget live work, just refuse with the truth.
+                        if (_busyWorkers.Contains(capturedId))
+                        {
+                            _modelFlyout.Hide();
+                            StatusText.Text = "A run started on this worker — reopen when idle. Nothing applied.";
+                            return;
+                        }
+
+                        try
+                        {
+                            await bound.SetModelAsync(provider, modelId, CancellationToken.None).ConfigureAwait(false);
+                            await Dispatcher.UIThread.InvokeAsync(() =>
+                            {
+                                _modelFlyout.Hide();
+                                RefreshEngineSegments();
+                                RefreshOverviewAndSettings();
+                                StatusText.Text = $"Model switched to ({provider}) {modelId} — confirmed by engine state.";
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            await Dispatcher.UIThread.InvokeAsync(() => StatusText.Text = $"Model switch failed: {ex.Message}");
+                        }
+                    };
+                    choicesBox.Children.Add(item);
+                }
             }
 
+            searchBox.TextChanged += (_, _) => RenderChoices();
+            searchBox.KeyDown += (_, e) =>
+            {
+                if (e.Key == Avalonia.Input.Key.Down)
+                {
+                    var first = choicesBox.Children.OfType<Button>().FirstOrDefault();
+                    first?.Focus();
+                    e.Handled = true;
+                }
+                else if (e.Key == Avalonia.Input.Key.Escape)
+                {
+                    _modelFlyout.Hide();
+                    e.Handled = true;
+                }
+            };
+            panel.KeyDown += (_, e) =>
+            {
+                if (e.Key == Avalonia.Input.Key.Escape)
+                {
+                    _modelFlyout.Hide();
+                    e.Handled = true;
+                }
+            };
+            RenderChoices();
             _modelFlyout.Content = panel;
+            Dispatcher.UIThread.Post(() => searchBox.Focus());
         });
     }
 
@@ -4870,6 +4936,13 @@ public partial class MainWindow : Window
         if (CoreEngineSettingsRuntime.DescribeThinkingUnavailable(bound) is { } unavailable)
         {
             _thinkingFlyout.Content = EngineNotePanel("Thinking level", current, unavailable);
+            return;
+        }
+
+        if (_busyWorkers.Contains(captured.Id))
+        {
+            _thinkingFlyout.Content = EngineNotePanel("Thinking level", current,
+                "A run is in progress on this worker — thinking changes apply when it is idle. Nothing applied.");
             return;
         }
 
@@ -4914,6 +4987,13 @@ public partial class MainWindow : Window
                         return;
                     }
 
+                    if (_busyWorkers.Contains(capturedId))
+                    {
+                        _thinkingFlyout.Hide();
+                        StatusText.Text = "A run started on this worker — reopen when idle. Nothing applied.";
+                        return;
+                    }
+
                     try
                     {
                         await bound.SetThinkingLevelAsync(capturedLevel, CancellationToken.None).ConfigureAwait(false);
@@ -4933,6 +5013,14 @@ public partial class MainWindow : Window
                 panel.Children.Add(item);
             }
 
+            panel.KeyDown += (_, e) =>
+            {
+                if (e.Key == Avalonia.Input.Key.Escape)
+                {
+                    _thinkingFlyout.Hide();
+                    e.Handled = true;
+                }
+            };
             _thinkingFlyout.Content = panel;
         });
     }
