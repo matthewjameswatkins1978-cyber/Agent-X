@@ -254,12 +254,15 @@ public sealed class MarkdownView : SelectableTextBlock
         }
     }
 
+    // Pi 1.3.0 dark theme roles (dist/modes/interactive/theme/dark.json):
+    // syntaxString is yellow (okhsl 52), syntaxNumber is green — not the
+    // other way around.
     private static IBrush CodeBrushFor(CodeTokenKind kind) => kind switch
     {
         CodeTokenKind.Keyword => BlueBrush,
-        CodeTokenKind.String => GreenBrush,
+        CodeTokenKind.String => YellowBrush,
         CodeTokenKind.Comment => DimBrush,
-        CodeTokenKind.Number => YellowBrush,
+        CodeTokenKind.Number => GreenBrush,
         CodeTokenKind.DiffAdd => GreenBrush,
         CodeTokenKind.DiffDel => RedBrush,
         CodeTokenKind.DiffHunk => YellowBrush,
