@@ -684,7 +684,8 @@ public sealed class PiWorker : IAsyncDisposable
     public async Task<(string Text, PiRunReceipt Receipt)> SendAsync(
         string message,
         IProgress<string>? textProgress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action? onPromptAccepted = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(message);
         var conversation = RequireUsable();
@@ -710,7 +711,7 @@ public sealed class PiWorker : IAsyncDisposable
                 textProgress?.Report(delta);
             });
             var (text, receipt) = await conversation
-                .SendAsync(message, progress, sendCts.Token).ConfigureAwait(false);
+                .SendAsync(message, progress, sendCts.Token, onPromptAccepted).ConfigureAwait(false);
             Feed.ReconcileStreamingText(seq, text);
             Feed.ReconcileToolResults(conversation.History);
             Feed.EndAssistantTurn(seq, receipt);

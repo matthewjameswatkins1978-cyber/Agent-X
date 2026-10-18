@@ -400,13 +400,17 @@ public sealed class PiConversation : IAsyncDisposable
 
     /// <summary>
     /// Send a prompt and stream assistant text. Returns the streamed text plus
-    /// a run-health receipt. Cancellation throws; call RefreshHistoryAsync
-    /// afterwards to reconcile partially persisted work.
+    /// a run-health receipt. <paramref name="onPromptAccepted"/> fires once Pi
+    /// accepts the prompt (before the run settles) so the host can retire
+    /// the composer draft promptly; it must be non-throwing and thread-safe
+    /// (it runs on the wait path, not the UI thread). Cancellation throws;
+    /// call RefreshHistoryAsync afterwards to reconcile partially persisted work.
     /// </summary>
     public async Task<(string Text, PiRunReceipt Receipt)> SendAsync(
         string message,
         IProgress<string>? textProgress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action? onPromptAccepted = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(message);
         var outcomes = new RunOutcomeTracker();
@@ -421,7 +425,11 @@ public sealed class PiConversation : IAsyncDisposable
             // live document before disposal; bridge recording never throws.
             var bridge = _bridge;
             var (text, aborted) = await client.PromptAndWaitAsync(message, textProgress, cancellationToken,
-                acceptance => bridge?.RecordResponse(acceptance)).ConfigureAwait(false);
+                acceptance =>
+                {
+                    bridge?.RecordResponse(acceptance);
+                    onPromptAccepted?.Invoke();
+                }).ConfigureAwait(false);
             using var receiptState = await client.GetStateDocumentAsync(cancellationToken).ConfigureAwait(false);
             var state = RecordStateResponse(bridge, receiptState) ?? PiEngineState.FromResponse(receiptState);
             var receipt = new PiRunReceipt(

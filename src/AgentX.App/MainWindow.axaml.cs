@@ -989,6 +989,24 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Retire an ACCEPTED composer draft: clear promptly once Pi has the
+    /// message (not when the run settles), persist the vacated box so tab
+    /// switches and restarts cannot resurrect it, and refocus so the next
+    /// draft starts immediately. Clears ONLY when the box still holds
+    /// exactly the accepted message — newer typing survives untouched (and
+    /// keeps whatever focus the reader gave it). Runs on the UI thread.
+    /// </summary>
+    private void AcceptComposerDraft(string sentMessage)
+    {
+        if (ComposerActionPolicy.ShouldClearComposer(PiPromptBox.Text, sentMessage))
+        {
+            PiPromptBox.Text = string.Empty;
+            SaveWorkerViewState(_lastViewKey);
+            PiPromptBox.Focus();
+        }
+    }
+
+    /// <summary>
     /// Restore one worker tab's view: draft (seeded from persisted prefs on
     /// first visit), selection, scroll, and its status snapshot. Live
     /// connection/engine strings stay global and are NOT overwritten here.
@@ -2155,12 +2173,21 @@ public partial class MainWindow : Window
         UpdateTabDots();
         try
         {
-            var (text, receipt) = await worker.SendAsync(message, progress);
-            // Background settle: the reader may have moved on, but the
-            // successfully sent draft must still retire under the WORKER's
-            // key — otherwise the pre-switch snapshot restores the sent
-            // text as a phantom draft on return (resendable verbatim).
-            VacateSentDraft(WorkerViewKey.ForWorker(id), message);
+            // Acceptance (not completion) owns the composer: the draft
+            // clears promptly while failures before acceptance never reach
+            // the hook, so a rejected prompt survives untouched. The
+            // worker-key draft retires even if the reader already moved
+            // on; the visible box clears only when it still holds this
+            // exact message on the sending tab.
+            var (text, receipt) = await worker.SendAsync(message, progress, onPromptAccepted: () => Dispatcher.UIThread.Post(() =>
+            {
+                if (IsSelectedWorker(id))
+                {
+                    AcceptComposerDraft(message);
+                }
+
+                VacateSentDraft(WorkerViewKey.ForWorker(id), message);
+            }));
             if (!IsSelectedWorker(id))
             {
                 return; // Reader moved on: feed + dots are current; footer stays theirs.
@@ -2174,15 +2201,10 @@ public partial class MainWindow : Window
             // Routine success leaves no composer row: the footer StatusText
             // already carries the healthy summary, and the empty status
             // collapses the line. Warnings keep their row (failures never
-            // reach here). The composer-clear below still vacates the box.
+            // reach here).
             PiRunStatus.Text = string.Empty;
-            if (ComposerActionPolicy.ShouldClearComposer(PiPromptBox.Text, message))
-            {
-                PiPromptBox.Text = string.Empty;
-                // Same phantom-draft guard as the workspace path: the
-                // cleared box must win over the persisted draft.
-                SaveWorkerViewState(_lastViewKey);
-            }
+            // The composer already cleared at acceptance (or kept newer
+            // typing); completion never touches the box.
             StatusText.Text = receipt.RunHealthy
                 ? $"Pi replied with {text.Length:N0} characters — healthy run (correctness needs separate acceptance checks)."
                 : $"Pi run finished — {receipt.Display}";
@@ -2292,6 +2314,7 @@ public partial class MainWindow : Window
         RefreshWorkingRow();
         UpdateTabDots();
 
+        var acceptedKey = _lastViewKey;
         _feed.AddUser(message);
         _liveSeq = _feed.BeginAssistantTurn();
         _promptLifetime = new CancellationTokenSource();
@@ -2305,7 +2328,21 @@ public partial class MainWindow : Window
 
         try
         {
-            var (text, receipt) = await _conversation.SendAsync(message, progress, _promptLifetime.Token);
+            // Prompt acceptance (not completion) owns the composer: clear
+            // promptly, retire this view's persisted draft even if the
+            // reader already moved on. Failures before acceptance never
+            // reach the hook, so the prompt survives them untouched.
+            var (text, receipt) = await _conversation.SendAsync(
+                message, progress, _promptLifetime.Token,
+                onPromptAccepted: () => Dispatcher.UIThread.Post(() =>
+                {
+                    if (SelectedWorker is null)
+                    {
+                        AcceptComposerDraft(message);
+                    }
+
+                    VacateSentDraft(acceptedKey, message);
+                }));
             StopFlushTimerIfIdle();
             // Authoritative reconcile: the returned text wins over the
             // progressively flushed chunks (same deltas, race-free).
@@ -2325,16 +2362,10 @@ public partial class MainWindow : Window
             // Routine success leaves no composer row: the footer StatusText
             // already carries the healthy summary, and the empty status
             // collapses the line. Warnings keep their row (failures never
-            // reach here). The composer-clear below still vacates the box.
+            // reach here).
             PiRunStatus.Text = string.Empty;
-            if (ComposerActionPolicy.ShouldClearComposer(PiPromptBox.Text, message))
-            {
-                PiPromptBox.Text = string.Empty;
-                // Persist the vacated box: without this the sent text
-                // survives in the view prefs and the next tab switch
-                // restores it as a phantom draft (resendable verbatim).
-                SaveWorkerViewState(_lastViewKey);
-            }
+            // The composer already cleared at acceptance (or kept newer
+            // typing); completion never touches the box.
             StatusText.Text = receipt.RunHealthy
                 ? $"Pi replied with {text.Length:N0} characters — healthy run (correctness needs separate acceptance checks)."
                 : $"Pi run finished — {receipt.Display}";
