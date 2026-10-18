@@ -384,7 +384,7 @@
                     </Border>
                     <!-- Tool: tinted block, muted hairline, 3px state edge,
                          Pi name header + dim suffix, diff-tinted mono body. -->
-                    <Grid IsVisible="{Binding IsTool}" ColumnDefinitions="3,*">
+                    <Grid IsVisible="{Binding IsCardTool}" ColumnDefinitions="3,*">
                       <Border Background="{Binding EdgeBrush}" CornerRadius="2,0,0,2" />
                       <Border Grid.Column="1" Background="{Binding StateBrush}"
                               BorderBrush="{DynamicResource Ax.Border}" BorderThickness="0,1,1,1"
@@ -410,6 +410,25 @@
                       <app:MarkdownView MonoText="{Binding DisplayText}" TextWrapping="Wrap"
                                             FontSize="13" />
                     </Border>
+                    <!-- Flow Mode: one slim status line per tool operation.
+                         The expander reveals the full evidence below. -->
+                    <StackPanel IsVisible="{Binding IsFlowTool}" Spacing="2">
+                      <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Ellipse Width="8" Height="8" Fill="{Binding FlowDot}" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding ToolName}" Foreground="{DynamicResource Ax.Text}"
+                                   FontSize="12" FontWeight="Bold" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding ToolSuffix}" Foreground="{DynamicResource Ax.Dim}"
+                                   FontSize="11" VerticalAlignment="Center" />
+                        <Button Content="{Binding ExpandLabel}" IsVisible="{Binding CanExpand}"
+                                Click="ToolExpand_OnClick" HorizontalAlignment="Left"
+                                FontSize="11" Foreground="{DynamicResource Ax.Blue}"
+                                Background="Transparent" BorderThickness="0" Padding="0" />
+                      </StackPanel>
+                      <StackPanel IsVisible="{Binding IsFlowExpanded}" Spacing="2">
+                        <app:MarkdownView MonoText="{Binding DisplayText}" TextWrapping="Wrap"
+                                          FontSize="13" Dim="True" />
+                      </StackPanel>
+                    </StackPanel>
                     <StackPanel IsVisible="{Binding IsPlainSystemRow}" Spacing="2">
                       <app:MarkdownView MonoText="{Binding DisplayText}" TextWrapping="Wrap"
                                             Dim="{Binding IsDetailRow}" />
@@ -521,6 +540,9 @@
           <TextBlock Text="Preferences" FontSize="16" FontWeight="SemiBold" />
           <CheckBox x:Name="SettingsAutoScrollCheck" Content="Auto-scroll conversation"
                     IsCheckedChanged="SettingsAutoScrollCheck_OnChanged" />
+          <CheckBox x:Name="FlowModeCheck" Content="Flow mode (compact tool lines)"
+                    IsCheckedChanged="FlowModeCheck_OnChanged"
+                    ToolTip.Tip="Conversation-first presentation: slim tool lines instead of full cards. Same evidence, same behaviour." />
           <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
             <TextBlock Text="Detail level" VerticalAlignment="Center"
                        ToolTip.Tip="Compact stops new tool detail rows. Detailed folds transport details away (tool expanders keep them). Full trace shows every diagnostic row." />

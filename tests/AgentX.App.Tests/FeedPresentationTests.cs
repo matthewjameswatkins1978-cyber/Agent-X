@@ -215,4 +215,34 @@ public sealed class FeedPresentationTests
         var map = feed.BuildMap();
         Assert.Equal(0, map.ErrorCount);
     }
+
+    private static ConversationViewItem ToolItem(string note, bool isError, string text = "out")
+        => new(1, "tool", "[Tool #1] " + note, text, text, FeedBlockKind.Tool, false, AxTheme.GreenBrush);
+
+    [Fact]
+    public void FlowMode_SlimLinesReplaceCards()
+    {
+        var item = ToolItem("finished: read", false);
+        Assert.True(item.IsCardTool);
+        Assert.False(item.IsFlowTool);
+        item.FlowMode = true;
+        Assert.True(item.IsFlowTool);
+        Assert.False(item.IsCardTool);
+        Assert.False(item.IsFlowExpanded);
+        item.IsExpanded = true;
+        Assert.True(item.IsFlowExpanded);
+    }
+
+    [Fact]
+    public void FlowDot_MatchesLifecycle()
+    {
+        var failed = new FeedEntry(1, "tool", "boom", Note: "failed: exec", IsError: true);
+        Assert.Same(AxTheme.RedBrush, MainWindow.FlowDotFor(failed));
+        var pending = new FeedEntry(2, "tool", string.Empty, Note: "started: exec");
+        Assert.Same(AxTheme.CyanBrush, MainWindow.FlowDotFor(pending));
+        var done = new FeedEntry(3, "tool", "ok", Note: "finished: exec");
+        Assert.Same(AxTheme.GreenBrush, MainWindow.FlowDotFor(done));
+        var restoredFail = new FeedEntry(4, "tool", "[tool exec failed]\nboom");
+        Assert.Same(AxTheme.RedBrush, MainWindow.FlowDotFor(restoredFail));
+    }
 }

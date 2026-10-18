@@ -29,7 +29,16 @@ public sealed class ViewPrefsTests : IDisposable
         Assert.False(prefs.IsRecovery);
         Assert.Equal(string.Empty, prefs.RecoveryMessage);
         Assert.False(prefs.RailExpanded);
+        Assert.False(prefs.FlowMode);
         Assert.Empty(prefs.Drafts);
+    }
+
+    [Fact]
+    public void FlowMode_RoundTrips()
+    {
+        var prefs = new ViewPrefs { FlowMode = true };
+        Assert.True(prefs.Save(_root, knownKeys: null, pruneDrafts: false));
+        Assert.True(ViewPrefs.Load(_root).FlowMode);
     }
 
     [Fact]

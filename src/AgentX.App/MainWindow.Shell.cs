@@ -739,6 +739,7 @@ public partial class MainWindow
         var item = ToViewItem(entry);
         item.RowMargin = ConversationViewItem.GroupMargins(prevRole, entry, nextRole);
         item.IsFinalReport = ConversationViewItem.ClosesReport(entries, entryIndex, showDiagnostics);
+        item.FlowMode = FlowMode;
         var at = Math.Min(before, _conversationItems.Count);
         _conversationItems.Insert(at, item);
         RejoinSeam(entries, entryIndex, entry, at, showDiagnostics);

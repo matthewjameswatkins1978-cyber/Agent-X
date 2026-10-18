@@ -2613,6 +2613,7 @@ public partial class MainWindow : Window
                     entry,
                     VisibleNeighborRole(snapshot, si, 1, showDiagnostics));
                 item.IsFinalReport = ConversationViewItem.ClosesReport(snapshot, si, showDiagnostics);
+                item.FlowMode = FlowMode;
                 _conversationItems.Add(item);
                 bySeq[entry.Seq] = item;
                 // A fresh receipt closes its cluster's assistant (the row
@@ -2708,6 +2709,7 @@ public partial class MainWindow : Window
         {
             item.StateBrush = ToolStateBrush(entry);
             item.EdgeBrush = ToolEdgeBrush(entry);
+            item.FlowDot = FlowDotFor(entry);
             item.RefreshToolDisplay();
         }
         var body = entry.IsStreaming && entry.Text.Length == 0 ? "Working…" : entry.Text;
@@ -2730,6 +2732,26 @@ public partial class MainWindow : Window
         {
             item.Markdown = MarkdownLite.Parse(item.DisplayText);
         }
+    }
+
+    /// <summary>Flow Mode presentation for new rows (view pref).</summary>
+    private bool FlowMode => _viewPrefs.FlowMode;
+
+    /// Flow status dot: red on failure, cyan while running, green on
+    /// success. Same lifecycle reading as the card brushes, but the live
+    /// state earns Pi's cyan rather than dim grey. Pure for tests.
+    internal static Avalonia.Media.IBrush FlowDotFor(FeedEntry entry)
+    {
+        if (entry.IsError
+            || (entry.Note is null
+                && ConversationViewItem.HistoryToolPresentation(null, entry.Text) is { IsError: true }))
+        {
+            return AxTheme.RedBrush;
+        }
+
+        return entry.Note is not null && entry.Note.StartsWith("started:", StringComparison.Ordinal)
+            ? AxTheme.CyanBrush
+            : AxTheme.GreenBrush;
     }
 
     /// <summary>Visibility preference to bridge level (Detailed default).</summary>
@@ -2832,6 +2854,10 @@ public partial class MainWindow : Window
             FeedBlockKind.Tool => ToolEdgeBrush(entry),
             _ => ClearBrush,
         };
+        if (kind == FeedBlockKind.Tool)
+        {
+            item.FlowDot = FlowDotFor(entry);
+        }
         // A burst that settles before the first sync (reconcile, fixture,
         // back-to-back run completion) is first SEEN settled: parse its
         // Markdown here, or it stays raw until an unrelated later sync.
@@ -2965,6 +2991,7 @@ public partial class MainWindow : Window
                 visible[i],
                 i + 1 < visible.Count ? visible[i + 1].Role : null);
             item.IsFinalReport = ConversationViewItem.ClosesReport(visible, i, showDiagnostics);
+            item.FlowMode = FlowMode;
             _conversationItems.Add(item);
             _shownSeq = Math.Max(_shownSeq, visible[i].Seq);
         }
@@ -4085,6 +4112,7 @@ public partial class MainWindow : Window
         try
         {
             SettingsAutoScrollCheck.IsChecked = _prefs.AutoScroll;
+            FlowModeCheck.IsChecked = _viewPrefs.FlowMode;
             VisibilityCombo.ItemsSource = AgentXPreferences.KnownVisibility;
             VisibilityCombo.SelectedItem = _prefs.Visibility;
             ThemeCombo.SelectedItem = _prefs.Theme;
@@ -4122,6 +4150,18 @@ public partial class MainWindow : Window
 
         _prefs = _prefs with { AutoScroll = SettingsAutoScrollCheck.IsChecked == true };
         SavePrefs();
+    }
+
+    private void FlowModeCheck_OnChanged(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_syncingPrefs)
+        {
+            return;
+        }
+
+        _viewPrefs.FlowMode = FlowModeCheck.IsChecked == true;
+        SaveViewPrefs();
+        RebuildConversationList();
     }
 
     private void VisibilityCombo_OnChanged(object? sender, SelectionChangedEventArgs e)

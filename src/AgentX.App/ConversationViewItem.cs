@@ -393,6 +393,49 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
     internal static string StreamingDisplay(string displayText, bool isStreaming)
         => isStreaming ? displayText + " ▍" : displayText;
 
+    private bool _flowMode;
+
+    /// Flow Mode presentation for this row. Assigned by the host at build;
+    /// toggling rebuilds the list, so rows never mix modes.
+    public bool FlowMode
+    {
+        get => _flowMode;
+        set
+        {
+            if (_flowMode != value)
+            {
+                _flowMode = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FlowMode)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsFlowTool)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsCardTool)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsFlowExpanded)));
+            }
+        }
+    }
+
+    /// Slim Flow tool line (instead of the full card).
+    public bool IsFlowTool => IsTool && FlowMode;
+
+    /// Full tool card (classic presentation).
+    public bool IsCardTool => IsTool && !FlowMode;
+
+    /// Expanded Flow detail under the slim line.
+    public bool IsFlowExpanded => IsFlowTool && IsExpanded;
+
+    /// Status dot for the Flow line. Assigned by the host with the row.
+    public IBrush FlowDot
+    {
+        get;
+        set
+        {
+            if (!Equals(field, value))
+            {
+                field = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FlowDot)));
+            }
+        }
+    } = AxTheme.GreenBrush;
+
     public string FullText
     {
         get => _fullText;
@@ -435,6 +478,7 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
                 _isExpanded = value;
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsExpanded)));
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ExpandLabel)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsFlowExpanded)));
             }
         }
     }

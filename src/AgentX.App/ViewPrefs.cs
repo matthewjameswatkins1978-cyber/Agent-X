@@ -27,6 +27,10 @@ public sealed class ViewPrefs
 
     public double FeedFontSize { get; set; } = AxFeed.DefaultSize;
 
+    /// Flow Mode: slim tool lines instead of full cards. Presentation
+    /// only; evidence and behaviour are identical in both modes.
+    public bool FlowMode { get; set; }
+
     public Dictionary<string, string> Drafts { get; set; } = new();
 
     /// True when the file existed but could not be parsed or read: the
@@ -160,6 +164,7 @@ public sealed class ViewPrefs
                 Treatment = Treatment,
                 FeedAppearance = FeedAppearance,
                 FeedFontSize = FeedFontSize,
+                FlowMode = FlowMode,
                 Drafts = drafts,
             }));
             File.Move(tmp, path, overwrite: true);
