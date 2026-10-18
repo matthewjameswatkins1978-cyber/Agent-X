@@ -2985,6 +2985,14 @@ public partial class MainWindow : Window
             {
                 ConversationList.ScrollIntoView(_conversationItems[^1]);
             }
+            else if (_jumpPending)
+            {
+                // A Jump-to-Live click is still landing: ScrollIntoView
+                // applies after layout, so restoring the pre-click offset
+                // here would yank the reader straight back. Honour the
+                // jump instead; the latch clears once the bottom is seen.
+                ConversationList.ScrollIntoView(_conversationItems[^1]);
+            }
             else
             {
                 SetConversationScrollOffset(savedOffset);
@@ -3043,6 +3051,11 @@ public partial class MainWindow : Window
 
     private Avalonia.Controls.ScrollViewer? _feedScroller;
 
+    /// A Jump-to-Live click still landing: ScrollIntoView applies after
+    /// layout, so position-based code must honour it instead of restoring
+    /// the pre-click offset. Cleared once the bottom is actually seen.
+    private bool _jumpPending;
+
     /// Resolve the feed scroller once it exists and follow its movement so
     /// the Jump control tracks manual scrolling without polling.
     private void EnsureFeedScroller()
@@ -3070,6 +3083,10 @@ public partial class MainWindow : Window
         var metrics = ConversationScrollMetrics();
         var show = ShouldShowJumpToLive(
             _conversationItems.Count, ConversationScrollOffset(), metrics.Viewport, metrics.Extent);
+        if (!show)
+        {
+            _jumpPending = false;
+        }
         JumpToLiveButton?.IsVisible = show;
     }
 
@@ -3083,7 +3100,7 @@ public partial class MainWindow : Window
 
         EnsureFeedScroller();
         var metrics = ConversationScrollMetrics();
-        if (ShouldFollow(_prefs.AutoScroll, ConversationScrollOffset(), metrics.Viewport, metrics.Extent))
+        if (_jumpPending || ShouldFollow(_prefs.AutoScroll, ConversationScrollOffset(), metrics.Viewport, metrics.Extent))
         {
             ConversationList.ScrollIntoView(_conversationItems[^1]);
         }
@@ -3091,9 +3108,10 @@ public partial class MainWindow : Window
         UpdateJumpToLiveVisibility();
     }
 
-    /// Explicit reader action: jump to the latest message. Following
-    /// resumes by position when the preference allows — nothing is
-    /// latched, so this never fights manual scrolling.
+    /// Explicit reader action: jump to the latest message. The jump is
+    /// latched until the bottom is actually seen, so a rebuild or flush
+    /// landing mid-flight honours it instead of restoring the old offset.
+    /// Manual scrolling afterwards is untouched — the latch is already gone.
     private void JumpToLive_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (_conversationItems.Count == 0)
@@ -3101,6 +3119,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        _jumpPending = true;
         ConversationList.ScrollIntoView(_conversationItems[^1]);
         UpdateJumpToLiveVisibility();
     }
