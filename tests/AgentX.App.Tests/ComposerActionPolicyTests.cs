@@ -98,4 +98,52 @@ public sealed class ComposerActionPolicyTests
     {
         Assert.Equal(expected, ComposerActionPolicy.DecideComposerKey(key, mods, slashOpen, highlight, busy));
     }
+
+    [Fact]
+    public void SlashCommands_TableHasDocumentedCommands()
+    {
+        Assert.Equal(3, ComposerActionPolicy.SlashCommands.Count);
+        Assert.Contains(ComposerActionPolicy.SlashCommands, c => c.Name == "model");
+        Assert.Contains(ComposerActionPolicy.SlashCommands, c => c.Name == "thinking");
+        Assert.Contains(ComposerActionPolicy.SlashCommands, c => c.Name == "help");
+    }
+
+    [Theory]
+    [InlineData("/model", "model", "")]
+    [InlineData("/model qwen", "model", "qwen")]
+    [InlineData("/thinking high", "thinking", "high")]
+    [InlineData("/HELP", "HELP", "")]
+    [InlineData("/", "", "")]
+    public void ParseSlashCommand_SplitsNameAndArgs(string text, string name, string args)
+    {
+        Assert.Equal((name, args), ComposerActionPolicy.ParseSlashCommand(text));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("hello")]
+    [InlineData("//literal")]
+    [InlineData(" //not-first")]
+    public void ParseSlashCommand_RejectsNonCommands(string? text)
+    {
+        Assert.Null(ComposerActionPolicy.ParseSlashCommand(text));
+    }
+
+    [Fact]
+    public void FindSlashCommand_MatchesCaseInsensitively()
+    {
+        Assert.NotNull(ComposerActionPolicy.FindSlashCommand("MODEL"));
+        Assert.Null(ComposerActionPolicy.FindSlashCommand("compact"));
+        Assert.Null(ComposerActionPolicy.FindSlashCommand(string.Empty));
+    }
+
+    [Fact]
+    public void FilterSlashCommands_MatchesByPrefix()
+    {
+        Assert.Equal(3, ComposerActionPolicy.FilterSlashCommands(string.Empty).Count);
+        var one = ComposerActionPolicy.FilterSlashCommands("mo");
+        Assert.Equal("model", Assert.Single(one).Name);
+        Assert.Empty(ComposerActionPolicy.FilterSlashCommands("zzz"));
+    }
 }

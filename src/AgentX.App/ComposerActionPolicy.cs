@@ -69,4 +69,60 @@ public static class ComposerActionPolicy
             _ => ComposerKeyAction.None,
         };
     }
+
+    /// One slash command: Pi-canonical name plus what Agent X does with
+    /// it. The set is deliberately small — model/thinking route to the
+    /// existing pickers, help answers locally. Anything else gets an
+    /// honest unknown-command notice instead of a Pi prompt.
+    public sealed record SlashCommand(string Name, string Description);
+
+    public static readonly IReadOnlyList<SlashCommand> SlashCommands = new[]
+    {
+        new SlashCommand("model", "Select a model (opens the model picker)"),
+        new SlashCommand("thinking", "Set the thinking level (opens the thinking picker)"),
+        new SlashCommand("help", "Show Agent X commands and composer keys"),
+    };
+
+    /// <summary>
+    /// Split "/name args..." into its command and argument text. Null
+    /// unless slash-first. A leading "//" escapes to a literal slash
+    /// (ordinary prompt, never a command); a bare "/" parses to an
+    /// empty name (menu with every command, nothing to execute).
+    /// </summary>
+    public static (string Name, string Args)? ParseSlashCommand(string? text)
+    {
+        if (string.IsNullOrEmpty(text) || text[0] != '/')
+        {
+            return null;
+        }
+
+        if (text.StartsWith("//", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var body = text[1..].TrimStart();
+        if (body.Length == 0)
+        {
+            return (string.Empty, string.Empty);
+        }
+
+        var space = body.IndexOfAny([' ', '\t', '\n', '\r']);
+        if (space < 0)
+        {
+            return (body, string.Empty);
+        }
+
+        return (body[..space], body[(space + 1)..].Trim());
+    }
+
+    /// Exact command match (case-insensitive); null when unknown.
+    public static SlashCommand? FindSlashCommand(string name)
+        => SlashCommands.FirstOrDefault(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+
+    /// Menu suggestions: known names starting with the typed fragment.
+    public static IReadOnlyList<SlashCommand> FilterSlashCommands(string fragment)
+        => SlashCommands
+            .Where(c => c.Name.StartsWith(fragment, StringComparison.OrdinalIgnoreCase))
+            .ToList();
 }
