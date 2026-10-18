@@ -994,7 +994,9 @@ public partial class MainWindow : Window
     /// switches and restarts cannot resurrect it, and refocus so the next
     /// draft starts immediately. Clears ONLY when the box still holds
     /// exactly the accepted message — newer typing survives untouched (and
-    /// keeps whatever focus the reader gave it). Runs on the UI thread.
+    /// keeps whatever focus the reader gave it). Focus returns to the box
+    /// unless the reader already moved into the feed (selecting text),
+    /// which is never yanked back. Runs on the UI thread.
     /// </summary>
     private void AcceptComposerDraft(string sentMessage)
     {
@@ -1002,8 +1004,36 @@ public partial class MainWindow : Window
         {
             PiPromptBox.Text = string.Empty;
             SaveWorkerViewState(_lastViewKey);
-            PiPromptBox.Focus();
+            if (!IsReadingInFeed())
+            {
+                PiPromptBox.Focus();
+            }
         }
+    }
+
+    /// True while keyboard focus sits anywhere inside the conversation
+    /// list (reading or selecting). Best-effort: any failure reads as
+    /// not-reading, preserving the previous focus behaviour.
+    private bool IsReadingInFeed()
+    {
+        try
+        {
+            var focused = TopLevel.GetTopLevel(PiPromptBox)?.FocusManager?.GetFocusedElement();
+            for (var node = focused as Avalonia.Visual;
+                node is not null;
+                node = node.GetVisualParent() as Avalonia.Visual)
+            {
+                if (ReferenceEquals(node, ConversationList))
+                {
+                    return true;
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return false;
     }
 
     /// <summary>
