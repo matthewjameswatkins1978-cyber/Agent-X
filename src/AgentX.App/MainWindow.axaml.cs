@@ -2474,30 +2474,38 @@ public partial class MainWindow : Window
 
     private void PiPromptBox_OnKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
     {
-        // Predictable composer keys: Enter inserts a newline (multiline),
-        // Ctrl+Enter sends exactly what is in the box. No other chords act.
-        // Wired to PreviewKeyDown (tunnel): the TextBox consumes Enter in
-        // its own class handling, so the bubble-phase KeyDown never sees
-        // the chord reliably.
-        if (e.Key == Avalonia.Input.Key.Enter
-            && e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control))
+        // One coherent contract (see ComposerActionPolicy): each chord maps
+        // to exactly one action, so Enter can never both newline and send.
+        // Newlines are inserted manually with the event handled — exactly
+        // once regardless of native TextBox behavior. Still wired to
+        // PreviewKeyDown (tunnel): the TextBox consumes Enter in its own
+        // class handling, so the bubble-phase KeyDown never sees chords.
+        // Slash menu states arrive with the menu slice; until then the menu
+        // is never open and those branches stay dormant.
+        var action = ComposerActionPolicy.DecideComposerKey(
+            e.Key, e.KeyModifiers, slashOpen: false, hasHighlight: false, IsComposerBusy());
+        switch (action)
         {
-            e.Handled = true;
-            SendPrompt_OnClick(sender, new Avalonia.Interactivity.RoutedEventArgs());
-        }
-
-        // Escape interrupts the active run only: an idle Escape must not
-        // touch the draft (no clear, no send). Cancellation stays truthful:
-        // "Cancelling…" now, "Cancelled" only once Pi confirms or the
-        // pending operation terminates in the existing handler below.
-        // Escape interrupts the selected run only: a worker run, else the
-        // workspace run. An idle Escape must not touch the draft.
-        if (e.Key == Avalonia.Input.Key.Escape && (SelectedWorker?.Id is { } busyId ? _busyWorkers.Contains(busyId) : _piBusy))
-        {
-            e.Handled = true;
-            CancelPrompt_OnClick(sender, new Avalonia.Interactivity.RoutedEventArgs());
+            case ComposerActionPolicy.ComposerKeyAction.Send:
+                e.Handled = true;
+                SendPrompt_OnClick(sender, new Avalonia.Interactivity.RoutedEventArgs());
+                break;
+            case ComposerActionPolicy.ComposerKeyAction.InsertNewline:
+                e.Handled = true;
+                PiPromptBox.SelectedText = "\n";
+                break;
+            case ComposerActionPolicy.ComposerKeyAction.CancelRun:
+                e.Handled = true;
+                CancelPrompt_OnClick(sender, new Avalonia.Interactivity.RoutedEventArgs());
+                break;
+            default:
+                break;
         }
     }
+
+    /// True while the viewed tab has an active run (worker or workspace).
+    private bool IsComposerBusy()
+        => SelectedWorker?.Id is { } busyId ? _busyWorkers.Contains(busyId) : _piBusy;
 
     private async void CancelPrompt_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {

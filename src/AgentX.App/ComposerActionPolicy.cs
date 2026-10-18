@@ -1,4 +1,5 @@
 using AgentX.Core;
+using Avalonia.Input;
 
 namespace AgentX.App;
 
@@ -24,4 +25,48 @@ public static class ComposerActionPolicy
     /// </summary>
     public static bool ShouldClearComposer(string? currentText, string sentMessage)
         => currentText == sentMessage;
+
+    /// One action per keypress: Enter sends, Alt/Shift+Enter inserts a
+    /// newline, Ctrl+Enter always sends, Escape cancels a busy run (or
+    /// dismisses the slash menu), Up/Down/Tab drive an open slash menu.
+    /// A highlighted slash suggestion wins over plain Enter so choosing
+    /// never accidentally sends; Ctrl+Enter always sends.
+    public enum ComposerKeyAction
+    {
+        None,
+        Send,
+        InsertNewline,
+        CancelRun,
+        AcceptSuggestion,
+        CompleteSuggestion,
+        DismissSuggestions,
+        SuggestPrevious,
+        SuggestNext,
+    }
+
+    /// <summary>
+    /// The single keyboard contract shared by every workspace: each chord
+    /// maps to exactly one action, so Enter can never both newline and
+    /// send. Pure and fully tested; the host only applies the verdict.
+    /// </summary>
+    public static ComposerKeyAction DecideComposerKey(
+        Key key, KeyModifiers mods, bool slashOpen, bool hasHighlight, bool busy)
+    {
+        var ctrl = mods.HasFlag(KeyModifiers.Control);
+        var alt = mods.HasFlag(KeyModifiers.Alt);
+        var shift = mods.HasFlag(KeyModifiers.Shift);
+        return key switch
+        {
+            Key.Enter when ctrl => ComposerKeyAction.Send,
+            Key.Enter when alt || shift => ComposerKeyAction.InsertNewline,
+            Key.Enter when slashOpen && hasHighlight => ComposerKeyAction.AcceptSuggestion,
+            Key.Enter => ComposerKeyAction.Send,
+            Key.Tab when slashOpen && hasHighlight => ComposerKeyAction.CompleteSuggestion,
+            Key.Escape when busy => ComposerKeyAction.CancelRun,
+            Key.Escape when slashOpen => ComposerKeyAction.DismissSuggestions,
+            Key.Up when slashOpen => ComposerKeyAction.SuggestPrevious,
+            Key.Down when slashOpen => ComposerKeyAction.SuggestNext,
+            _ => ComposerKeyAction.None,
+        };
+    }
 }
