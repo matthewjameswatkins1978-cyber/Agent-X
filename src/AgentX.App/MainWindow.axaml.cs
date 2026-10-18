@@ -144,6 +144,9 @@ public partial class MainWindow : Window
     private long _syncRuns;
     private StreamingTextAccumulator? _liveAccumulator;
     private long _liveSeq = -1;
+    private int _liveSeen;
+    private int _liveDone;
+    private readonly List<string> _liveClosed = new();
     private readonly DispatcherTimer _flushTimer;
     // Highest feed Seq materialized in the view. SyncFeedView (below) is the
     // single incremental path from feed mutations to rows.
@@ -188,7 +191,7 @@ public partial class MainWindow : Window
         _feed.Changed += FeedChanged;
         _syncCoalescer = new FeedEventCoalescer(work => Dispatcher.UIThread.Post(work));
         _bridge = new FeedBridge(_feed);
-        _flushTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+        _flushTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
         _flushTimer.Tick += (_, _) => FlushLive();
         // Chord delivery: the TextBox inserts the newline in its own class
         // handling on the bubble route, so a bubble subscription would send
@@ -2315,8 +2318,17 @@ public partial class MainWindow : Window
         UpdateTabDots();
 
         var acceptedKey = _lastViewKey;
+        var liveConversation = _conversation;
+        _liveSeen = 0;
+        _liveDone = 0;
+        _liveClosed.Clear();
         _feed.AddUser(message);
         _liveSeq = _feed.BeginAssistantTurn();
+        if (liveConversation is not null)
+        {
+            liveConversation.MessageBoundary += OnLiveBoundary;
+        }
+
         _promptLifetime = new CancellationTokenSource();
         _flushTimer.Start();
         // Run-local sink (not a closure over a mutable field): deltas buffer
@@ -2344,9 +2356,16 @@ public partial class MainWindow : Window
                     VacateSentDraft(acceptedKey, message);
                 }));
             StopFlushTimerIfIdle();
-            // Authoritative reconcile: the returned text wins over the
-            // progressively flushed chunks (same deltas, race-free).
-            _feed.ReconcileStreamingText(_liveSeq, text);
+            // Drain the sink tail into the final segment, then settle the
+            // authoritative text minus already-closed segments (exact
+            // prefix stripping — narration is never duplicated).
+            var tail = _liveAccumulator?.Flush();
+            if (!string.IsNullOrEmpty(tail))
+            {
+                _feed.AppendDelta(_liveSeq, tail);
+            }
+
+            _feed.ReconcileFinalText(_liveSeq, text, _liveClosed);
             _feed.ReconcileToolResults(_conversation.History);
             _feed.EndAssistantTurn(_liveSeq, receipt);
             // Settle first, render second: the map must never show a stale
@@ -2426,6 +2445,11 @@ public partial class MainWindow : Window
         }
         finally
         {
+            if (liveConversation is not null)
+            {
+                liveConversation.MessageBoundary -= OnLiveBoundary;
+            }
+
             sink.Close(); // Retire this run: late callbacks drop, never reroute.
             if (ReferenceEquals(_liveAccumulator, sink.Accumulator))
             {
@@ -3194,8 +3218,15 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Move buffered deltas into the feed (10 Hz, not per delta).
-    /// The feed's Changed post drives SyncFeedView; no direct UI work here.</summary>
+    /// Boundary flag writer for the live turn: the counter is the whole
+    /// message (single-writer split decisions happen in FlushLive).
+    private void OnLiveBoundary(object? sender, EventArgs _) => Interlocked.Increment(ref _liveSeen);
+
+    /// <summary>Move buffered deltas into the feed (paced batches, not per
+    /// delta, and never a full rebuild: rows update in place). Split live
+    /// narration at Pi message boundaries so text keeps chronological
+    /// order around tool operations. The feed's Changed post drives
+    /// SyncFeedView; no direct UI work here.</summary>
     private void FlushLive()
     {
         // Worker sinks: Core already appended every delta to the worker feed
@@ -3221,6 +3252,20 @@ public partial class MainWindow : Window
         if (accumulator is null || _liveSeq < 0)
         {
             return;
+        }
+
+        // Single writer (UI thread): a boundary since the last flush
+        // closes a non-empty live row; later deltas open a fresh row
+        // below, in order. Empty rows never split.
+        if (Volatile.Read(ref _liveSeen) != Volatile.Read(ref _liveDone))
+        {
+            Volatile.Write(ref _liveDone, Volatile.Read(ref _liveSeen));
+            var current = _feed.GetEntryText(_liveSeq);
+            if (!string.IsNullOrWhiteSpace(current) && _feed.EndAssistantSegment(_liveSeq))
+            {
+                _liveClosed.Add(current);
+                _liveSeq = _feed.BeginAssistantTurn();
+            }
         }
 
         var chunk = accumulator.Flush();

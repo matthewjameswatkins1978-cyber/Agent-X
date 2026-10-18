@@ -192,6 +192,17 @@ public sealed class PiConversation : IAsyncDisposable
     public event EventHandler<PiToolActivity>? ToolActivityChanged;
 
     /// <summary>
+    /// Assistant message/turn boundary observed on the wire (a new Pi
+    /// message or turn started). Hosts close the live text row here so
+    /// narration keeps chronological order around tool operations; rows
+    /// open lazily on the next delta, so boundary-only turns leave no
+    /// empty rows. Raised on the RPC reader thread; the subscriber must
+    /// marshal to its own thread. Never raised for thinking blocks or
+    /// tool-call announcements — text message boundaries only.
+    /// </summary>
+    public event EventHandler? MessageBoundary;
+
+    /// <summary>
     /// Forwarded when the RPC transport dies (stdout EOF or stream error).
     /// The conversation keeps its restored history; call
     /// <see cref=\"ReconnectAsync\"/> to attach a fresh process to the same
@@ -585,6 +596,46 @@ public sealed class PiConversation : IAsyncDisposable
         if (toolActivity is not null)
         {
             ToolActivityChanged?.Invoke(this, toolActivity);
+        }
+
+        if (IsSegmentBoundary(args.Record))
+        {
+            MessageBoundary?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>
+    /// True for turn starts and assistant text-message starts on the wire —
+    /// the points where narration continues in a new message (observed:
+    /// message_start carries message.role in {user, assistant, toolResult}
+    /// with content blocks; turn_start is bare). Thinking-only and
+    /// tool-call-only assistant messages still segment prior narration, so
+    /// role alone decides; user/toolResult/system messages, deltas, ends
+    /// and malformed records never qualify.
+    /// </summary>
+    internal static bool IsSegmentBoundary(JsonDocument record)
+    {
+        try
+        {
+            var type = PiRpcFraming.GetEventType(record);
+            if (type == "turn_start")
+            {
+                return true;
+            }
+
+            if (type != "message_start")
+            {
+                return false;
+            }
+
+            return record.RootElement.TryGetProperty("message", out var message)
+                && message.ValueKind == JsonValueKind.Object
+                && message.TryGetProperty("role", out var role)
+                && role.GetString() == "assistant";
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or JsonException)
+        {
+            return false;
         }
     }
 

@@ -332,6 +332,72 @@ public sealed class ConversationFeed
         Changed?.Invoke();
     }
 
+    /// <summary>
+    /// Close one live assistant row at a Pi message/turn boundary WITHOUT
+    /// settling the run: the row stops streaming with its text kept, and
+    /// later deltas open a fresh row, so narration keeps chronological
+    /// order around tool operations. Pairing, activity, receipts and error
+    /// accounting are untouched — unlike EndAssistantTurn(seq, null), which
+    /// is the cancel path. Returns false when the row is unknown or
+    /// already settled. Later text never rewrites this row.
+    /// </summary>
+    public bool EndAssistantSegment(long seq)
+    {
+        bool closed;
+        lock (_gate)
+        {
+            var index = _entries.FindIndex(e => e.Seq == seq);
+            closed = index >= 0 && _entries[index].IsStreaming;
+            if (closed)
+            {
+                _entries[index] = _entries[index] with { IsStreaming = false };
+            }
+        }
+
+        if (closed)
+        {
+            Changed?.Invoke();
+        }
+
+        return closed;
+    }
+
+    /// <summary>
+    /// Settle the run's final text row from the authoritative full run
+    /// text: prefixes already preserved in closed segments are stripped
+    /// (exact match, in order) so narration is never duplicated across
+    /// rows. With no closed segments this is identical to
+    /// ReconcileStreamingText. Unknown or settled rows are left alone.
+    /// </summary>
+    public void ReconcileFinalText(long seq, string fullText, IReadOnlyList<string> closedSegments)
+    {
+        ArgumentNullException.ThrowIfNull(fullText);
+        ArgumentNullException.ThrowIfNull(closedSegments);
+        var tail = fullText;
+        foreach (var prior in closedSegments)
+        {
+            if (prior.Length == 0 || !tail.StartsWith(prior, StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            tail = tail[prior.Length..];
+        }
+
+        lock (_gate)
+        {
+            var index = _entries.FindIndex(e => e.Seq == seq);
+            if (index < 0 || !_entries[index].IsStreaming)
+            {
+                return;
+            }
+
+            _entries[index] = _entries[index] with { Text = tail };
+        }
+
+        Changed?.Invoke();
+    }
+
     public long AddToolStart(string toolName, string? summary, string? path, bool isMutating, string? callId = null)
     {
         long seq;

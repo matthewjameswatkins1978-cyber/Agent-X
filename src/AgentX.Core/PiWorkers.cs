@@ -703,16 +703,35 @@ public sealed class PiWorker : IAsyncDisposable
 
         Feed.AddUser(message);
         var seq = Feed.BeginAssistantTurn();
+        var boundarySeen = 0;
+        var boundaryDone = 0;
+        var closedTexts = new List<string>();
+        void OnBoundary(object? sender, EventArgs _) => Interlocked.Increment(ref boundarySeen);
+        conversation.MessageBoundary += OnBoundary;
         try
         {
             var progress = new Progress<string>(delta =>
             {
+                // Segment on Pi message boundaries (single writer: this
+                // callback): close a non-empty live row so narration keeps
+                // chronological order around tools; empty rows never split.
+                if (Volatile.Read(ref boundarySeen) != Volatile.Read(ref boundaryDone))
+                {
+                    Volatile.Write(ref boundaryDone, Volatile.Read(ref boundarySeen));
+                    var current = Feed.GetEntryText(seq);
+                    if (!string.IsNullOrWhiteSpace(current) && Feed.EndAssistantSegment(seq))
+                    {
+                        closedTexts.Add(current);
+                        seq = Feed.BeginAssistantTurn();
+                    }
+                }
+
                 Feed.AppendDelta(seq, delta);
                 textProgress?.Report(delta);
             });
             var (text, receipt) = await conversation
                 .SendAsync(message, progress, sendCts.Token, onPromptAccepted).ConfigureAwait(false);
-            Feed.ReconcileStreamingText(seq, text);
+            Feed.ReconcileFinalText(seq, text, closedTexts);
             Feed.ReconcileToolResults(conversation.History);
             Feed.EndAssistantTurn(seq, receipt);
             return (text, receipt);
@@ -741,6 +760,7 @@ public sealed class PiWorker : IAsyncDisposable
         }
         finally
         {
+            conversation.MessageBoundary -= OnBoundary;
             lock (_gate)
             {
                 // CancelAsync cancels under this same lock, so the shared
