@@ -2710,6 +2710,7 @@ public partial class MainWindow : Window
             item.StateBrush = ToolStateBrush(entry);
             item.EdgeBrush = ToolEdgeBrush(entry);
             item.FlowDot = FlowDotFor(entry);
+            ApplyStudioOutcome(item, entry);
             item.RefreshToolDisplay();
         }
         var body = entry.IsStreaming && entry.Text.Length == 0 ? "Working…" : entry.Text;
@@ -2752,6 +2753,25 @@ public partial class MainWindow : Window
         return entry.Note is not null && entry.Note.StartsWith("started:", StringComparison.Ordinal)
             ? AxTheme.CyanBrush
             : AxTheme.GreenBrush;
+    }
+
+    /// Studio card facts for a tool row: name from the lifecycle header,
+    /// failure including restored history (same sniff as the card brush),
+    /// state from the result's own markers. No-ops for ordinary tools.
+    private static void ApplyStudioOutcome(ConversationViewItem item, FeedEntry entry)
+    {
+        var (toolName, _) = ConversationViewItem.ToolDisplay(item.Header, entry.Seq);
+        var failed = entry.IsError
+            || (entry.Note is null
+                && ConversationViewItem.HistoryToolPresentation(null, entry.Text) is { IsError: true });
+        var studio = ConversationViewItem.StudioOutcome(toolName, failed, entry.Text);
+        item.IsStudioTool = studio is not null;
+        if (studio is not null)
+        {
+            item.StudioStateText = ConversationViewItem.DescribeStudioState(studio.State);
+            item.StudioSummary = studio.Summary;
+            item.StudioEdge = ConversationViewItem.StudioEdgeFor(studio.State);
+        }
     }
 
     /// <summary>Visibility preference to bridge level (Detailed default).</summary>
@@ -2857,6 +2877,7 @@ public partial class MainWindow : Window
         if (kind == FeedBlockKind.Tool)
         {
             item.FlowDot = FlowDotFor(entry);
+            ApplyStudioOutcome(item, entry);
         }
         // A burst that settles before the first sync (reconcile, fixture,
         // back-to-back run completion) is first SEEN settled: parse its

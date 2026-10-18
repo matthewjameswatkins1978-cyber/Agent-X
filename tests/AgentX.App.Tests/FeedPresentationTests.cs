@@ -144,6 +144,76 @@ public sealed class FeedPresentationTests
     }
 
     [Fact]
+    public void StudioOutcome_ReadsAuthoritativeMarkersOnly()
+    {
+        Assert.Null(ConversationViewItem.StudioOutcome("read", false, "content"));
+        Assert.Null(ConversationViewItem.StudioOutcome("studio", false, "content"));
+        Assert.Null(ConversationViewItem.StudioOutcome(string.Empty, false, "content"));
+        var ok = ConversationViewItem.StudioOutcome("studio_checkpoint", false, "RESULT: WORKING\nObjective met so far.");
+        Assert.NotNull(ok);
+        Assert.Equal(StudioState.Working, ok.State);
+        var done = ConversationViewItem.StudioOutcome("STUDIO_SHIP", false, "RESULT: COMPLETE\nAll green.");
+        Assert.NotNull(done);
+        Assert.Equal(StudioState.Complete, done.State);
+        var partial = ConversationViewItem.StudioOutcome("studio_complete", false, "RESULT: PARTIAL\nTwo of three checks.");
+        Assert.NotNull(partial);
+        Assert.Equal(StudioState.NeedsHuman, partial.State);
+        var failed = ConversationViewItem.StudioOutcome("studio_complete", false, "RESULT: FAILED\nBroken.");
+        Assert.NotNull(failed);
+        Assert.Equal(StudioState.Failed, failed.State);
+        var blocked = ConversationViewItem.StudioOutcome("studio_wait_for_review", false, "STUDIO MISSION job-1 [WAITING_REVIEW]\nHold.");
+        Assert.NotNull(blocked);
+        Assert.Equal(StudioState.Blocked, blocked.State);
+        var human = ConversationViewItem.StudioOutcome("studio_blocked", false, "STUDIO MISSION job-2 [NEEDS_HUMAN]\nNeed a decision.");
+        Assert.NotNull(human);
+        Assert.Equal(StudioState.NeedsHuman, human.State);
+        // Prose mentions are not evidence: an unmarked success is Working.
+        var prose = ConversationViewItem.StudioOutcome("studio_checkpoint", false, "A NEEDS_HUMAN packet stays WORKING until reviewed.");
+        Assert.NotNull(prose);
+        Assert.Equal(StudioState.Working, prose.State);
+        var json = ConversationViewItem.StudioOutcome("studio_status", false, "{\"status\": \"FAILED\", \"n\": 1}");
+        Assert.NotNull(json);
+        Assert.Equal(StudioState.Failed, json.State);
+        // Tool failure beats result text.
+        var err = ConversationViewItem.StudioOutcome("studio_checkpoint", true, "RESULT: COMPLETE");
+        Assert.NotNull(err);
+        Assert.Equal(StudioState.Failed, err.State);
+    }
+
+    [Fact]
+    public void StudioOutcome_SummarizesFirstLine()
+    {
+        Assert.Equal("no output recorded", ConversationViewItem.StudioSummaryOf("  \n "));
+        Assert.Equal("Hello.", ConversationViewItem.StudioSummaryOf("\nHello.\nWorld."));
+        var long_ = new string('x', 200);
+        Assert.EndsWith("…", ConversationViewItem.StudioSummaryOf(long_));
+    }
+
+    [Fact]
+    public void StudioPresentation_MapsStatesToBrushes()
+    {
+        Assert.Same(AxTheme.CyanBrush, ConversationViewItem.StudioEdgeFor(StudioState.Working));
+        Assert.Same(AxTheme.GreenBrush, ConversationViewItem.StudioEdgeFor(StudioState.Complete));
+        Assert.Same(AxTheme.YellowBrush, ConversationViewItem.StudioEdgeFor(StudioState.NeedsHuman));
+        Assert.Same(AxTheme.BlueBrush, ConversationViewItem.StudioEdgeFor(StudioState.Blocked));
+        Assert.Same(AxTheme.RedBrush, ConversationViewItem.StudioEdgeFor(StudioState.Failed));
+        Assert.Equal("Needs human", ConversationViewItem.DescribeStudioState(StudioState.NeedsHuman));
+    }
+
+    [Fact]
+    public void StudioTool_SuppressesCardAndFlowLines()
+    {
+        var item = ToolItem("finished: studio_checkpoint", false);
+        item.IsStudioTool = true;
+        Assert.False(item.IsCardTool);
+        Assert.False(item.IsFlowTool);
+        Assert.False(item.IsStudioSummary && item.IsStudioExpanded);
+        item.IsExpanded = true;
+        Assert.True(item.IsStudioExpanded);
+        Assert.False(item.IsStudioSummary);
+    }
+
+    [Fact]
     public void FindNextMatch_StepsWrapsAndReachesFoldedText()
     {
         var entries = new FeedEntry[]

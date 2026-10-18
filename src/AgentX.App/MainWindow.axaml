@@ -429,6 +429,36 @@
                                           FontSize="13" Dim="True" />
                       </StackPanel>
                     </StackPanel>
+                    <!-- Studio mission rows: charcoal card with a truthful
+                         state dot. The expander reveals the full receipt. -->
+                    <Grid IsVisible="{Binding IsStudioTool}" ColumnDefinitions="3,*">
+                      <Border Background="{Binding StudioEdge}" CornerRadius="2,0,0,2" />
+                      <Border Grid.Column="1" Background="{DynamicResource Ax.StudioBg}"
+                              BorderBrush="{DynamicResource Ax.Border}" BorderThickness="0,1,1,1"
+                              CornerRadius="{DynamicResource Ax.Radius}" Padding="10,8">
+                        <StackPanel Spacing="4">
+                          <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Ellipse Width="8" Height="8" Fill="{Binding StudioEdge}" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding ToolName}" Foreground="{DynamicResource Ax.Text}"
+                                       FontSize="12" FontWeight="Bold" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding StudioStateText}" Foreground="{Binding StudioEdge}"
+                                       FontSize="11" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding ToolSuffix}" Foreground="{DynamicResource Ax.Dim}"
+                                       FontSize="11" VerticalAlignment="Center" />
+                          </StackPanel>
+                          <TextBlock IsVisible="{Binding IsStudioSummary}" Text="{Binding StudioSummary}"
+                                     Foreground="{DynamicResource Ax.Muted}" FontSize="12" TextWrapping="Wrap" />
+                          <Button Content="{Binding ExpandLabel}" IsVisible="{Binding CanExpand}"
+                                  Click="ToolExpand_OnClick" HorizontalAlignment="Left"
+                                  FontSize="11" Foreground="{DynamicResource Ax.Blue}"
+                                  Background="Transparent" BorderThickness="0" Padding="0" />
+                          <StackPanel IsVisible="{Binding IsStudioExpanded}" Spacing="2">
+                            <app:MarkdownView MonoText="{Binding DisplayText}" TextWrapping="Wrap"
+                                              FontSize="13" />
+                          </StackPanel>
+                        </StackPanel>
+                      </Border>
+                    </Grid>
                     <StackPanel IsVisible="{Binding IsPlainSystemRow}" Spacing="2">
                       <app:MarkdownView MonoText="{Binding DisplayText}" TextWrapping="Wrap"
                                             Dim="{Binding IsDetailRow}" />

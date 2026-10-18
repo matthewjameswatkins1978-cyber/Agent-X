@@ -14,6 +14,18 @@ public enum FeedBlockKind
     Receipt,
 }
 
+/// <summary>Studio mission state for the card indicator. Read from the
+/// tool result's own markers (Studio schema STATUSES), never inferred
+/// from a successful invocation.</summary>
+public enum StudioState
+{
+    Working,
+    Complete,
+    NeedsHuman,
+    Blocked,
+    Failed,
+}
+
 /// <summary>
 /// One bound row in the conversation feed. <see cref="FullText"/> is the
 /// complete message (copy source, always byte-exact); <see cref="DisplayText"/>
@@ -413,11 +425,233 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
         }
     }
 
-    /// Slim Flow tool line (instead of the full card).
-    public bool IsFlowTool => IsTool && FlowMode;
+    /// Slim Flow tool line (instead of the full card; Studio rows keep
+    /// their charcoal card in both modes).
+    public bool IsFlowTool => IsTool && FlowMode && !IsStudioTool;
 
-    /// Full tool card (classic presentation).
-    public bool IsCardTool => IsTool && !FlowMode;
+    /// Full tool card (classic presentation; never a Studio row).
+    public bool IsCardTool => IsTool && !FlowMode && !IsStudioTool;
+
+    private bool _isStudioTool;
+
+    /// Studio mission row: charcoal card with a truthful state indicator.
+    /// Suppresses both the Flow line and the classic card.
+    public bool IsStudioTool
+    {
+        get => _isStudioTool;
+        set
+        {
+            if (_isStudioTool != value)
+            {
+                _isStudioTool = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsStudioTool)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsFlowTool)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsCardTool)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsStudioExpanded)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsStudioSummary)));
+            }
+        }
+    }
+
+    /// Human-readable Studio state for the card header.
+    public string StudioStateText
+    {
+        get;
+        set
+        {
+            if (field != value)
+            {
+                field = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StudioStateText)));
+            }
+        }
+    } = "Working";
+
+    /// One-line evidence summary for the Studio card header.
+    public string StudioSummary
+    {
+        get;
+        set
+        {
+            if (field != value)
+            {
+                field = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StudioSummary)));
+            }
+        }
+    } = string.Empty;
+
+    /// State edge + dot for the Studio card. Assigned by the host.
+    public IBrush StudioEdge
+    {
+        get;
+        set
+        {
+            if (!Equals(field, value))
+            {
+                field = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StudioEdge)));
+            }
+        }
+    } = AxTheme.CyanBrush;
+
+    /// Expanded Studio evidence (the full original receipt).
+    public bool IsStudioExpanded => IsStudioTool && IsExpanded;
+
+    /// Collapsed Studio summary line.
+    public bool IsStudioSummary => IsStudioTool && !IsExpanded;
+
+    /// Studio receipt identity + state from authoritative markers only:
+    /// RESULT lines, bracketed mission states and quoted status fields
+    /// (Studio schema STATUSES). Prose that merely mentions these words
+    /// does not count — an unmarked successful call is Working (the
+    /// mission continues), never Complete. Null unless Studio's tool.
+    internal static StudioFact? StudioOutcome(string toolName, bool isError, string text)
+    {
+        if (string.IsNullOrEmpty(toolName)
+            || !toolName.StartsWith("studio_", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (isError)
+        {
+            return new StudioFact(StudioState.Failed, StudioSummaryOf(text));
+        }
+
+        var state = StateOfResult(text) ?? StateOfBrackets(text) ?? StateOfStatusField(text);
+        return new StudioFact(state ?? StudioState.Working, StudioSummaryOf(text));
+    }
+
+    /// A Studio receipt: parsed mission state plus the summary line.
+    public sealed record StudioFact(StudioState State, string Summary);
+
+    internal static string DescribeStudioState(StudioState state) => state switch
+    {
+        StudioState.Complete => "Complete",
+        StudioState.NeedsHuman => "Needs human",
+        StudioState.Blocked => "Blocked",
+        StudioState.Failed => "Failed",
+        _ => "Working",
+    };
+
+    internal static IBrush StudioEdgeFor(StudioState state) => state switch
+    {
+        StudioState.Complete => AxTheme.GreenBrush,
+        StudioState.NeedsHuman => AxTheme.YellowBrush,
+        StudioState.Blocked => AxTheme.BlueBrush,
+        StudioState.Failed => AxTheme.RedBrush,
+        _ => AxTheme.CyanBrush,
+    };
+
+    internal static string StudioSummaryOf(string text)
+    {
+        foreach (var rawLine in text.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length > 0)
+            {
+                return line.Length <= 120 ? line : line[..120].TrimEnd() + "…";
+            }
+        }
+
+        return "no output recorded";
+    }
+
+    private static StudioState? StateOfToken(string token) => token switch
+    {
+        "COMPLETE" => StudioState.Complete,
+        "PARTIAL" => StudioState.NeedsHuman,
+        "FAILED" => StudioState.Failed,
+        "NEEDS_HUMAN" => StudioState.NeedsHuman,
+        "WAITING_REVIEW" => StudioState.Blocked,
+        "WORKING" => StudioState.Working,
+        _ => null,
+    };
+
+    private static StudioState? StateOfResult(string text)
+    {
+        foreach (var rawLine in text.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (!line.StartsWith("RESULT:", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var token = line["RESULT:".Length..].Trim()
+                .Split([' ', ',', ';', '[', ']'], StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault();
+            if (token is not null && StateOfToken(token) is { } state)
+            {
+                return state;
+            }
+        }
+
+        return null;
+    }
+
+    private static StudioState? StateOfBrackets(string text)
+    {
+        var at = 0;
+        while (at < text.Length)
+        {
+            var open = text.IndexOf('[', at);
+            if (open < 0)
+            {
+                return null;
+            }
+
+            var close = text.IndexOf(']', open + 1);
+            if (close < 0)
+            {
+                return null;
+            }
+
+            if (StateOfToken(text[(open + 1)..close].Trim()) is { } state)
+            {
+                return state;
+            }
+
+            at = close + 1;
+        }
+
+        return null;
+    }
+
+    private static StudioState? StateOfStatusField(string text)
+    {
+        var key = text.IndexOf("\"status\"", StringComparison.Ordinal);
+        while (key >= 0)
+        {
+            var colon = text.IndexOf(':', key + 8);
+            if (colon < 0)
+            {
+                return null;
+            }
+
+            var quote = text.IndexOf('"', colon + 1);
+            if (quote < 0)
+            {
+                return null;
+            }
+
+            var end = text.IndexOf('"', quote + 1);
+            if (end < 0)
+            {
+                return null;
+            }
+
+            if (StateOfToken(text[(quote + 1)..end]) is { } state)
+            {
+                return state;
+            }
+
+            key = text.IndexOf("\"status\"", end + 1, StringComparison.Ordinal);
+        }
+
+        return null;
+    }
 
     /// Expanded Flow detail under the slim line.
     public bool IsFlowExpanded => IsFlowTool && IsExpanded;
@@ -479,6 +713,8 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsExpanded)));
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ExpandLabel)));
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsFlowExpanded)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsStudioExpanded)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsStudioSummary)));
             }
         }
     }
