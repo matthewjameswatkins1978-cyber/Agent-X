@@ -3495,10 +3495,29 @@ public partial class MainWindow : Window
         var metrics = ConversationScrollMetrics();
         if (ShouldFollow(_prefs.AutoScroll, ConversationScrollOffset(), metrics.Viewport, metrics.Extent))
         {
-            ConversationList.ScrollIntoView(_conversationItems[^1]);
+            FollowLiveEdge(_conversationItems[^1], metrics);
         }
 
         UpdateJumpToLiveVisibility();
+    }
+
+    /// Pin decision: a streaming tail row grows downward, so bringing the
+    /// item into view leaves fresh text below the fold. Pure for tests.
+    internal static bool ShouldPinToBottom(bool tailStreaming, double viewportH, double extentH)
+        => tailStreaming && viewportH > 0 && extentH > viewportH;
+
+    /// Follow the live edge, not just the last item: pin a streaming tail
+    /// to the bottom edge; a settled tail IS the edge, so ScrollIntoView
+    /// stays exact. Only ever called while pinned — never yanks.
+    private void FollowLiveEdge(ConversationViewItem tail, (double Viewport, double Extent) metrics)
+    {
+        if (ShouldPinToBottom(tail.IsStreaming, metrics.Viewport, metrics.Extent))
+        {
+            SetConversationScrollOffset(metrics.Extent - metrics.Viewport);
+            return;
+        }
+
+        ConversationList.ScrollIntoView(tail);
     }
 
     /// Explicit reader action: jump to the latest message. Following

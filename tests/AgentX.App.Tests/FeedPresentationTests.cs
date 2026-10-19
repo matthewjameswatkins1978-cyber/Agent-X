@@ -315,4 +315,18 @@ public sealed class FeedPresentationTests
         var restoredFail = new FeedEntry(4, "tool", "[tool exec failed]\nboom");
         Assert.Same(AxTheme.RedBrush, MainWindow.FlowDotFor(restoredFail));
     }
+
+    [Theory]
+    // A streaming tail grows downward: pin to the bottom edge, or fresh
+    // text lands below the fold while the item top stays visible.
+    [InlineData(true, 400.0, 1200.0, true)]
+    [InlineData(true, 400.0, 400.0, false)]
+    [InlineData(true, 0.0, 0.0, false)]
+    [InlineData(false, 400.0, 1200.0, false)]
+    [InlineData(false, 400.0, 400.0, false)]
+    public void ShouldPinToBottom_PinsOnlyStreamingOverflow(
+        bool streaming, double viewportH, double extentH, bool expected)
+    {
+        Assert.Equal(expected, MainWindow.ShouldPinToBottom(streaming, viewportH, extentH));
+    }
 }
