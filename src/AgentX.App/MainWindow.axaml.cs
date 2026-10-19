@@ -1057,6 +1057,7 @@ public partial class MainWindow : Window
             ? _conversationItems.FirstOrDefault(i => i.Seq == seq)
             : null;
         var offset = state.ScrollOffset;
+        _jumpPending = false; // A view switch starts a new reading position: never drag the old tab's follow intent along.
         Dispatcher.UIThread.Post(() => SetConversationScrollOffset(offset));
         StatusText.Text = state.StatusText;
         PiRunStatus.Text = state.RunStatusText;
@@ -2201,6 +2202,7 @@ public partial class MainWindow : Window
         }
 
         UpdateTabDots();
+        LatchFollowOnSend();
         try
         {
             // Acceptance (not completion) owns the composer: the draft
@@ -2364,6 +2366,7 @@ public partial class MainWindow : Window
         var sink = new RunProgressSink();
         _liveAccumulator = sink.Accumulator;
         IProgress<string> progress = sink;
+        LatchFollowOnSend();
 
         try
         {
@@ -3395,6 +3398,13 @@ public partial class MainWindow : Window
             {
                 ConversationList.ScrollIntoView(_conversationItems[^1]);
             }
+            else if (_jumpPending)
+            {
+                // Follow intent is live for this run: pin synchronously
+                // instead of restoring the pre-click offset, which would
+                // yank the reader straight back.
+                PinFeedToBottom();
+            }
             else
             {
                 SetConversationScrollOffset(savedOffset);
@@ -3453,6 +3463,62 @@ public partial class MainWindow : Window
 
     private Avalonia.Controls.ScrollViewer? _feedScroller;
 
+    /// A follow intent for the live run: set by Send and Jump-to-Live,
+    /// honoured by every rebuild and flush tick. ScrollIntoView lands
+    /// after layout and growing content unseats position-follow, so this
+    /// persists for the run duration — cleared when the run settles or
+    /// the reader scrolls away, never by merely reaching the bottom.
+    private bool _jumpPending;
+    private double _lastFeedOffset;
+    private double _lastFeedExtent;
+
+    /// Pressing Go means "watch this run": latch follow so the first
+    /// deltas land in view even if the reader was parked upstairs.
+    /// Scrolling up afterwards breaks away as usual.
+    private void LatchFollowOnSend()
+    {
+        if (_conversationItems.Count == 0)
+        {
+            return;
+        }
+
+        _jumpPending = true;
+        PinFeedToBottom();
+        UpdateJumpToLiveVisibility();
+    }
+
+    /// Manual grab beats automation: a programmatic ScrollIntoView only
+    /// ever moves down, so a distinct upward move is the reader taking
+    /// over — drop any pending jump/follow latch, then track visibility.
+    private void FeedScroller_OnScrollChanged(object? sender, Avalonia.Controls.ScrollChangedEventArgs e)
+    {
+        // Layout also moves the offset: folding, truncation and Markdown
+        // swaps shrink the extent and the viewer clamps along. Only an
+        // upward move BEYOND the extent shrink is the reader grabbing —
+        // a clamped offset drops by at most the shrink amount. While
+        // follow intent is live, anything else that leaves us off-bottom
+        // is pinned straight back: restores, deferred requests and layout
+        // races all lose to the latch. The pin's own event terminates the
+        // recursion: at the bottom there is nothing to enforce.
+        var viewer = _feedScroller;
+        var now = viewer?.Offset.Y ?? 0;
+        var extent = viewer?.Extent.Height ?? 0;
+        var viewport = viewer?.Viewport.Height ?? 0;
+        if (now < _lastFeedOffset - 1 && now - _lastFeedOffset < extent - _lastFeedExtent)
+        {
+            _jumpPending = false;
+        }
+        else if (_jumpPending && ShouldShowJumpToLive(_conversationItems.Count, now, viewport, extent))
+        {
+            PinFeedToBottom();
+            return;
+        }
+
+        _lastFeedOffset = now;
+        _lastFeedExtent = extent;
+        UpdateJumpToLiveVisibility();
+    }
+
     /// Resolve the feed scroller once it exists and follow its movement so
     /// the Jump control tracks manual scrolling without polling.
     private void EnsureFeedScroller()
@@ -3472,7 +3538,9 @@ public partial class MainWindow : Window
         }
 
         _feedScroller = viewer;
-        _feedScroller.ScrollChanged += (_, _) => UpdateJumpToLiveVisibility();
+        _lastFeedOffset = viewer.Offset.Y;
+        _lastFeedExtent = viewer.Extent.Height;
+        _feedScroller.ScrollChanged += FeedScroller_OnScrollChanged;
     }
 
     private void UpdateJumpToLiveVisibility()
@@ -3481,6 +3549,27 @@ public partial class MainWindow : Window
         var show = ShouldShowJumpToLive(
             _conversationItems.Count, ConversationScrollOffset(), metrics.Viewport, metrics.Extent);
         JumpToLiveButton?.IsVisible = show;
+    }
+
+    /// Synchronous bottom pin: Offset assignment applies now, unlike
+    /// ScrollIntoView which posts a request that rapid streaming layout
+    /// passes can supersede and leave the reader stranded. Falls back to
+    /// the request while the scroller is not resolved yet.
+    private void PinFeedToBottom()
+    {
+        if (_conversationItems.Count == 0)
+        {
+            return;
+        }
+
+        if (_feedScroller is { } viewer)
+        {
+            viewer.Offset = new Avalonia.Vector(0, System.Math.Max(0, viewer.Extent.Height - viewer.Viewport.Height));
+        }
+        else
+        {
+            ConversationList.ScrollIntoView(_conversationItems[^1]);
+        }
     }
 
     private void MaybeAutoScroll()
@@ -3493,7 +3582,11 @@ public partial class MainWindow : Window
 
         EnsureFeedScroller();
         var metrics = ConversationScrollMetrics();
-        if (ShouldFollow(_prefs.AutoScroll, ConversationScrollOffset(), metrics.Viewport, metrics.Extent))
+        if (_jumpPending)
+        {
+            PinFeedToBottom();
+        }
+        else if (ShouldFollow(_prefs.AutoScroll, ConversationScrollOffset(), metrics.Viewport, metrics.Extent))
         {
             ConversationList.ScrollIntoView(_conversationItems[^1]);
         }
@@ -3501,9 +3594,9 @@ public partial class MainWindow : Window
         UpdateJumpToLiveVisibility();
     }
 
-    /// Explicit reader action: jump to the latest message. Following
-    /// resumes by position when the preference allows — nothing is
-    /// latched, so this never fights manual scrolling.
+    /// Explicit reader action: jump to the latest message. The follow
+    /// intent persists for the run duration — cleared when the run
+    /// settles or the reader scrolls away, never by merely arriving.
     private void JumpToLive_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (_conversationItems.Count == 0)
@@ -3511,7 +3604,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        ConversationList.ScrollIntoView(_conversationItems[^1]);
+        _jumpPending = true;
+        PinFeedToBottom();
         UpdateJumpToLiveVisibility();
     }
 
@@ -3553,6 +3647,7 @@ public partial class MainWindow : Window
         if (_busyWorkers.Count == 0 && !_piBusy)
         {
             _flushTimer.Stop();
+            _jumpPending = false;
         }
 
         RefreshActivityDot();

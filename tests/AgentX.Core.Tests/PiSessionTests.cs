@@ -69,7 +69,9 @@ public sealed class PiSessionTests
         var assistant = Assert.Single(history, m => m.Role == "assistant");
         Assert.Contains("Hello human", assistant.Text, StringComparison.Ordinal);
         Assert.Contains("[tool call: read]", assistant.Text, StringComparison.Ordinal);
-        Assert.DoesNotContain("should stay hidden", assistant.Text, StringComparison.Ordinal);
+        // Matthew's direction: verbose reasoning is first-class content like
+        // Pi CLI shows it — quoted, not hidden (was DoesNotContain).
+        Assert.Contains("> should stay hidden", assistant.Text, StringComparison.Ordinal);
         var tool = Assert.Single(history, m => m.Role == "tool");
         Assert.Contains("read", tool.Text, StringComparison.Ordinal);
         Assert.Contains(history, m => m.Role == "system" && m.Text.Contains("context summary"));

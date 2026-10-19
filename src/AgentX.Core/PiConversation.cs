@@ -872,7 +872,28 @@ public sealed class PiConversation : IAsyncDisposable
                     notes.Add($"[tool call: {(block.TryGetProperty("name", out var n) ? n.GetString() : "?")}]");
                     break;
                 case "thinking":
-                    break; // Restored on demand from the session, not inlined.
+                    // Verbose reasoning is first-class content (Pi CLI shows
+                    // it): quote it so the feed keeps answers distinct from
+                    // thought. Shape-tolerant: Pi ships the text under either
+                    // "thinking" or "text" depending on the surface.
+                    var thought = block.TryGetProperty("thinking", out var th) && th.ValueKind == JsonValueKind.String
+                        ? th.GetString()
+                        : block.TryGetProperty("text", out var tx) && tx.ValueKind == JsonValueKind.String
+                            ? tx.GetString()
+                            : null;
+                    if (!string.IsNullOrEmpty(thought))
+                    {
+                        if (text.Length > 0)
+                        {
+                            text.Append('\n');
+                        }
+
+                        text.Append("> ");
+                        text.Append(thought.TrimEnd().Replace("\n", "\n> "));
+                        text.Append('\n');
+                    }
+
+                    break;
                 case "image":
                     notes.Add("[image]");
                     break;
