@@ -73,6 +73,7 @@ public sealed class MarkdownView : SelectableTextBlock
     private static IBrush GreenBrush => AxTheme.GreenBrush;
     private static IBrush RedBrush => AxTheme.RedBrush;
     private static IBrush YellowBrush => AxTheme.YellowBrush;
+    private static IBrush StringBrush => AxTheme.StringBrush;
     // Bundled faces follow the feed appearance (see AxTheme): read live at
     // every Rebuild, never cached, so an appearance switch + row rebuild
     // picks up the new families with no extra machinery.
@@ -134,12 +135,12 @@ public sealed class MarkdownView : SelectableTextBlock
                     inlines.Add(new LineBreak());
                     break;
                 case MdBlockKind.Quote:
-                    inlines.Add(new Run("▍ ") { Foreground = DimBrush });
-                    AppendInlines(inlines, block.Inlines, DimBrush, italic: true);
+                    inlines.Add(new Run("▍ ") { Foreground = MutedBrush });
+                    AppendInlines(inlines, block.Inlines, MutedBrush, italic: true);
                     inlines.Add(new LineBreak());
                     break;
                 case MdBlockKind.Hr:
-                    inlines.Add(new Run(new string('─', 24)) { Foreground = DimBrush });
+                    inlines.Add(new Run(new string('─', 24)) { Foreground = MutedBrush });
                     inlines.Add(new LineBreak());
                     break;
                 default:
@@ -254,14 +255,14 @@ public sealed class MarkdownView : SelectableTextBlock
         }
     }
 
-    // Pi 1.3.0 dark theme roles (dist/modes/interactive/theme/dark.json):
-    // syntaxString is yellow (okhsl 52), syntaxNumber is green — not the
-    // other way around.
+    // Pi 1.3.0 dark theme roles (dist/modes/interactive/theme/dark.json),
+    // converter-verified: syntaxString is burnt orange (okhsl 52), distinct
+    // from the ochre warning yellow; comments take muted, not dim.
     private static IBrush CodeBrushFor(CodeTokenKind kind) => kind switch
     {
         CodeTokenKind.Keyword => BlueBrush,
-        CodeTokenKind.String => YellowBrush,
-        CodeTokenKind.Comment => DimBrush,
+        CodeTokenKind.String => StringBrush,
+        CodeTokenKind.Comment => MutedBrush,
         CodeTokenKind.Number => GreenBrush,
         CodeTokenKind.DiffAdd => GreenBrush,
         CodeTokenKind.DiffDel => RedBrush,

@@ -89,11 +89,11 @@ public sealed class MarkdownViewTests
     }
 
     [Fact]
-    public void CodeFence_StringYellowNumberGreenPerPiTheme()
+    public void CodeFence_StringOrangeNumberGreenPerPiTheme()
     {
         var runs = Runs(Build("```csharp\nvar s = \"hi\";\nvar n = 42;\n```"));
         var str = Assert.Single(runs, r => r.Text == "\"hi\"");
-        Assert.Same(AxTheme.YellowBrush, str.Foreground);
+        Assert.Same(AxTheme.StringBrush, str.Foreground);
         var num = Assert.Single(runs, r => r.Text == "42");
         Assert.Same(AxTheme.GreenBrush, num.Foreground);
     }

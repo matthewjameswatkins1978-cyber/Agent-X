@@ -49,6 +49,7 @@ public static class AxTheme
     public static SolidColorBrush GreenBrush { get; } = New(PiPalette.Green);
     public static SolidColorBrush RedBrush { get; } = New(PiPalette.Red);
     public static SolidColorBrush YellowBrush { get; } = New(PiPalette.Yellow);
+    public static SolidColorBrush StringBrush { get; } = New(PiPalette.String);
     public static SolidColorBrush VioletBrush { get; } = New(PiPalette.Violet);
     public static SolidColorBrush CyanBrush { get; } = New(PiPalette.Cyan);
 
@@ -135,6 +136,7 @@ public static class AxTheme
             app.Resources["Ax.Green"] = GreenBrush;
             app.Resources["Ax.Red"] = RedBrush;
             app.Resources["Ax.Yellow"] = YellowBrush;
+            app.Resources["Ax.String"] = StringBrush;
             app.Resources["Ax.Violet"] = VioletBrush;
             app.Resources["Ax.Cyan"] = CyanBrush;
             app.Resources["Ax.MonoFont"] = MonoFont;
