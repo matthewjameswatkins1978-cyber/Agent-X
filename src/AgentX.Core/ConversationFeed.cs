@@ -18,7 +18,8 @@ public sealed record FeedEntry(
     string? Path = null,
     bool IsMutating = false,
     bool IsError = false,
-    string? CallId = null)
+    string? CallId = null,
+    string? Diff = null)
 {
     public static string TruncateForDisplay(string text, int maxChars = 2000)
         => text.Length <= maxChars
@@ -332,7 +333,7 @@ public sealed class ConversationFeed
         Changed?.Invoke();
     }
 
-    public long AddToolStart(string toolName, string? summary, string? path, bool isMutating, string? callId = null)
+    public long AddToolStart(string toolName, string? summary, string? path, bool isMutating, string? callId = null, string? diffPreview = null)
     {
         long seq;
         lock (_gate)
@@ -340,7 +341,7 @@ public sealed class ConversationFeed
             seq = _nextSeq++;
             _entries.Add(new FeedEntry(seq, "tool", summary ?? string.Empty,
                 Note: $"started: {toolName}", Path: path, IsMutating: isMutating,
-                CallId: string.IsNullOrEmpty(callId) ? null : callId));
+                CallId: string.IsNullOrEmpty(callId) ? null : callId, Diff: diffPreview));
             if (!string.IsNullOrEmpty(callId))
             {
                 _openByCallId[callId] = seq;

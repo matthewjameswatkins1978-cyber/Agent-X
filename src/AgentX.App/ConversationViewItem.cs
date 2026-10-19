@@ -114,6 +114,26 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
         }
     }
 
+    private string? _toolDiff;
+
+    /// Bounded diff preview for live edit/write rows (changed lines only).
+    /// Null hides the diff block; restored-history rows keep proven bodies.
+    public string? ToolDiff
+    {
+        get => _toolDiff;
+        set
+        {
+            if (_toolDiff != value)
+            {
+                _toolDiff = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ToolDiff)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasToolDiff)));
+            }
+        }
+    }
+
+    public bool HasToolDiff => !string.IsNullOrEmpty(_toolDiff);
+
     /// True for bridge detail rows ("[detail …]", "[result …]",
     /// "[progress …]"): evidence annotations that read as attachments to
     /// their tool operation, rendered compact — never as cards. Receipts,

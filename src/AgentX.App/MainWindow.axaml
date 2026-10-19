@@ -407,6 +407,8 @@
                             <TextBlock Text="{Binding ToolSuffix}" Foreground="{DynamicResource Ax.Dim}"
                                        FontSize="11" VerticalAlignment="Center" />
                           </StackPanel>
+                          <app:MarkdownView MonoText="{Binding ToolDiff}" DiffTint="True" IsVisible="{Binding HasToolDiff}"
+                                              TextWrapping="Wrap" FontSize="13" />
                           <app:MarkdownView MonoText="{Binding DisplayText}" DiffTint="True"
                                               TextWrapping="Wrap" FontSize="13" />
                           <Button Content="{Binding ExpandLabel}" IsVisible="{Binding CanExpand}"
@@ -436,6 +438,8 @@
                                 Background="Transparent" BorderThickness="0" Padding="0" />
                       </StackPanel>
                       <StackPanel IsVisible="{Binding IsFlowExpanded}" Spacing="2">
+                        <app:MarkdownView MonoText="{Binding ToolDiff}" DiffTint="True" IsVisible="{Binding HasToolDiff}"
+                                          TextWrapping="Wrap" FontSize="13" />
                         <app:MarkdownView MonoText="{Binding DisplayText}" TextWrapping="Wrap"
                                           FontSize="13" Dim="True" />
                       </StackPanel>

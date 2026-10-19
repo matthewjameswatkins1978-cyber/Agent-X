@@ -3079,6 +3079,7 @@ public partial class MainWindow : Window
     {
         var cap = entry.IsStreaming ? LiveDisplayCap : HistoryDisplayCap;
         item.FullText = entry.Text;
+        item.ToolDiff = entry.Diff;
         item.Header = BuildHeader(entry, item.Kind);
         if (item.Kind == FeedBlockKind.Tool)
         {
@@ -3253,6 +3254,7 @@ public partial class MainWindow : Window
         {
             item.FlowDot = FlowDotFor(entry);
             ApplyStudioOutcome(item, entry);
+            item.ToolDiff = entry.Diff;
         }
         // A burst that settles before the first sync (reconcile, fixture,
         // back-to-back run completion) is first SEEN settled: parse its

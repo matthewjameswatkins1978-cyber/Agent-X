@@ -34,7 +34,8 @@ public sealed record PiToolActivity(
     string? Path,
     bool IsError,
     bool IsStart,
-    string? CallId = null)
+    string? CallId = null,
+    string? DiffPreview = null)
 {
     public bool IsMutating =>
         ToolName.Equals("edit", StringComparison.OrdinalIgnoreCase)
@@ -607,7 +608,7 @@ public sealed class PiConversation : IAsyncDisposable
                 var toolName = startName.GetString() ?? "?";
                 var args = root.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object ? a : (JsonElement?)null;
                 return new PiToolActivity(toolName, SummarizeToolArgs(toolName, args), ExtractToolPath(toolName, args), IsError: false, IsStart: true,
-                    CallId: ToolCallIdOf(root));
+                    CallId: ToolCallIdOf(root), DiffPreview: EditDiffPreview(toolName, args, ExtractToolPath(toolName, args)));
             }
 
             if (type == "tool_execution_end" && root.TryGetProperty("toolName", out var endName))
@@ -698,6 +699,128 @@ public sealed class PiConversation : IAsyncDisposable
         }
 
         return line.Length <= maxChars ? line : line[..maxChars] + "…";
+    }
+
+    /// Bounded diff preview for edit/write calls: changed lines only
+    /// (-old/+new under a path header), capped so feed rows stay scannable;
+    /// the expander and copy keep the full evidence. Null unless the args
+    /// shape is proven — never fabricated. Restored-history rows are a
+    /// separate pass (their args need the reconcile path, not the live wire).
+    internal static string? EditDiffPreview(string toolName, JsonElement? args, string? path, int maxLines = 20)
+    {
+        if (args is null || maxLines <= 0)
+        {
+            return null;
+        }
+
+        var lines = new List<string>();
+        var hidden = 0;
+        void Emit(bool removal, string line)
+        {
+            if (lines.Count < maxLines)
+            {
+                lines.Add((removal ? "-" : "+") + line);
+            }
+            else
+            {
+                hidden++;
+            }
+        }
+
+        var value = args.Value;
+        if (toolName.Equals("edit", StringComparison.OrdinalIgnoreCase)
+            && value.TryGetProperty("edits", out var edits)
+            && edits.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in edits.EnumerateArray())
+            {
+                if (entry.ValueKind != JsonValueKind.Object
+                    || !TryArgLines(entry, "oldText", out var oldLines)
+                    || !TryArgLines(entry, "newText", out var newLines))
+                {
+                    continue;
+                }
+
+                // Elide identical framing: only truly changed lines show.
+                var pre = 0;
+                while (pre < oldLines.Length && pre < newLines.Length && oldLines[pre] == newLines[pre])
+                {
+                    pre++;
+                }
+
+                var suf = 0;
+                while (suf < oldLines.Length - pre && suf < newLines.Length - pre
+                    && oldLines[oldLines.Length - 1 - suf] == newLines[newLines.Length - 1 - suf])
+                {
+                    suf++;
+                }
+
+                for (var i = pre; i < oldLines.Length - suf; i++)
+                {
+                    Emit(true, oldLines[i]);
+                }
+
+                for (var i = pre; i < newLines.Length - suf; i++)
+                {
+                    Emit(false, newLines[i]);
+                }
+            }
+        }
+        else if (toolName.Equals("write", StringComparison.OrdinalIgnoreCase)
+            && TryArgLines(value, "content", out var contentLines))
+        {
+            foreach (var line in contentLines)
+            {
+                Emit(false, line);
+            }
+        }
+        else
+        {
+            return null;
+        }
+
+        if (lines.Count == 0)
+        {
+            return null;
+        }
+
+        var head = new List<string>();
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            head.Add($"--- {path}");
+            head.Add($"+++ {path}");
+        }
+
+        head.AddRange(lines);
+        if (hidden > 0)
+        {
+            head.Add($"… {hidden} more lines behind the expander.");
+        }
+
+        return string.Join("\n", head);
+    }
+
+    private static bool TryArgLines(JsonElement element, string name, out string[] lines)
+    {
+        lines = Array.Empty<string>();
+        if (!element.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var text = value.GetString() ?? string.Empty;
+        if (text.Length == 0)
+        {
+            return true;
+        }
+
+        lines = text.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            lines[i] = lines[i].TrimEnd('\r');
+        }
+
+        return true;
     }
 
     internal static void CountRunError(PiRpcEventArgs args, ref int errors)

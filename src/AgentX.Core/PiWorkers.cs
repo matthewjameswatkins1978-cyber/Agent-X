@@ -1055,7 +1055,7 @@ public sealed class PiWorker : IAsyncDisposable
     {
         if (activity.IsStart)
         {
-            Feed.AddToolStart(activity.ToolName, activity.Summary, activity.Path, activity.IsMutating, activity.CallId);
+            Feed.AddToolStart(activity.ToolName, activity.Summary, activity.Path, activity.IsMutating, activity.CallId, activity.DiffPreview);
         }
         else
         {
