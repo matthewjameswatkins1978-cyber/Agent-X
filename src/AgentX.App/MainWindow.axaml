@@ -649,7 +649,7 @@
         <StackPanel x:Name="FooterTransient" />
         <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="8">
           <Grid Grid.Column="0" ColumnDefinitions="Auto,Auto,*" ColumnSpacing="6" VerticalAlignment="Center">
-            <Ellipse x:Name="ActivityDot" Grid.Column="0" Width="8" Height="8" Fill="#6B7280"
+            <Ellipse x:Name="ActivityDot" Grid.Column="0" Width="10" Height="10" Fill="#6B7280"
                      VerticalAlignment="Center" ToolTip.Tip="Agent idle"
                      AutomationProperties.Name="Agent activity" />
             <app:AxIcon Grid.Column="1" Kind="Branch" Width="14" Height="14" VerticalAlignment="Center" />
