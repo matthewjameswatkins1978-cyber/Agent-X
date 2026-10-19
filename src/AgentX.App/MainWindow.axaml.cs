@@ -1009,6 +1009,7 @@ public partial class MainWindow : Window
             ? _conversationItems.FirstOrDefault(i => i.Seq == seq)
             : null;
         var offset = state.ScrollOffset;
+        _jumpPending = false; // A view switch starts a new reading position: never drag the old tab's follow intent along.
         Dispatcher.UIThread.Post(() => SetConversationScrollOffset(offset));
         StatusText.Text = state.StatusText;
         PiRunStatus.Text = state.RunStatusText;
@@ -3084,13 +3085,23 @@ public partial class MainWindow : Window
         // Layout also moves the offset: folding, truncation and Markdown
         // swaps shrink the extent and the viewer clamps along. Only an
         // upward move BEYOND the extent shrink is the reader grabbing —
-        // a clamped offset drops by at most the shrink amount.
+        // a clamped offset drops by at most the shrink amount. While
+        // follow intent is live, anything else that leaves us off-bottom
+        // is pinned straight back: restores, deferred requests and layout
+        // races all lose to the latch. The pin's own event terminates the
+        // recursion: at the bottom there is nothing to enforce.
         var viewer = _feedScroller;
         var now = viewer?.Offset.Y ?? 0;
         var extent = viewer?.Extent.Height ?? 0;
+        var viewport = viewer?.Viewport.Height ?? 0;
         if (now < _lastFeedOffset - 1 && now - _lastFeedOffset < extent - _lastFeedExtent)
         {
             _jumpPending = false;
+        }
+        else if (_jumpPending && ShouldShowJumpToLive(_conversationItems.Count, now, viewport, extent))
+        {
+            PinFeedToBottom();
+            return;
         }
 
         _lastFeedOffset = now;
