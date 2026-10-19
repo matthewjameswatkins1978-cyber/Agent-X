@@ -245,45 +245,116 @@ public sealed class ConversationFeed
     public long BeginAssistantTurn()
         => Add(new FeedEntry(NextSeq(), "assistant", string.Empty, IsStreaming: true));
 
-    public void AppendDelta(long seq, string? delta)
+    /// Append one streamed chunk to a live assistant row. Strict timeline:
+    /// when tool rows arrived after the target row began, the continued
+    /// prose (thinking included — it rides the same assistant text) belongs
+    /// AFTER them: the target freezes and a fresh streaming row carries on,
+    /// so the feed never writes back into an earlier box. Returns the
+    /// effective (possibly new) row seq for live tracking.
+    public long AppendDelta(long seq, string? delta)
     {
         if (string.IsNullOrEmpty(delta))
         {
-            return;
+            return seq;
         }
 
+        long effective;
         lock (_gate)
         {
             var index = _entries.FindIndex(e => e.Seq == seq);
             if (index < 0 || !_entries[index].IsStreaming)
             {
-                return;
+                return seq;
             }
 
-            _entries[index] = _entries[index] with { Text = _entries[index].Text + delta };
+            var intervened = false;
+            foreach (var e in _entries)
+            {
+                if (e.Seq > seq && e.Role == "tool")
+                {
+                    intervened = true;
+                    break;
+                }
+            }
+
+            if (!intervened)
+            {
+                _entries[index] = _entries[index] with { Text = _entries[index].Text + delta };
+                return seq;
+            }
+
+            _entries[index] = _entries[index] with { IsStreaming = false };
+            effective = _nextSeq++;
+            _entries.Add(new FeedEntry(effective, "assistant", delta, IsStreaming: true));
         }
 
         Changed?.Invoke();
+        return effective;
     }
 
-    /// <summary>
-    /// Replace a streaming turn's text with the authoritative full text.
+    /// Replace the live segment's text with the authoritative full text.
     /// The RPC client returns the exact accumulated string on completion;
     /// it wins over the progressively flushed chunks (same deltas, but free
-    /// of any progress-reporting race). No-op when the turn already ended.
-    /// </summary>
+    /// of any progress-reporting race). With tool-interleaved turns the full
+    /// text spans every segment: frozen older segments keep their streamed
+    /// words, the live (newest) segment takes the remainder — or keeps its
+    /// streamed text when the full text does not start with the frozen
+    /// prefix (never fabricate). Works from any member seq of the turn, so
+    /// stale tracked seqs degrade to the same truthful outcome. No-op when
+    /// the turn already ended. Single-segment turns behave exactly as before.
     public void ReconcileStreamingText(long seq, string authoritativeText)
     {
         ArgumentNullException.ThrowIfNull(authoritativeText);
         lock (_gate)
         {
             var index = _entries.FindIndex(e => e.Seq == seq);
-            if (index < 0 || !_entries[index].IsStreaming)
+            if (index < 0)
             {
                 return;
             }
 
-            _entries[index] = _entries[index] with { Text = authoritativeText };
+            var first = index;
+            while (first > 0 && (_entries[first - 1].Role == "assistant" || _entries[first - 1].Role == "tool"))
+            {
+                first--;
+            }
+
+            var last = index;
+            while (last < _entries.Count - 1 && (_entries[last + 1].Role == "assistant" || _entries[last + 1].Role == "tool"))
+            {
+                last++;
+            }
+
+            var liveIndex = -1;
+            for (var i = first; i <= last; i++)
+            {
+                if (_entries[i].Role == "assistant")
+                {
+                    liveIndex = i;
+                }
+            }
+
+            if (liveIndex < 0 || !_entries[liveIndex].IsStreaming)
+            {
+                return;
+            }
+
+            var prefix = new StringBuilder();
+            for (var i = first; i < liveIndex; i++)
+            {
+                if (_entries[i].Role == "assistant")
+                {
+                    prefix.Append(_entries[i].Text);
+                }
+            }
+
+            var frozen = prefix.ToString();
+            if (!authoritativeText.StartsWith(frozen, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _entries[liveIndex] = _entries[liveIndex] with { Text = authoritativeText[frozen.Length..] };
         }
 
         Changed?.Invoke();

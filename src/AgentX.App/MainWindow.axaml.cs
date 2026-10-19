@@ -3636,7 +3636,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        _feed.AppendDelta(_liveSeq, chunk);
+        _liveSeq = _feed.AppendDelta(_liveSeq, chunk);
         StatusText.Text = $"Streaming… {accumulator.CommittedChars:N0} chars in {accumulator.FlushCount:N0} UI updates.";
     }
 

@@ -702,31 +702,35 @@ public sealed class PiWorker : IAsyncDisposable
         }
 
         Feed.AddUser(message);
-        var seq = Feed.BeginAssistantTurn();
+        // Tracked live seq: tool-interleaved deltas split new timeline rows
+        // in Core, so every site below must use the latest row, never the
+        // turn-start seq captured here. A torn read degrades benignly
+        // (guarded no-ops on frozen rows), never loss or duplication.
+        var liveSeq = Feed.BeginAssistantTurn();
         try
         {
             var progress = new Progress<string>(delta =>
             {
-                Feed.AppendDelta(seq, delta);
+                liveSeq = Feed.AppendDelta(liveSeq, delta);
                 textProgress?.Report(delta);
             });
             var (text, receipt) = await conversation
                 .SendAsync(message, progress, sendCts.Token, onPromptAccepted).ConfigureAwait(false);
-            Feed.ReconcileStreamingText(seq, text);
+            Feed.ReconcileStreamingText(liveSeq, text);
             Feed.ReconcileToolResults(conversation.History);
-            Feed.EndAssistantTurn(seq, receipt);
+            Feed.EndAssistantTurn(liveSeq, receipt);
             return (text, receipt);
         }
         catch (OperationCanceledException)
         {
-            Feed.EndAssistantTurn(seq, null);
+            Feed.EndAssistantTurn(liveSeq, null);
             Feed.AddCancelNotice(
                 "Run cancelled — partial streamed text above is kept as-is; history reconciles on the next run or reconnect.");
             throw;
         }
         catch (PiRpcCommandException ex)
         {
-            Feed.EndAssistantTurn(seq, null);
+            Feed.EndAssistantTurn(liveSeq, null);
             Feed.AddError($"Pi rejected the prompt: {ex.Error} — partial streamed text above is kept as-is.");
             throw;
         }
@@ -735,7 +739,7 @@ public sealed class PiWorker : IAsyncDisposable
             // Transport death or any other unexpected failure closes the
             // visible run as failed/unverified — an assistant turn is never
             // left apparently active, and no receipt is ever fabricated.
-            Feed.EndAssistantTurn(seq, null);
+            Feed.EndAssistantTurn(liveSeq, null);
             Feed.AddError($"Run failed before a receipt: {ex.Message}");
             throw;
         }
