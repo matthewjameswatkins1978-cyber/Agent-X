@@ -106,19 +106,6 @@ public sealed class FeedPresentationTests
         Assert.True(ConversationViewItem.ClosesReport(visible, 1, showDiagnostics: false));
     }
 
-    [Theory]
-    [InlineData(true, 900, 100, 1000, true)]   // pinned to bottom: follow
-    [InlineData(true, 0, 100, 1000, false)]    // reading history: hold position
-    [InlineData(true, 870, 100, 1000, true)]   // within tolerance: follow
-    [InlineData(true, 100, 100, 1000, false)]  // scrolled up: hold position
-    [InlineData(false, 900, 100, 1000, false)] // preference off: never follow
-    [InlineData(true, 0, 0, 0, true)]          // no geometry yet: legacy follow
-    public void ShouldFollow_RespectsPositionAndPreference(
-        bool pref, double offsetY, double viewportH, double extentH, bool expected)
-    {
-        Assert.Equal(expected, MainWindow.ShouldFollow(pref, offsetY, viewportH, extentH));
-    }
-
     [Fact]
     public void TimelineAndMap_StayFreeOfTransportRows()
     {
@@ -239,17 +226,6 @@ public sealed class FeedPresentationTests
         Assert.Equal(-1, MainWindow.FindNextMatch(Array.Empty<FeedEntry>(), anchorSeq: null, query: "go", direction: 1));
     }
 
-    [Theory]
-    [InlineData(0, 900, 100, 1000, false)]  // empty feed: no button
-    [InlineData(5, 900, 100, 1000, false)]  // pinned to bottom: no button
-    [InlineData(5, 0, 100, 1000, true)]     // reading history: offer the jump
-    [InlineData(5, 0, 0, 0, false)]         // no geometry yet: hidden until layout
-    public void JumpToLive_ShowsOnlyWhenUnpinned(
-        int itemCount, double offsetY, double viewportH, double extentH, bool expected)
-    {
-        Assert.Equal(expected, MainWindow.ShouldShowJumpToLive(itemCount, offsetY, viewportH, extentH));
-    }
-
     [Fact]
     public void LongFeed_MapsHundredsOfToolRows()
     {
@@ -328,5 +304,17 @@ public sealed class FeedPresentationTests
         bool streaming, double viewportH, double extentH, bool expected)
     {
         Assert.Equal(expected, MainWindow.ShouldPinToBottom(streaming, viewportH, extentH));
+    }
+
+    [Theory]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, false)]
+    public void FollowEngaged_PrefAndLatch(bool pref, bool latched, bool expected)
+    {
+        // The contract: preference is the master switch, a mouse click in
+        // the feed is the only unlatch, Go/Enter and Jump re-latch.
+        Assert.Equal(expected, MainWindow.FollowEngaged(pref, latched));
     }
 }

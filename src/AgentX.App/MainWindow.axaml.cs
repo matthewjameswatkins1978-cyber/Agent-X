@@ -200,6 +200,14 @@ public partial class MainWindow : Window
             new EventHandler<Avalonia.Input.KeyEventArgs>(PiPromptBox_OnKeyDown),
             Avalonia.Interactivity.RoutingStrategies.Tunnel,
             handledEventsToo: true);
+        // Latch-off: a mouse click anywhere in the feed means the reader is
+        // taking over — follow disengages. Bubble route: row buttons and
+        // text clicks all report through the list. Jump-to-Live is a sibling
+        // overlay outside the list, so its click re-latches instead.
+        ConversationList.AddHandler(
+            InputElement.PointerPressedEvent,
+            new EventHandler<Avalonia.Input.PointerPressedEventArgs>(ConversationList_OnPointerPressed),
+            Avalonia.Interactivity.RoutingStrategies.Bubble);
         SizeChanged += (_, _) => PostLayoutRefresh();
         // Developer Layout Inspector (B2): F12 toggles the guide overlay.
         // Tunnel so the key works from anywhere, including the composer;
@@ -2183,6 +2191,8 @@ public partial class MainWindow : Window
         var sink = new RunProgressSink();
         _runSinks[id] = sink;
         _runSeqs[id] = worker.Feed.Snapshot().LastOrDefault()?.Seq ?? -1;
+        // Same contract as the workspace path: sending latches follow on.
+        EngageFollowForNewRun();
         _busyWorkers.Add(id);
         IProgress<string> progress = sink;
         if (IsSelectedWorker(id))
@@ -2345,6 +2355,9 @@ public partial class MainWindow : Window
             return;
         }
 
+        // The reader pressed Go/Enter to watch this run: latch follow on
+        // and pin to the edge now — no scrolling needed from here.
+        EngageFollowForNewRun();
         _piBusy = true;
         PiConnectionState.Text = "Working…";
         // A new run owns the status line: stale reconnect/restore notes
@@ -3406,24 +3419,11 @@ public partial class MainWindow : Window
         UpdateJumpToLiveVisibility();
     }
 
-    /// Follow-logic: honour the AutoScroll preference but never yank the
-    /// reader away from older messages. Pure for tests; the host supplies
-    /// live viewer metrics and falls back to the preference alone while
-    /// the viewer is not realized.
-    internal static bool ShouldFollow(bool autoScrollPref, double offsetY, double viewportH, double extentH)
-    {
-        if (!autoScrollPref)
-        {
-            return false;
-        }
-
-        if (viewportH <= 0 || extentH <= 0)
-        {
-            return true;
-        }
-
-        return offsetY + viewportH >= extentH - 32;
-    }
+    /// Follow rule: the preference is the master switch, the latch is the
+    /// reader's live vote. A mouse click in the feed is the ONLY thing that
+    /// unlatches; Go/Enter and Jump-to-Live latch back on. Pure for tests.
+    internal static bool FollowEngaged(bool autoScrollPref, bool latched)
+        => autoScrollPref && latched;
 
     private (double Viewport, double Extent) ConversationScrollMetrics()
     {
@@ -3446,10 +3446,10 @@ public partial class MainWindow : Window
         }
     }
 
-    /// Jump-to-Live visibility rule: offer the jump whenever rows exist
-    /// and the reader is not pinned to the bottom. Pure for tests.
-    internal static bool ShouldShowJumpToLive(int itemCount, double offsetY, double viewportH, double extentH)
-        => itemCount > 0 && !ShouldFollow(true, offsetY, viewportH, extentH);
+    /// Latch state: true while the feed follows the live edge. Latched on
+    /// by Go/Enter and Jump-to-Live; cleared only by a mouse click in the
+    /// feed. Wheel and keyboard scrolling never touch it.
+    private bool _followLatched = true;
 
     private Avalonia.Controls.ScrollViewer? _feedScroller;
 
@@ -3477,10 +3477,10 @@ public partial class MainWindow : Window
 
     private void UpdateJumpToLiveVisibility()
     {
-        var metrics = ConversationScrollMetrics();
-        var show = ShouldShowJumpToLive(
-            _conversationItems.Count, ConversationScrollOffset(), metrics.Viewport, metrics.Extent);
-        JumpToLiveButton?.IsVisible = show;
+        // The jump is the re-latch affordance: show it whenever rows exist
+        // and follow is disengaged, wherever the reader sits.
+        JumpToLiveButton?.IsVisible =
+            _conversationItems.Count > 0 && !FollowEngaged(_prefs.AutoScroll, _followLatched);
     }
 
     private void MaybeAutoScroll()
@@ -3493,7 +3493,7 @@ public partial class MainWindow : Window
 
         EnsureFeedScroller();
         var metrics = ConversationScrollMetrics();
-        if (ShouldFollow(_prefs.AutoScroll, ConversationScrollOffset(), metrics.Viewport, metrics.Extent))
+        if (FollowEngaged(_prefs.AutoScroll, _followLatched))
         {
             FollowLiveEdge(_conversationItems[^1], metrics);
         }
@@ -3520,9 +3520,37 @@ public partial class MainWindow : Window
         ConversationList.ScrollIntoView(tail);
     }
 
-    /// Explicit reader action: jump to the latest message. Following
-    /// resumes by position when the preference allows — nothing is
-    /// latched, so this never fights manual scrolling.
+    /// Pin the feed to its bottom edge now (no-op while unrealized).
+    private void PinToBottom()
+    {
+        EnsureFeedScroller();
+        var metrics = ConversationScrollMetrics();
+        if (metrics.Viewport > 0 && metrics.Extent > metrics.Viewport)
+        {
+            SetConversationScrollOffset(metrics.Extent - metrics.Viewport);
+        }
+
+        UpdateJumpToLiveVisibility();
+    }
+
+    /// Explicit run start (Go/Enter): the reader asked to watch this run —
+    /// latch follow on and pin immediately so no scrolling is needed.
+    private void EngageFollowForNewRun()
+    {
+        _followLatched = true;
+        PinToBottom();
+    }
+
+    /// Latch-off: a mouse click in the feed means the reader is taking over.
+    /// Shows the re-latch jump at once so the affordance never lags.
+    private void ConversationList_OnPointerPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e)
+    {
+        _followLatched = false;
+        UpdateJumpToLiveVisibility();
+    }
+
+    /// Explicit reader action: latch back on and pin to the edge now —
+    /// the jump is how follow re-engages after a latch-off click.
     private void JumpToLive_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (_conversationItems.Count == 0)
@@ -3530,8 +3558,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        ConversationList.ScrollIntoView(_conversationItems[^1]);
-        UpdateJumpToLiveVisibility();
+        _followLatched = true;
+        PinToBottom();
     }
 
     /// Stop the flush tick only when nothing streams anywhere: concurrent
