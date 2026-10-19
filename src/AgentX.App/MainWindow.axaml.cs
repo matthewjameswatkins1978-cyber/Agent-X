@@ -3479,10 +3479,13 @@ public partial class MainWindow : Window
 
     private void UpdateJumpToLiveVisibility()
     {
-        // The jump is the re-latch affordance: show it whenever rows exist
-        // and follow is disengaged, wherever the reader sits.
+        // The jump is the re-latch affordance AND the displacement escape
+        // hatch: show it whenever rows exist and follow is disengaged or
+        // the reader sits above the edge — in every state, no exceptions.
+        var metrics = ConversationScrollMetrics();
+        var displaced = ConversationScrollOffset() + metrics.Viewport < metrics.Extent - 32;
         JumpToLiveButton?.IsVisible =
-            _conversationItems.Count > 0 && !FollowEngaged(_prefs.AutoScroll, _followLatched);
+            _conversationItems.Count > 0 && (!FollowEngaged(_prefs.AutoScroll, _followLatched) || displaced);
     }
 
     private void MaybeAutoScroll()
@@ -3493,33 +3496,22 @@ public partial class MainWindow : Window
             return;
         }
 
-        EnsureFeedScroller();
-        var metrics = ConversationScrollMetrics();
         if (FollowEngaged(_prefs.AutoScroll, _followLatched))
         {
-            FollowLiveEdge(_conversationItems[^1], metrics);
+            FollowLiveEdge();
         }
 
         UpdateJumpToLiveVisibility();
     }
 
-    /// Pin decision: a streaming tail row grows downward, so bringing the
-    /// item into view leaves fresh text below the fold. Pure for tests.
-    internal static bool ShouldPinToBottom(bool tailStreaming, double viewportH, double extentH)
-        => tailStreaming && viewportH > 0 && extentH > viewportH;
-
-    /// Follow the live edge, not just the last item: pin a streaming tail
-    /// to the bottom edge; a settled tail IS the edge, so ScrollIntoView
-    /// stays exact. Only ever called while pinned — never yanks.
-    private void FollowLiveEdge(ConversationViewItem tail, (double Viewport, double Extent) metrics)
+    /// Follow the live edge: ScrollToEnd pins the bottom edge no matter
+    /// how stale a manual offset read would be — the growing streaming row
+    /// can never strand fresh text below the fold, and no branch can flip
+    /// between item-top and edge mid-run. Only ever called while engaged.
+    private void FollowLiveEdge()
     {
-        if (ShouldPinToBottom(tail.IsStreaming, metrics.Viewport, metrics.Extent))
-        {
-            SetConversationScrollOffset(metrics.Extent - metrics.Viewport);
-            return;
-        }
-
-        ConversationList.ScrollIntoView(tail);
+        EnsureFeedScroller();
+        _feedScroller?.ScrollToEnd();
     }
 
     /// Pin the feed to its bottom edge now (no-op while unrealized).
