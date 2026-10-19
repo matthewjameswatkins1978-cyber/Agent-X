@@ -345,8 +345,11 @@
                   <!-- Rows sit flush on the feed edge (the content datum):
                        block padding is the only inset, never a second
                        margin — no double-indent against cards/composer. -->
-                  <StackPanel Spacing="2" Margin="{Binding RowMargin}"
-                              AutomationProperties.Name="{Binding Header}">
+                  <!-- Row grid: the content stack plus one copy button
+                       top-right of every box (byte-exact FullText). -->
+                  <Grid Margin="{Binding RowMargin}"
+                        AutomationProperties.Name="{Binding Header}">
+                  <StackPanel Spacing="2">
                     <!-- User: tinted block with an accent edge. Body renders
                          through the same safe MarkdownLite parser as assistant
                          rows (Lucy B7 review); the fallback keeps raw text for
@@ -472,6 +475,14 @@
                                             Dim="{Binding IsDetailRow}" />
                     </StackPanel>
                   </StackPanel>
+                  <Button Content="Copy" Click="RowCopy_OnClick"
+                          HorizontalAlignment="Right" VerticalAlignment="Top"
+                          FontSize="10" Padding="6,2" Margin="0,2,4,0" Opacity="0.45"
+                          Foreground="{DynamicResource Ax.Muted}"
+                          Background="Transparent" BorderThickness="0"
+                          ToolTip.Tip="Copy this message (exact text)"
+                          AutomationProperties.Name="Copy message" />
+                  </Grid>
                 </DataTemplate>
               </ListBox.ItemTemplate>
             </ListBox>

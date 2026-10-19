@@ -3549,6 +3549,41 @@ public partial class MainWindow : Window
         UpdateJumpToLiveVisibility();
     }
 
+    /// Per-row Copy: one click copies the box's byte-exact Core FullText
+    /// (never the rendered view) to the clipboard. A brief tick confirms;
+    /// failures leave the button as-is and the text untouched.
+    private async void RowCopy_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if ((sender as Avalonia.Controls.Button)?.DataContext is not ConversationViewItem item
+            || string.IsNullOrEmpty(item.FullText))
+        {
+            return;
+        }
+
+        var button = (Avalonia.Controls.Button)sender!;
+        var clipboard = Avalonia.Controls.TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var transfer = new Avalonia.Input.DataTransfer();
+            transfer.Add(Avalonia.Input.DataTransferItem.CreateText(item.FullText));
+            await clipboard.SetDataAsync(transfer);
+            await clipboard.FlushAsync();
+            button.Content = "\u2713";
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            timer.Tick += (_, _) => { timer.Stop(); button.Content = "Copy"; };
+            timer.Start();
+        }
+        catch
+        {
+            // Clipboard unavailable: leave the button as-is, text preserved.
+        }
+    }
+
     /// Explicit reader action: latch back on and pin to the edge now —
     /// the jump is how follow re-engages after a latch-off click.
     private void JumpToLive_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
