@@ -1,4 +1,5 @@
-using AgentX.App;
+using System.Text.Json;
+using AgentX.Core;
 using Avalonia.Media;
 using Xunit;
 
@@ -15,24 +16,38 @@ public sealed class ActivityPulseTests
     }
 
     [Fact]
-    public void Busy_Hits_Both_Palette_Ends()
+    public void Ride_Hits_Every_Palette_Stop()
     {
-        // sin = +1 at tick 5 → Cyan; sin = −1 at tick 15 → Green.
-        Assert.Equal(Color.Parse(PiPalette.Cyan), ActivityPulse.ColorFor(5, busy: true));
-        Assert.Equal(Color.Parse(PiPalette.Green), ActivityPulse.ColorFor(15, busy: true));
+        Assert.Equal(Color.Parse(PiPalette.Green), ActivityPulse.ColorFor(0, busy: true));
+        Assert.Equal(Color.Parse(PiPalette.Cyan), ActivityPulse.ColorFor(10, busy: true));
+        Assert.Equal(Color.Parse(PiPalette.Blue), ActivityPulse.ColorFor(20, busy: true));
+        Assert.Equal(Color.Parse(PiPalette.Violet), ActivityPulse.ColorFor(30, busy: true));
+        Assert.Equal(Color.Parse(PiPalette.Yellow), ActivityPulse.ColorFor(40, busy: true));
     }
 
     [Fact]
-    public void Busy_Stays_Inside_The_Green_Cyan_Segment()
+    public void Ride_Stays_Inside_The_Palette_Range()
     {
-        var green = Color.Parse(PiPalette.Green);
-        var cyan = Color.Parse(PiPalette.Cyan);
-        for (var tick = 0; tick < 40; tick++)
+        var stops = new[]
         {
-            var c = ActivityPulse.ColorFor(tick, busy: true);
-            Assert.InRange((int)c.R, System.Math.Min((int)green.R, (int)cyan.R), System.Math.Max((int)green.R, (int)cyan.R));
-            Assert.InRange((int)c.G, System.Math.Min((int)green.G, (int)cyan.G), System.Math.Max((int)green.G, (int)cyan.G));
-            Assert.InRange((int)c.B, System.Math.Min((int)green.B, (int)cyan.B), System.Math.Max((int)green.B, (int)cyan.B));
+            Color.Parse(PiPalette.Green), Color.Parse(PiPalette.Cyan), Color.Parse(PiPalette.Blue),
+            Color.Parse(PiPalette.Violet), Color.Parse(PiPalette.Yellow),
+        };
+        var lo = new int[3];
+        var hi = new int[3];
+        for (var c = 0; c < 3; c++)
+        {
+            var vals = c == 0 ? stops.Select(s => (int)s.R) : c == 1 ? stops.Select(s => (int)s.G) : stops.Select(s => (int)s.B);
+            lo[c] = vals.Min();
+            hi[c] = vals.Max();
+        }
+
+        for (var tick = 0; tick < 100; tick++)
+        {
+            var color = ActivityPulse.ColorFor(tick, busy: true);
+            Assert.InRange((int)color.R, lo[0], hi[0]);
+            Assert.InRange((int)color.G, lo[1], hi[1]);
+            Assert.InRange((int)color.B, lo[2], hi[2]);
         }
     }
 
@@ -43,8 +58,8 @@ public sealed class ActivityPulseTests
     }
 
     [Fact]
-    public void Breathe_Repeats_Every_Twenty_Ticks()
+    public void Ride_Repeats_Every_Fifty_Ticks()
     {
-        Assert.Equal(ActivityPulse.ColorFor(3, busy: true), ActivityPulse.ColorFor(23, busy: true));
+        Assert.Equal(ActivityPulse.ColorFor(3, busy: true), ActivityPulse.ColorFor(53, busy: true));
     }
 }

@@ -2989,11 +2989,10 @@ public partial class MainWindow : Window
             }
             else if (_jumpPending)
             {
-                // A Jump-to-Live click is still landing: ScrollIntoView
-                // applies after layout, so restoring the pre-click offset
-                // here would yank the reader straight back. Honour the
-                // jump instead; the latch clears once the bottom is seen.
-                ConversationList.ScrollIntoView(_conversationItems[^1]);
+                // Follow intent is live for this run: pin synchronously
+                // instead of restoring the pre-click offset, which would
+                // yank the reader straight back.
+                PinFeedToBottom();
             }
             else
             {
@@ -3073,7 +3072,7 @@ public partial class MainWindow : Window
         }
 
         _jumpPending = true;
-        ConversationList.ScrollIntoView(_conversationItems[^1]);
+        PinFeedToBottom();
         UpdateJumpToLiveVisibility();
     }
 
@@ -3131,6 +3130,27 @@ public partial class MainWindow : Window
         JumpToLiveButton?.IsVisible = show;
     }
 
+    /// Synchronous bottom pin: Offset assignment applies now, unlike
+    /// ScrollIntoView which posts a request that rapid streaming layout
+    /// passes can supersede and leave the reader stranded. Falls back to
+    /// the request while the scroller is not resolved yet.
+    private void PinFeedToBottom()
+    {
+        if (_conversationItems.Count == 0)
+        {
+            return;
+        }
+
+        if (_feedScroller is { } viewer)
+        {
+            viewer.Offset = new Avalonia.Vector(0, System.Math.Max(0, viewer.Extent.Height - viewer.Viewport.Height));
+        }
+        else
+        {
+            ConversationList.ScrollIntoView(_conversationItems[^1]);
+        }
+    }
+
     private void MaybeAutoScroll()
     {
         if (_conversationItems.Count == 0)
@@ -3141,7 +3161,11 @@ public partial class MainWindow : Window
 
         EnsureFeedScroller();
         var metrics = ConversationScrollMetrics();
-        if (_jumpPending || ShouldFollow(_prefs.AutoScroll, ConversationScrollOffset(), metrics.Viewport, metrics.Extent))
+        if (_jumpPending)
+        {
+            PinFeedToBottom();
+        }
+        else if (ShouldFollow(_prefs.AutoScroll, ConversationScrollOffset(), metrics.Viewport, metrics.Extent))
         {
             ConversationList.ScrollIntoView(_conversationItems[^1]);
         }
@@ -3160,7 +3184,7 @@ public partial class MainWindow : Window
         }
 
         _jumpPending = true;
-        ConversationList.ScrollIntoView(_conversationItems[^1]);
+        PinFeedToBottom();
         UpdateJumpToLiveVisibility();
     }
 
