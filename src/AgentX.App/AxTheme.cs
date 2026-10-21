@@ -37,6 +37,11 @@ public static class AxTheme
     public static SolidColorBrush ToolPendingBgBrush { get; } = New("#22262E");
     public static SolidColorBrush ToolSuccessBgBrush { get; } = New("#1D3A2F");
     public static SolidColorBrush ToolErrorBgBrush { get; } = New("#3D2422");
+    /// Studio receipts: fixed dark charcoal in every treatment (the brief
+    /// requires near-black, not a treatment tint), distinct from the green
+    /// success and grey pending tool surfaces.
+    public static SolidColorBrush StudioBgBrush { get; } = New("#15171C");
+    public static SolidColorBrush RailSelectedBrush { get; } = New("#17352C");
 
     // Pi semantic hues are treatment-independent (evidence never changes
     // meaning): one shared instance each, matching PiPalette / dark.json.
@@ -44,6 +49,7 @@ public static class AxTheme
     public static SolidColorBrush GreenBrush { get; } = New(PiPalette.Green);
     public static SolidColorBrush RedBrush { get; } = New(PiPalette.Red);
     public static SolidColorBrush YellowBrush { get; } = New(PiPalette.Yellow);
+    public static SolidColorBrush StringBrush { get; } = New(PiPalette.String);
     public static SolidColorBrush VioletBrush { get; } = New(PiPalette.Violet);
     public static SolidColorBrush CyanBrush { get; } = New(PiPalette.Cyan);
 
@@ -105,6 +111,7 @@ public static class AxTheme
         Set(ToolPendingBgBrush, t.ToolPendingBg);
         Set(ToolSuccessBgBrush, t.ToolSuccessBg);
         Set(ToolErrorBgBrush, t.ToolErrorBg);
+        Set(RailSelectedBrush, t.RailSelected);
 
         if (Application.Current is { } app)
         {
@@ -123,10 +130,13 @@ public static class AxTheme
             app.Resources["Ax.ToolPendingBg"] = ToolPendingBgBrush;
             app.Resources["Ax.ToolSuccessBg"] = ToolSuccessBgBrush;
             app.Resources["Ax.ToolErrorBg"] = ToolErrorBgBrush;
+            app.Resources["Ax.StudioBg"] = StudioBgBrush;
+            app.Resources["Ax.RailSelected"] = RailSelectedBrush;
             app.Resources["Ax.Blue"] = BlueBrush;
             app.Resources["Ax.Green"] = GreenBrush;
             app.Resources["Ax.Red"] = RedBrush;
             app.Resources["Ax.Yellow"] = YellowBrush;
+            app.Resources["Ax.String"] = StringBrush;
             app.Resources["Ax.Violet"] = VioletBrush;
             app.Resources["Ax.Cyan"] = CyanBrush;
             app.Resources["Ax.MonoFont"] = MonoFont;

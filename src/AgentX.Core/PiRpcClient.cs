@@ -10,12 +10,38 @@ public sealed record PiRpcOptions(
     string Arguments,
     string? WorkingDirectory = null)
 {
-    private const string BaseArguments = "--mode rpc --no-extensions --no-skills";
+    private static readonly string[] RequiredExtensions =
+    [
+        Path.Combine("matthew-way-studio", "extensions", "index.ts"),
+        Path.Combine("rabbit-pi-compactor", "src", "index.ts"),
+        Path.Combine("Speedy-Keeper", "pi-extension", "keeper-memory.ts"),
+    ];
+
+    private static string BaseArguments => BuildBaseArguments(GetPiAgentDirectory());
+
+    internal static string BuildBaseArguments(string piAgentDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(piAgentDirectory);
+        var ownerRoot = Path.Combine(
+            piAgentDirectory, "git", "github.com", "matthewjameswatkins1978-cyber");
+        var extensions = RequiredExtensions
+            .Select(relativePath => $"--extension \"{Path.Combine(ownerRoot, relativePath)}\"");
+        return $"--mode rpc --no-extensions --no-skills {string.Join(" ", extensions)}";
+    }
+
+    private static string GetPiAgentDirectory()
+    {
+        var configured = Environment.GetEnvironmentVariable("PI_CODING_AGENT_DIR");
+        return string.IsNullOrWhiteSpace(configured)
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".pi", "agent")
+            : configured;
+    }
 
     /// <summary>
-    /// Default launch: separate Pi process, ephemeral session, extensions
-    /// and skills disabled. Provider authentication flows from the existing
-    /// environment and config; Agent X never copies or passes credentials.
+    /// Default launch: separate Pi process and ephemeral session.
+    /// Pi extension discovery and skills stay disabled; only the three approved
+    /// entrypoints load explicitly. Provider authentication flows from the
+    /// existing environment and config; Agent X never copies or passes credentials.
     /// </summary>
     public static PiRpcOptions Default(string? workingDirectory = null) => new(
         @"D:\AgentTools\bin\pi.cmd",

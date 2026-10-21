@@ -18,7 +18,8 @@ public sealed record FeedEntry(
     string? Path = null,
     bool IsMutating = false,
     bool IsError = false,
-    string? CallId = null)
+    string? CallId = null,
+    string? Diff = null)
 {
     public static string TruncateForDisplay(string text, int maxChars = 2000)
         => text.Length <= maxChars
@@ -201,7 +202,10 @@ public sealed class ConversationFeed
             {
                 // CallId propagates so restored rows keep identity for a
                 // later reconcile; rows without one fall back to exclusivity.
-                _entries.Add(new FeedEntry(_nextSeq++, message.Role, message.Text, CallId: message.CallId));
+                // IsError propagates Pi's own persisted failure flag, so a
+                // restored failure counts exactly like a live one (observed
+                // evidence — nothing inferred, nothing invented).
+                _entries.Add(new FeedEntry(_nextSeq++, message.Role, message.Text, CallId: message.CallId, IsError: message.IsError));
             }
         }
 
@@ -241,45 +245,116 @@ public sealed class ConversationFeed
     public long BeginAssistantTurn()
         => Add(new FeedEntry(NextSeq(), "assistant", string.Empty, IsStreaming: true));
 
-    public void AppendDelta(long seq, string? delta)
+    /// Append one streamed chunk to a live assistant row. Strict timeline:
+    /// when tool rows arrived after the target row began, the continued
+    /// prose (thinking included — it rides the same assistant text) belongs
+    /// AFTER them: the target freezes and a fresh streaming row carries on,
+    /// so the feed never writes back into an earlier box. Returns the
+    /// effective (possibly new) row seq for live tracking.
+    public long AppendDelta(long seq, string? delta)
     {
         if (string.IsNullOrEmpty(delta))
         {
-            return;
+            return seq;
         }
 
+        long effective;
         lock (_gate)
         {
             var index = _entries.FindIndex(e => e.Seq == seq);
             if (index < 0 || !_entries[index].IsStreaming)
             {
-                return;
+                return seq;
             }
 
-            _entries[index] = _entries[index] with { Text = _entries[index].Text + delta };
+            var intervened = false;
+            foreach (var e in _entries)
+            {
+                if (e.Seq > seq && e.Role == "tool")
+                {
+                    intervened = true;
+                    break;
+                }
+            }
+
+            if (!intervened)
+            {
+                _entries[index] = _entries[index] with { Text = _entries[index].Text + delta };
+                return seq;
+            }
+
+            _entries[index] = _entries[index] with { IsStreaming = false };
+            effective = _nextSeq++;
+            _entries.Add(new FeedEntry(effective, "assistant", delta, IsStreaming: true));
         }
 
         Changed?.Invoke();
+        return effective;
     }
 
-    /// <summary>
-    /// Replace a streaming turn's text with the authoritative full text.
+    /// Replace the live segment's text with the authoritative full text.
     /// The RPC client returns the exact accumulated string on completion;
     /// it wins over the progressively flushed chunks (same deltas, but free
-    /// of any progress-reporting race). No-op when the turn already ended.
-    /// </summary>
+    /// of any progress-reporting race). With tool-interleaved turns the full
+    /// text spans every segment: frozen older segments keep their streamed
+    /// words, the live (newest) segment takes the remainder — or keeps its
+    /// streamed text when the full text does not start with the frozen
+    /// prefix (never fabricate). Works from any member seq of the turn, so
+    /// stale tracked seqs degrade to the same truthful outcome. No-op when
+    /// the turn already ended. Single-segment turns behave exactly as before.
     public void ReconcileStreamingText(long seq, string authoritativeText)
     {
         ArgumentNullException.ThrowIfNull(authoritativeText);
         lock (_gate)
         {
             var index = _entries.FindIndex(e => e.Seq == seq);
-            if (index < 0 || !_entries[index].IsStreaming)
+            if (index < 0)
             {
                 return;
             }
 
-            _entries[index] = _entries[index] with { Text = authoritativeText };
+            var first = index;
+            while (first > 0 && (_entries[first - 1].Role == "assistant" || _entries[first - 1].Role == "tool"))
+            {
+                first--;
+            }
+
+            var last = index;
+            while (last < _entries.Count - 1 && (_entries[last + 1].Role == "assistant" || _entries[last + 1].Role == "tool"))
+            {
+                last++;
+            }
+
+            var liveIndex = -1;
+            for (var i = first; i <= last; i++)
+            {
+                if (_entries[i].Role == "assistant")
+                {
+                    liveIndex = i;
+                }
+            }
+
+            if (liveIndex < 0 || !_entries[liveIndex].IsStreaming)
+            {
+                return;
+            }
+
+            var prefix = new StringBuilder();
+            for (var i = first; i < liveIndex; i++)
+            {
+                if (_entries[i].Role == "assistant")
+                {
+                    prefix.Append(_entries[i].Text);
+                }
+            }
+
+            var frozen = prefix.ToString();
+            if (!authoritativeText.StartsWith(frozen, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _entries[liveIndex] = _entries[liveIndex] with { Text = authoritativeText[frozen.Length..] };
         }
 
         Changed?.Invoke();
@@ -308,19 +383,28 @@ public sealed class ConversationFeed
 
             if (receipt is not null)
             {
+                // Three honest states: settled runs with unresolved
+                // problems need review (amber); runs that never completed
+                // fail (red); an empty settle is neutral and anything else
+                // is healthy. Recovered tool errors stay visible as tool
+                // rows and in the error count — the receipt just refuses
+                // to bill them as a current failure.
+                var needsReview = receipt.Aborted || receipt.UnresolvedErrorCount > 0;
+                var failed = receipt.Aborted || !receipt.Settled;
+                var note = needsReview ? "needs review" : !receipt.HasReply ? "no reply" : "healthy";
                 _entries.Add(new FeedEntry(
                     _nextSeq++,
                     "receipt",
                     receipt.Display,
-                    Note: receipt.RunHealthy ? "healthy" : "needs review",
-                    IsError: !receipt.RunHealthy));
+                    Note: note,
+                    IsError: failed));
             }
         }
 
         Changed?.Invoke();
     }
 
-    public long AddToolStart(string toolName, string? summary, string? path, bool isMutating, string? callId = null)
+    public long AddToolStart(string toolName, string? summary, string? path, bool isMutating, string? callId = null, string? diffPreview = null)
     {
         long seq;
         lock (_gate)
@@ -328,7 +412,7 @@ public sealed class ConversationFeed
             seq = _nextSeq++;
             _entries.Add(new FeedEntry(seq, "tool", summary ?? string.Empty,
                 Note: $"started: {toolName}", Path: path, IsMutating: isMutating,
-                CallId: string.IsNullOrEmpty(callId) ? null : callId));
+                CallId: string.IsNullOrEmpty(callId) ? null : callId, Diff: diffPreview));
             if (!string.IsNullOrEmpty(callId))
             {
                 _openByCallId[callId] = seq;
@@ -756,8 +840,10 @@ public sealed class ConversationFeed
     /// Identity of a persisted history tool body from its own header:
     /// "[tool result: NAME]" / "[tool NAME failed]" (FormatToolResult).
     /// "Ran ..." bash-execution bodies and anything else carry no provable
-    /// name and return null.
-    internal static (string Name, bool IsError)? ParseHistoryToolIdentity(string text)
+    /// name and return null. Public so the Overview timeline reads restored
+    /// rows with the exact same parser the session map uses — one observed
+    /// identity, never two interpretations.
+    public static (string Name, bool IsError)? ParseHistoryToolIdentity(string text)
     {
         const string prefix = "[tool ";
         if (string.IsNullOrEmpty(text) || !text.StartsWith(prefix, StringComparison.Ordinal))
@@ -809,6 +895,13 @@ public sealed class ConversationFeed
 
     public long AddSystemNotice(string text)
         => Add(new FeedEntry(NextSeq(), "system", text));
+
+    /// Cancellation notice: a distinct note so attention can tell "the
+    /// latest run was cancelled" apart from "the latest settled run
+    /// failed" — the cancelled run earned no health signal either way,
+    /// and a stale receipt must never speak for it.
+    public long AddCancelNotice(string text)
+        => Add(new FeedEntry(NextSeq(), "system", text, Note: "cancelled"));
 
     public void SetActivity(string? activity)
     {

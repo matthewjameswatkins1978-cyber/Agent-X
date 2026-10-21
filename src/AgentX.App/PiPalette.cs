@@ -1,24 +1,26 @@
 namespace AgentX.App;
 
 /// <summary>
-/// Pi dark-theme role hues as sRGB, interpreted from Pi 1.1.0's built-in
-/// dark theme (OKHSL roles in dist/modes/interactive/theme/dark.json).
-/// These are Agent X's sRGB readings of Pi's perceptual roles — same hues,
-/// same lightness intent — not claimed bit-exact terminal output.
+/// Pi dark-theme role hues as sRGB, converted from Pi 1.3.0's built-in dark
+/// theme (dist/modes/interactive/theme/dark.json) with Pi's own converter
+/// (@earendil-works/pi-tui parseColor/colorToHex): the hues Pi CLI shows on
+/// a truecolor terminal. Re-verify after any Pi upgrade by running the vars
+/// through that converter again. Backgrounds stay deliberate app chrome.
 /// </summary>
 public static class PiPalette
 {
-    public const string Text = "#E4E7EE";       // text 89%
-    public const string Muted = "#9AA3B5";      // muted 67%
-    public const string Dim = "#82889A";        // dim 56%
-    public const string Violet = "#C792EA";     // violet (customMessageLabel, mdCode, bullets)
-    public const string Blue = "#82AAFF";       // blue (user accents, links, keywords)
-    public const string Green = "#7FDBA8";      // green (success, code blocks)
-    public const string Red = "#F07178";        // red (errors)
-    public const string Yellow = "#E5C07B";     // yellow (warnings, headings)
-    public const string Cyan = "#6FC3DF";       // syntaxVariable (technical refs)
-    public const string UserBg = "#232F4A";     // userMessageBg blueBg 24%
-    public const string ToolPendingBg = "#22262E";  // toolPendingBg 24%
-    public const string ToolSuccessBg = "#1D3A2F";  // toolSuccessBg 25%
-    public const string ToolErrorBg = "#3D2422";    // toolErrorBg 25%
+    public const string Text = "#DEE0E1";       // text
+    public const string Muted = "#9DA5A9";      // muted
+    public const string Dim = "#7E888E";        // dim
+    public const string Violet = "#A798D7";     // accent, mdCode, bullets, type
+    public const string Blue = "#69ADD0";       // links, keywords
+    public const string Green = "#68B78D";      // success, code blocks, numbers
+    public const string Red = "#EA7F81";        // errors
+    public const string Yellow = "#CD9A22";     // warnings, headings, functions
+    public const string Cyan = "#5DB3BA";       // syntaxVariable (technical refs)
+    public const string String = "#DE8D5A";     // syntaxString (string literals)
+    public const string UserBg = "#232F4A";     // app chrome (Pi CLI blueBg is #213B49)     // userMessageBg blueBg 24%
+    public const string ToolPendingBg = "#22262E";  // app chrome (Pi CLI is #34383A)  // toolPendingBg 24%
+    public const string ToolSuccessBg = "#1D3A2F";  // app chrome (Pi CLI is #254131)  // toolSuccessBg 25%
+    public const string ToolErrorBg = "#3D2422";  // app chrome (Pi CLI is #5B282A)    // toolErrorBg 25%
 }

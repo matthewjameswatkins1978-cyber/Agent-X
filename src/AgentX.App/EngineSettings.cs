@@ -19,6 +19,18 @@ public interface IEngineSettingsRuntime
 
     string UnavailableReason { get; }
 
+    /// <summary>True only when the current worker can BOTH list and apply models.</summary>
+    bool CanConfigureModels { get; }
+
+    /// <summary>Honest per-dimension reason when <see cref="CanConfigureModels"/> is false.</summary>
+    string ModelUnavailableReason { get; }
+
+    /// <summary>True only when the current worker can BOTH list and apply thinking levels.</summary>
+    bool CanConfigureThinking { get; }
+
+    /// <summary>Honest per-dimension reason when <see cref="CanConfigureThinking"/> is false.</summary>
+    string ThinkingUnavailableReason { get; }
+
     Task<IReadOnlyList<EngineModel>> ListModelsAsync(CancellationToken cancellationToken);
 
     Task SelectModelAsync(string provider, string modelId, CancellationToken cancellationToken);
@@ -42,6 +54,14 @@ public sealed class PendingEngineSettingsRuntime : IEngineSettingsRuntime
 
     public string UnavailableReason =>
         "Model and thinking selection activate with the native chooser (issue #23); the Core adapter is ready but not yet wired.";
+
+    public bool CanConfigureModels => false;
+
+    public string ModelUnavailableReason => UnavailableReason;
+
+    public bool CanConfigureThinking => false;
+
+    public string ThinkingUnavailableReason => UnavailableReason;
 
     public Task<IReadOnlyList<EngineModel>> ListModelsAsync(CancellationToken cancellationToken)
         => throw new NotSupportedException(UnavailableReason);

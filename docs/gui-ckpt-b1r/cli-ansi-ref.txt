@@ -1,0 +1,8 @@
+Output from PowerShell:
+
+```
+[32mFORCED-GREEN[0m
+```
+
+1 line, containing `FORCED-GREEN` wrapped in ANSI green (`ESC[32m` … `ESC[0m`).
+

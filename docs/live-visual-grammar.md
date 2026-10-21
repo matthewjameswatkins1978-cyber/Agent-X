@@ -83,8 +83,12 @@ lightness intent, not claimed bit-exact terminal output.
 - `GetRetainedText` stays unwired at UI level: full-output inspection
   flows through history-reconciled feed text instead. Per-call-id retained
   lookup needs a protocol-surface change, which is Agent ONE's domain.
-- No usage/cost figures shown anywhere: Core records stats/state polls at
-  connect/settle/prompt, but GUI status binding stays unwired (Agent ONE UI ownership).
+- Usage telemetry IS bound on the Overview: Core refreshes
+  FeedBridge.LatestStats on every confirmed settle, and the dashboard
+  reads it (context %, tokens, tool calls, Pi-reported cost). No new RPC:
+  the workspace path needed conversation.AttachBridge to complete the
+  designed binding (workers already had it). Without a snapshot the card
+  says it is awaiting the first settled run.
 - Markdown subset documented in `MarkdownLite` — a deliberate subset, NOT
   full CommonMark: strikethrough, `__strong__` / `***bold italic***`,
   backslash escapes, double-backtick code spans, nested-list depth from an
@@ -98,3 +102,103 @@ lightness intent, not claimed bit-exact terminal output.
   missing glyphs fall back in a fixed order — Segoe UI Symbol (arrows, box
   drawing, blocks), Microsoft YaHei (CJK), Malgun Gothic (hangul); see
   `AxFontFallback`. Screenshots and `docs/feed/feed-pr2.md` carry the evidence.
+
+## Layout grid and Inspector (B2)
+
+- Shared geometry lives in `AxLayout` (App, pure, tested): 8px grid,
+  12/10/12/8 window margins, 48px rail, 40px nav buttons, 18px icons,
+  8px content gutter. ContentLeft = 68 (12+48+8): cards strip, cards
+  divider, feed, composer and footer share both vertical edges exactly.
+  The 48px header brand cell centres the rabbit over the rail icons AND
+  starts brand text on the content datum — one width, both alignments.
+- The developer Layout Inspector (F12, default off, hit-test invisible)
+  draws datum guides plus a PASS/FAIL readout with pixel deltas
+  (`LayoutAudit`, pure, tested; 0.5 DIP tolerance). It refreshes on
+  toggle, resize and page switch — never continuously. Verified:
+  footer gutter, rail padding, header cell, overlay timing and the
+  structural Send/input centring (all Δ0.0; see `docs/gui-ckpt-b2`).
+  The capped-panel fill check (`panel-fill`) guards Overview/Settings
+  width at and above the 900px cap; below it stretch rules apply.
+  Hidden subtrees are excluded by ancestor walk (Avalonia keeps
+  `IsVisible` true on children of hidden panels with stale bounds).
+  Right-hand metadata never crosses the datum (`clip-*`, INFO-free
+  PASS lines). Icon ink centres report as INFO (`ink-*`), never
+  verdicts: they justify — or refuse — an optical nudge inside the
+  drawing. Shared column geometry is never bent for a symbol.
+  Icon ink centres also report as INFO (`ink-*` with the runtime art
+  box); the global `rail-ink` verdict compares rendered ink centres
+  across the rail and fails loudly on drift.
+- Navigation rail holds destinations only (Overview, Feed, Settings).
+  All former rail actions relocated without loss: Connect on the
+  disconnected card's menu and the empty-state button; Reconnect and
+  Disconnect beside them on the card menu; Stop on the composer
+  button (Escape kept); Copy selected/full on the feed context menu
+  (opened programmatically at the list, composer pattern); Auto-
+  scroll lives only in Settings. Card menus select-then-act through
+  the existing handlers with per-open enable states; a dropped
+  connection with history also offers Reconnect beside the composer
+  status line (never menu-only). The card strip always merges both
+  populations through one tested order (catalog entries, then workers:
+  `WorkerDisplayPolicy.StripOrder`) — a catalog rebuild after a
+  workspace registration can never drop a worker tab again. Selecting
+  a card scrolls it into view on selection change only (posted
+  `BringIntoView`; busy ticks never fight the user's scroll); the
+  strip's own scrollbar owns the return journey. Card and feed menus
+  carry full constraint adjustment so they stay inside the window.
+- The footer context gauge is a flat-green bottom-filling disc with a
+  thin outline: green outline + fill for known percentages (sub-6%
+  fills are subpixel on the 16px disc — tooltip and text carry the
+  exact value), hollow grey for unknown (never a measured zero),
+  amber outline only for genuine alert keywords. Same control anchors
+  the Usage card at 20px with its own tooltip.
+- The rabbit anchor is redrawn artwork (two capped ears, round head,
+  symmetric about its centre, 20px in the 48px cell). MEASURED
+  finding: geometry renders top-left-fitted in its box (Uniform
+  scales to fit but does not centre — full-bleed icons hide this,
+  narrow art hugged the left by ~4px). `AxIcon` now centres every
+  icon at the system level (`CenteringOffset`, tested; null transform
+  for full-bleed), render-only so slots and datums never move. F12
+  models the same fitted-then-shifted truth (`rail-ink` PASS means
+  pixels agree). Section anchors (mission target,
+  model CPU, verification check/warn, usage gauge) stay in the icon
+  family at 14px; verification tint follows state.
+- Bridge detail rows (`[detail]`, `[result]`, `[progress]`) render as
+  quiet attachments: tight rhythm, one step smaller, muted ink
+  (`MarkdownView.Dim`, scales with feed size; ANSI colours and diff
+  verdicts survive). Evidence preserved, visually grouped.
+- The Add confirmation flyout right-aligns to the + button (which
+  sits at the window's right edge) and grows leftward into the
+  window, with full constraint adjustment as the narrow-window
+  fallback; keyboard focus lands on the first action on open.
+- A run that settles while another view is selected still retires
+  its sent draft under its own key (`VacateSentDraft`, guarded by
+  sent-text equality so newer edits survive) — the sent text can
+  never resurrect as a phantom draft on return.
+- Feed rhythm is group-aware (`GroupMargins` from neighbour roles,
+  tested): prompts and receipts keep full turn air; rows inside one
+  run join tight; detail rows always tight. No negative margins.
+  Restored-session notices ride the footer transient, never the
+  composer; a new run vacates stale status when work begins.
+  Selection stays charcoal (Fluent focus indication untouched).
+- Overview attention is latest-word: unhealthy receipt warns (amber),
+  error receipt fails (red), healthy quiets earlier errors (muted
+  normal — never success-green), bare errors warn only with no receipt.
+  Historical errors ride along in Verification, never discarded.
+  Footer and Overview share one snapshot at F1 precision.
+- No mission authority exists anywhere in the repo (researched), so the
+  mission card stays `No mission connected`; tool work groups under
+  Recent Activity by run association (prompt → rows → receipt), with
+  outcome dots (green/amber/red/teal/grey), a joining guide rail and
+  an earlier-runs affordance. The composer Send/Stop button and Ctrl+Enter
+  share one guarded path; routine success leaves no composer row.
+- Fluent theme findings (12.1.4, verified against its shipped source):
+  the TextBox :focus edge and the checked checkbox come from
+  variant-scoped accent keys no post-load override can reach; an
+  Application.Resources SystemAccentColor entry crashes startup, and a
+  keyed ControlTheme cannot live in Styles (AVLN3000). Working fix:
+  implicit BasedOn ControlThemes in Application.Resources (benign keys
+  are safe), treatment-live via DynamicResource. Focus edge and check
+  glyph are now charcoal/green; #0078D4 was pixel-sampled before.
+- Limits, stated plainly: geometry is DIPs (scales linearly with
+  RenderScaling); system DPI 100/125/150 could not be varied in this
+  harness, so scaling evidence is 720/1200/wide windows only.

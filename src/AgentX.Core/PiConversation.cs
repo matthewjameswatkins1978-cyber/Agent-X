@@ -8,9 +8,11 @@ namespace AgentX.Core;
 /// truncate. <see cref="CallId"/> is the persisted tool-call ID (raw,
 /// never rendered; same value the wire events carry) so reconciliation can
 /// match a live row to its persisted result by identity — null when the
-/// message carries none.
+/// message carries none. <see cref="IsError"/> carries Pi's own persisted
+/// failure flag for tool rows (observed evidence, never inferred) so
+/// restored failures count exactly like live ones.
 /// </summary>
-public sealed record ConversationMessage(string Role, string Text, string? CallId = null)
+public sealed record ConversationMessage(string Role, string Text, string? CallId = null, bool IsError = false)
 {
     public string DisplayText(int maxChars = 2000)
         => Text.Length <= maxChars
@@ -32,7 +34,8 @@ public sealed record PiToolActivity(
     string? Path,
     bool IsError,
     bool IsStart,
-    string? CallId = null)
+    string? CallId = null,
+    string? DiffPreview = null)
 {
     public bool IsMutating =>
         ToolName.Equals("edit", StringComparison.OrdinalIgnoreCase)
@@ -42,7 +45,9 @@ public sealed record PiToolActivity(
 /// <summary>
 /// Outcome of one prompt run. Idle (Pi has no automatic work left) is not the
 /// same as healthy, and healthy is not the same as externally verified: only
-/// a settled, non-aborted run with no observed errors counts as healthy.
+/// a settled, non-aborted run with no UNRESOLVED errors and a non-empty
+/// reply counts as healthy. Recovered tool errors stay on the record but
+/// never demand review; an empty settle is neutral, never success.
 /// Whether the task output passes acceptance checks is a separate question
 /// answered outside this receipt.
 /// </summary>
@@ -53,15 +58,83 @@ public sealed record PiRunReceipt(
     int AssistantChars,
     int MessageCount)
 {
-    public bool RunHealthy => Settled && !Aborted && ErrorCount == 0;
+    /// Observed error events with no later observed recovery in the same
+    /// run: a failed tool call followed by a successful one counts as
+    /// recovered (the agent demonstrably moved past it); abort/transport,
+    /// extension and message errors never do. Defaults to
+    /// <see cref="ErrorCount"/> so directly constructed receipts keep the
+    /// historical all-unresolved meaning. Only this count — never the raw
+    /// observed total — can demand human review.
+    public int UnresolvedErrorCount { get; init; } = ErrorCount;
+
+    /// Whether Pi produced any reply text. An empty settle is a neutral
+    /// completion, never a healthy run: no outcome is claimed either way.
+    public bool HasReply => AssistantChars > 0;
+
+    public bool RunHealthy => Settled && !Aborted && UnresolvedErrorCount == 0 && HasReply;
 
     public string Display => !Settled
         ? "Not settled — Pi may still have automatic work pending."
         : Aborted
             ? "Aborted — task did not complete."
-            : ErrorCount > 0
-                ? $"Settled with {ErrorCount} problem{(ErrorCount == 1 ? "" : "s")} — review before trusting this answer."
-                : "Healthy — settled cleanly with no observed errors. (Output correctness needs separate acceptance checks.)";
+            : UnresolvedErrorCount > 0
+                ? $"Settled with {UnresolvedErrorCount} problem{(UnresolvedErrorCount == 1 ? "" : "s")} ({ErrorCount} observed) — review before trusting this answer."
+                : !HasReply
+                    ? "Turn complete — Pi provided no reply text; no task outcome claimed."
+                    : ErrorCount > 0
+                        ? $"Settled with {ErrorCount} recovered tool error{(ErrorCount == 1 ? "" : "s")} — failures preserved in the feed; output correctness needs separate acceptance checks."
+                        : "Healthy — settled cleanly with no observed errors. (Output correctness needs separate acceptance checks.)";
+}
+
+/// Per-run error accounting for <see cref="PiConversation.SendAsync"/>.
+/// Every observed failure is kept as evidence; only failures with no later
+/// observed recovery stay unresolved: a successful tool completion proves
+/// the agent moved past earlier tool failures, so they must not demand
+/// human review. Extension, message and retry-exhaustion errors never
+/// recover this way. Sequential use only (one instance per run, fed from
+/// the event callback).
+internal sealed class RunOutcomeTracker
+{
+    public int ObservedErrors { get; private set; }
+
+    public int UnresolvedErrors => _pendingToolFailures + _hardErrors;
+
+    public void Add(PiRpcEventArgs args)
+    {
+        try
+        {
+            var root = args.Record.RootElement;
+            var type = PiRpcFraming.GetEventType(args.Record);
+            if (type == "tool_execution_end")
+            {
+                if (root.TryGetProperty("isError", out var isError)
+                    && isError.ValueKind == JsonValueKind.True)
+                {
+                    ObservedErrors++;
+                    _pendingToolFailures++;
+                }
+                else
+                {
+                    _pendingToolFailures = 0;
+                }
+
+                return;
+            }
+
+            if (PiConversation.IsHardRunError(args.Record))
+            {
+                ObservedErrors++;
+                _hardErrors++;
+            }
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or JsonException)
+        {
+            // A malformed event must never break error accounting.
+        }
+    }
+
+    private int _pendingToolFailures;
+    private int _hardErrors;
 }
 
 /// <summary>
@@ -328,19 +401,23 @@ public sealed class PiConversation : IAsyncDisposable
 
     /// <summary>
     /// Send a prompt and stream assistant text. Returns the streamed text plus
-    /// a run-health receipt. Cancellation throws; call RefreshHistoryAsync
-    /// afterwards to reconcile partially persisted work.
+    /// a run-health receipt. <paramref name="onPromptAccepted"/> fires once Pi
+    /// accepts the prompt (before the run settles) so the host can retire
+    /// the composer draft promptly; it must be non-throwing and thread-safe
+    /// (it runs on the wait path, not the UI thread). Cancellation throws;
+    /// call RefreshHistoryAsync afterwards to reconcile partially persisted work.
     /// </summary>
     public async Task<(string Text, PiRunReceipt Receipt)> SendAsync(
         string message,
         IProgress<string>? textProgress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action? onPromptAccepted = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(message);
-        var errors = 0;
+        var outcomes = new RunOutcomeTracker();
         var client = Client;
 
-        void Counter(object? sender, PiRpcEventArgs args) => CountRunError(args, ref errors);
+        void Counter(object? sender, PiRpcEventArgs args) => outcomes.Add(args);
         client.EventReceived += Counter;
         try
         {
@@ -349,15 +426,22 @@ public sealed class PiConversation : IAsyncDisposable
             // live document before disposal; bridge recording never throws.
             var bridge = _bridge;
             var (text, aborted) = await client.PromptAndWaitAsync(message, textProgress, cancellationToken,
-                acceptance => bridge?.RecordResponse(acceptance)).ConfigureAwait(false);
+                acceptance =>
+                {
+                    bridge?.RecordResponse(acceptance);
+                    onPromptAccepted?.Invoke();
+                }).ConfigureAwait(false);
             using var receiptState = await client.GetStateDocumentAsync(cancellationToken).ConfigureAwait(false);
             var state = RecordStateResponse(bridge, receiptState) ?? PiEngineState.FromResponse(receiptState);
             var receipt = new PiRunReceipt(
                 Settled: true,
                 Aborted: aborted,
-                ErrorCount: errors,
+                ErrorCount: outcomes.ObservedErrors,
                 AssistantChars: text.Length,
-                MessageCount: state.MessageCount);
+                MessageCount: state.MessageCount)
+            {
+                UnresolvedErrorCount = outcomes.UnresolvedErrors,
+            };
             LastReceipt = receipt;
             await RefreshHistoryAsync(CancellationToken.None).ConfigureAwait(false);
 
@@ -524,7 +608,7 @@ public sealed class PiConversation : IAsyncDisposable
                 var toolName = startName.GetString() ?? "?";
                 var args = root.TryGetProperty("args", out var a) && a.ValueKind == JsonValueKind.Object ? a : (JsonElement?)null;
                 return new PiToolActivity(toolName, SummarizeToolArgs(toolName, args), ExtractToolPath(toolName, args), IsError: false, IsStart: true,
-                    CallId: ToolCallIdOf(root));
+                    CallId: ToolCallIdOf(root), DiffPreview: EditDiffPreview(toolName, args, ExtractToolPath(toolName, args)));
             }
 
             if (type == "tool_execution_end" && root.TryGetProperty("toolName", out var endName))
@@ -617,8 +701,132 @@ public sealed class PiConversation : IAsyncDisposable
         return line.Length <= maxChars ? line : line[..maxChars] + "…";
     }
 
+    /// Bounded diff preview for edit/write calls: changed lines only
+    /// (-old/+new under a path header), capped so feed rows stay scannable;
+    /// the expander and copy keep the full evidence. Null unless the args
+    /// shape is proven — never fabricated. Restored-history rows are a
+    /// separate pass (their args need the reconcile path, not the live wire).
+    internal static string? EditDiffPreview(string toolName, JsonElement? args, string? path, int maxLines = 20)
+    {
+        if (args is null || maxLines <= 0)
+        {
+            return null;
+        }
+
+        var lines = new List<string>();
+        var hidden = 0;
+        void Emit(bool removal, string line)
+        {
+            if (lines.Count < maxLines)
+            {
+                lines.Add((removal ? "-" : "+") + line);
+            }
+            else
+            {
+                hidden++;
+            }
+        }
+
+        var value = args.Value;
+        if (toolName.Equals("edit", StringComparison.OrdinalIgnoreCase)
+            && value.TryGetProperty("edits", out var edits)
+            && edits.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var entry in edits.EnumerateArray())
+            {
+                if (entry.ValueKind != JsonValueKind.Object
+                    || !TryArgLines(entry, "oldText", out var oldLines)
+                    || !TryArgLines(entry, "newText", out var newLines))
+                {
+                    continue;
+                }
+
+                // Elide identical framing: only truly changed lines show.
+                var pre = 0;
+                while (pre < oldLines.Length && pre < newLines.Length && oldLines[pre] == newLines[pre])
+                {
+                    pre++;
+                }
+
+                var suf = 0;
+                while (suf < oldLines.Length - pre && suf < newLines.Length - pre
+                    && oldLines[oldLines.Length - 1 - suf] == newLines[newLines.Length - 1 - suf])
+                {
+                    suf++;
+                }
+
+                for (var i = pre; i < oldLines.Length - suf; i++)
+                {
+                    Emit(true, oldLines[i]);
+                }
+
+                for (var i = pre; i < newLines.Length - suf; i++)
+                {
+                    Emit(false, newLines[i]);
+                }
+            }
+        }
+        else if (toolName.Equals("write", StringComparison.OrdinalIgnoreCase)
+            && TryArgLines(value, "content", out var contentLines))
+        {
+            foreach (var line in contentLines)
+            {
+                Emit(false, line);
+            }
+        }
+        else
+        {
+            return null;
+        }
+
+        if (lines.Count == 0)
+        {
+            return null;
+        }
+
+        var head = new List<string>();
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            head.Add($"--- {path}");
+            head.Add($"+++ {path}");
+        }
+
+        head.AddRange(lines);
+        if (hidden > 0)
+        {
+            head.Add($"… {hidden} more lines behind the expander.");
+        }
+
+        return string.Join("\n", head);
+    }
+
+    private static bool TryArgLines(JsonElement element, string name, out string[] lines)
+    {
+        lines = Array.Empty<string>();
+        if (!element.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var text = value.GetString() ?? string.Empty;
+        if (text.Length == 0)
+        {
+            return true;
+        }
+
+        lines = text.Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            lines[i] = lines[i].TrimEnd('\r');
+        }
+
+        return true;
+    }
+
     internal static void CountRunError(PiRpcEventArgs args, ref int errors)
     {
+        // Observed-error counting only: whether a failure was later
+        // recovered is per-run state owned by RunOutcomeTracker below.
         try
         {
             var root = args.Record.RootElement;
@@ -633,30 +841,8 @@ public sealed class PiConversation : IAsyncDisposable
                     }
 
                     break;
-                case "extension_error":
-                    errors++;
-                    break;
-                case "message_update":
-                    if (root.TryGetProperty("assistantMessageEvent", out var nested)
-                        && nested.TryGetProperty("type", out var nestedType)
-                        && nestedType.GetString() == "error")
-                    {
-                        errors++;
-                    }
-
-                    break;
-                case "message_end":
-                    if (root.TryGetProperty("message", out var message)
-                        && message.TryGetProperty("stopReason", out var stop)
-                        && stop.GetString() == "error")
-                    {
-                        errors++;
-                    }
-
-                    break;
-                case "auto_retry_end":
-                    if (root.TryGetProperty("success", out var success)
-                        && success.ValueKind == JsonValueKind.False)
+                default:
+                    if (IsHardRunError(args.Record))
                     {
                         errors++;
                     }
@@ -667,6 +853,35 @@ public sealed class PiConversation : IAsyncDisposable
         catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or JsonException)
         {
             // A malformed event must never break error accounting.
+        }
+    }
+
+    /// Non-tool run errors: extension failures, agent message errors and
+    /// exhausted auto-retries. These never recover within a run — only a
+    /// later successful tool completion proves the agent moved past a TOOL
+    /// failure. Shared by the observed counter above and the tracker's
+    /// unresolved accounting so the two can never disagree on what counts.
+    /// Callers hold the malformed-record guard (KeyNotFound/Json/Invalid).
+    internal static bool IsHardRunError(JsonDocument record)
+    {
+        var root = record.RootElement;
+        switch (PiRpcFraming.GetEventType(record))
+        {
+            case "extension_error":
+                return true;
+            case "message_update":
+                return root.TryGetProperty("assistantMessageEvent", out var nested)
+                    && nested.TryGetProperty("type", out var nestedType)
+                    && nestedType.GetString() == "error";
+            case "message_end":
+                return root.TryGetProperty("message", out var message)
+                    && message.TryGetProperty("stopReason", out var stop)
+                    && stop.GetString() == "error";
+            case "auto_retry_end":
+                return root.TryGetProperty("success", out var success)
+                    && success.ValueKind == JsonValueKind.False;
+            default:
+                return false;
         }
     }
 
@@ -736,8 +951,8 @@ public sealed class PiConversation : IAsyncDisposable
             "system" => null, // Prompt boilerplate; not conversation.
             "user" => new ConversationMessage("user", ExtractContentText(message)),
             "assistant" => new ConversationMessage("assistant", ExtractAssistantText(message)),
-            "toolResult" => new ConversationMessage("tool", FormatToolResult(message), HistoryCallId(message)),
-            "bashExecution" => new ConversationMessage("tool", FormatBashExecution(message), HistoryCallId(message)),
+            "toolResult" => new ConversationMessage("tool", FormatToolResult(message), HistoryCallId(message), IsErrorProp(message)),
+            "bashExecution" => new ConversationMessage("tool", FormatBashExecution(message), HistoryCallId(message), IsErrorProp(message)),
             "custom" => message.TryGetProperty("display", out var display)
                 && display.ValueKind == JsonValueKind.True
                 ? new ConversationMessage("system", ExtractContentText(message))
@@ -845,6 +1060,14 @@ public sealed class PiConversation : IAsyncDisposable
     /// never rendered; empty/oversized → null) so session IDs and wire
     /// IDs compare equal case-sensitively. Both derive from toolCall.id.
     /// </summary>
+    /// Pi's own persisted failure flag on a history message (observed
+    /// evidence: a literal boolean property, never inferred from text).
+    /// Absent or non-boolean reads as no observed failure.
+    internal static bool IsErrorProp(JsonElement message)
+    {
+        return message.TryGetProperty("isError", out var e) && e.ValueKind == JsonValueKind.True;
+    }
+
     internal static string? HistoryCallId(JsonElement message)
     {
         if (!message.TryGetProperty("toolCallId", out var id) || id.ValueKind != JsonValueKind.String)
@@ -859,7 +1082,7 @@ public sealed class PiConversation : IAsyncDisposable
     private static string FormatToolResult(JsonElement message)
     {
         var name = message.TryGetProperty("toolName", out var n) ? n.GetString() ?? "?" : "?";
-        var failed = message.TryGetProperty("isError", out var e) && e.ValueKind == JsonValueKind.True;
+        var failed = IsErrorProp(message);
         var body = ExtractContentText(message);
         var header = failed ? $"[tool {PiRedaction.Name(name)} failed]" : $"[tool result: {PiRedaction.Name(name)}]";
         return string.IsNullOrEmpty(body) ? header : header + "\n" + PiRedaction.Redact(body);

@@ -14,6 +14,18 @@ public enum FeedBlockKind
     Receipt,
 }
 
+/// <summary>Studio mission state for the card indicator. Read from the
+/// tool result's own markers (Studio schema STATUSES), never inferred
+/// from a successful invocation.</summary>
+public enum StudioState
+{
+    Working,
+    Complete,
+    NeedsHuman,
+    Blocked,
+    Failed,
+}
+
 /// <summary>
 /// One bound row in the conversation feed. <see cref="FullText"/> is the
 /// complete message (copy source, always byte-exact); <see cref="DisplayText"/>
@@ -58,6 +70,11 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
         var (toolName, toolSuffix) = ToolDisplay(header, seq);
         _toolName = toolName;
         _toolSuffix = toolSuffix;
+        // Neighbours unknown yet: detail rows start tight, everything else
+        // full. The sync pass applies GroupMargins once the row lands.
+        RowMargin = IsDetailRow
+            ? new Avalonia.Thickness(0, 1, 0, 1)
+            : new Avalonia.Thickness(0, 4, 0, 4);
         RefreshExpansion();
     }
 
@@ -95,6 +112,92 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ToolName)));
             }
         }
+    }
+
+    private string? _toolDiff;
+
+    /// Bounded diff preview for live edit/write rows (changed lines only).
+    /// Null hides the diff block; restored-history rows keep proven bodies.
+    public string? ToolDiff
+    {
+        get => _toolDiff;
+        set
+        {
+            if (_toolDiff != value)
+            {
+                _toolDiff = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ToolDiff)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasToolDiff)));
+            }
+        }
+    }
+
+    public bool HasToolDiff => !string.IsNullOrEmpty(_toolDiff);
+
+    /// True for bridge detail rows ("[detail …]", "[result …]",
+    /// "[progress …]"): evidence annotations that read as attachments to
+    /// their tool operation, rendered compact — never as cards. Receipts,
+    /// compactions and plain notices stay full rows.
+    public bool IsDetailRow => Role == "system" && IsDetailPrefix(FullText);
+
+    /// View-layer density rule (presentation only — the feed keeps every
+    /// row): transport detail rows must not read as ordinary chat lines,
+    /// so normal conversation folds them away. Full Trace reveals them;
+    /// tool rows keep their own expanders and the tap retains everything.
+    internal static bool ShouldShow(FeedEntry entry, bool showDiagnostics)
+        => showDiagnostics || !(entry.Role == "system" && IsDetailPrefix(entry.Text));
+
+    private Avalonia.Thickness _rowMargin = new(0, 4, 0, 4);
+
+    /// Row rhythm, set by the host from neighbour roles (see
+    /// <see cref="GroupMargins"/>): turn anchors keep the full 4px
+    /// rhythm, rows inside one run join tight. Detail rows stay tight
+    /// always. Assigned, never guessed — no negative margins anywhere.
+    public Avalonia.Thickness RowMargin
+    {
+        get => _rowMargin;
+        set
+        {
+            if (_rowMargin != value)
+            {
+                _rowMargin = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RowMargin)));
+            }
+        }
+    }
+
+    /// Group-aware rhythm from neighbour roles. Turn anchors (user
+    /// prompts, receipts) always keep full margins; detail rows always
+    /// join tight; every other row joins whatever came before unless a
+    /// turn boundary intervenes. Pure so the rhythm is tested, not
+    /// eyeballed.
+    internal static Avalonia.Thickness GroupMargins(string? prevRole, FeedEntry entry, string? nextRole)
+    {
+        if (entry.Role is "tool" or "system" && IsDetailPrefix(entry.Text))
+        {
+            return new Avalonia.Thickness(0, 1, 0, 1);
+        }
+
+        if (entry.Role is "user" or "receipt")
+        {
+            return new Avalonia.Thickness(0, 4, 0, 4);
+        }
+
+        var top = prevRole is null or "user" or "receipt" ? 4 : 1;
+        var bottom = nextRole is null or "user" or "receipt" ? 4 : 1;
+        return new Avalonia.Thickness(0, top, 0, bottom);
+    }
+
+    internal static bool IsDetailPrefix(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return false;
+        }
+
+        return text.StartsWith("[detail ", StringComparison.Ordinal)
+            || text.StartsWith("[result ", StringComparison.Ordinal)
+            || text.StartsWith("[progress ", StringComparison.Ordinal);
     }
 
     public bool IsStreaming { get; }
@@ -259,6 +362,334 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
     /// Plain dim rows: system/bridge/receipt rows that are not compaction.
     public bool IsPlainSystemRow => IsSystemRow && !IsCompaction;
 
+    private bool _isFinalReport;
+
+    /// The run's settled closing word: an assistant row immediately
+    /// followed by a receipt. Position only, never content — restored
+    /// history carries no receipts and cancelled turns end in notices,
+    /// so neither outlines. Assigned by the host during sync.
+    public bool IsFinalReport
+    {
+        get => _isFinalReport;
+        set
+        {
+            if (_isFinalReport != value)
+            {
+                _isFinalReport = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsFinalReport)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsPlainAssistant)));
+            }
+        }
+    }
+
+    /// Assistant rows that are not the final report (the ordinary case).
+    public bool IsPlainAssistant => IsAssistant && !IsFinalReport;
+
+    /// Position test for the final-report outline: the visible entry at
+    /// index is an assistant row closed by a receipt in the same cluster
+    /// (a later user prompt ends the cluster first). Live turns stream
+    /// into the row opened BEFORE the tools run, so adjacency is not the
+    /// test — cluster membership is. Restored history carries no receipts
+    /// and cancelled turns end in notices, so neither outlines.
+    internal static bool ClosesReport(IReadOnlyList<FeedEntry> visible, int index, bool showDiagnostics)
+    {
+        if (index < 0 || index >= visible.Count || visible[index].Role != "assistant")
+        {
+            return false;
+        }
+
+        for (var i = index + 1; i < visible.Count; i++)
+        {
+            if (!ShouldShow(visible[i], showDiagnostics))
+            {
+                continue;
+            }
+
+            if (visible[i].Role == "receipt")
+            {
+                return true;
+            }
+
+            if (visible[i].Role == "user")
+            {
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    /// Streaming caret: a subtle block cursor on the live assistant row so
+    /// readers see genuine Pi deltas landing. View-only — FullText (the
+    /// copy source) never carries it, and it vanishes on settle.
+    internal static string StreamingDisplay(string displayText, bool isStreaming)
+        => isStreaming ? displayText + " ▍" : displayText;
+
+    private bool _flowMode;
+
+    /// Flow Mode presentation for this row. Assigned by the host at build;
+    /// toggling rebuilds the list, so rows never mix modes.
+    public bool FlowMode
+    {
+        get => _flowMode;
+        set
+        {
+            if (_flowMode != value)
+            {
+                _flowMode = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FlowMode)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsFlowTool)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsCardTool)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsFlowExpanded)));
+            }
+        }
+    }
+
+    /// Slim Flow tool line (instead of the full card; Studio rows keep
+    /// their charcoal card in both modes).
+    public bool IsFlowTool => IsTool && FlowMode && !IsStudioTool;
+
+    /// Full tool card (classic presentation; never a Studio row).
+    public bool IsCardTool => IsTool && !FlowMode && !IsStudioTool;
+
+    private bool _isStudioTool;
+
+    /// Studio mission row: charcoal card with a truthful state indicator.
+    /// Suppresses both the Flow line and the classic card.
+    public bool IsStudioTool
+    {
+        get => _isStudioTool;
+        set
+        {
+            if (_isStudioTool != value)
+            {
+                _isStudioTool = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsStudioTool)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsFlowTool)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsCardTool)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsStudioExpanded)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsStudioSummary)));
+            }
+        }
+    }
+
+    /// Human-readable Studio state for the card header.
+    public string StudioStateText
+    {
+        get;
+        set
+        {
+            if (field != value)
+            {
+                field = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StudioStateText)));
+            }
+        }
+    } = "Working";
+
+    /// One-line evidence summary for the Studio card header.
+    public string StudioSummary
+    {
+        get;
+        set
+        {
+            if (field != value)
+            {
+                field = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StudioSummary)));
+            }
+        }
+    } = string.Empty;
+
+    /// State edge + dot for the Studio card. Assigned by the host.
+    public IBrush StudioEdge
+    {
+        get;
+        set
+        {
+            if (!Equals(field, value))
+            {
+                field = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(StudioEdge)));
+            }
+        }
+    } = AxTheme.CyanBrush;
+
+    /// Expanded Studio evidence (the full original receipt).
+    public bool IsStudioExpanded => IsStudioTool && IsExpanded;
+
+    /// Collapsed Studio summary line.
+    public bool IsStudioSummary => IsStudioTool && !IsExpanded;
+
+    /// Studio receipt identity + state from authoritative markers only:
+    /// RESULT lines, bracketed mission states and quoted status fields
+    /// (Studio schema STATUSES). Prose that merely mentions these words
+    /// does not count — an unmarked successful call is Working (the
+    /// mission continues), never Complete. Null unless Studio's tool.
+    internal static StudioFact? StudioOutcome(string toolName, bool isError, string text)
+    {
+        if (string.IsNullOrEmpty(toolName)
+            || !toolName.StartsWith("studio_", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (isError)
+        {
+            return new StudioFact(StudioState.Failed, StudioSummaryOf(text));
+        }
+
+        var state = StateOfResult(text) ?? StateOfBrackets(text) ?? StateOfStatusField(text);
+        return new StudioFact(state ?? StudioState.Working, StudioSummaryOf(text));
+    }
+
+    /// A Studio receipt: parsed mission state plus the summary line.
+    public sealed record StudioFact(StudioState State, string Summary);
+
+    internal static string DescribeStudioState(StudioState state) => state switch
+    {
+        StudioState.Complete => "Complete",
+        StudioState.NeedsHuman => "Needs human",
+        StudioState.Blocked => "Blocked",
+        StudioState.Failed => "Failed",
+        _ => "Working",
+    };
+
+    internal static IBrush StudioEdgeFor(StudioState state) => state switch
+    {
+        StudioState.Complete => AxTheme.GreenBrush,
+        StudioState.NeedsHuman => AxTheme.YellowBrush,
+        StudioState.Blocked => AxTheme.BlueBrush,
+        StudioState.Failed => AxTheme.RedBrush,
+        _ => AxTheme.CyanBrush,
+    };
+
+    internal static string StudioSummaryOf(string text)
+    {
+        foreach (var rawLine in text.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.Length > 0)
+            {
+                return line.Length <= 120 ? line : line[..120].TrimEnd() + "…";
+            }
+        }
+
+        return "no output recorded";
+    }
+
+    private static StudioState? StateOfToken(string token) => token switch
+    {
+        "COMPLETE" => StudioState.Complete,
+        "PARTIAL" => StudioState.NeedsHuman,
+        "FAILED" => StudioState.Failed,
+        "NEEDS_HUMAN" => StudioState.NeedsHuman,
+        "WAITING_REVIEW" => StudioState.Blocked,
+        "WORKING" => StudioState.Working,
+        _ => null,
+    };
+
+    private static StudioState? StateOfResult(string text)
+    {
+        foreach (var rawLine in text.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (!line.StartsWith("RESULT:", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var token = line["RESULT:".Length..].Trim()
+                .Split([' ', ',', ';', '[', ']'], StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault();
+            if (token is not null && StateOfToken(token) is { } state)
+            {
+                return state;
+            }
+        }
+
+        return null;
+    }
+
+    private static StudioState? StateOfBrackets(string text)
+    {
+        var at = 0;
+        while (at < text.Length)
+        {
+            var open = text.IndexOf('[', at);
+            if (open < 0)
+            {
+                return null;
+            }
+
+            var close = text.IndexOf(']', open + 1);
+            if (close < 0)
+            {
+                return null;
+            }
+
+            if (StateOfToken(text[(open + 1)..close].Trim()) is { } state)
+            {
+                return state;
+            }
+
+            at = close + 1;
+        }
+
+        return null;
+    }
+
+    private static StudioState? StateOfStatusField(string text)
+    {
+        var key = text.IndexOf("\"status\"", StringComparison.Ordinal);
+        while (key >= 0)
+        {
+            var colon = text.IndexOf(':', key + 8);
+            if (colon < 0)
+            {
+                return null;
+            }
+
+            var quote = text.IndexOf('"', colon + 1);
+            if (quote < 0)
+            {
+                return null;
+            }
+
+            var end = text.IndexOf('"', quote + 1);
+            if (end < 0)
+            {
+                return null;
+            }
+
+            if (StateOfToken(text[(quote + 1)..end]) is { } state)
+            {
+                return state;
+            }
+
+            key = text.IndexOf("\"status\"", end + 1, StringComparison.Ordinal);
+        }
+
+        return null;
+    }
+
+    /// Expanded Flow detail under the slim line.
+    public bool IsFlowExpanded => IsFlowTool && IsExpanded;
+
+    /// Status dot for the Flow line. Assigned by the host with the row.
+    public IBrush FlowDot
+    {
+        get;
+        set
+        {
+            if (!Equals(field, value))
+            {
+                field = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FlowDot)));
+            }
+        }
+    } = AxTheme.GreenBrush;
+
     public string FullText
     {
         get => _fullText;
@@ -268,6 +699,8 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
             {
                 _fullText = value;
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FullText)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsDetailRow)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(RowMargin)));
                 RefreshExpansion();
             }
         }
@@ -299,6 +732,9 @@ public sealed class ConversationViewItem : INotifyPropertyChanged
                 _isExpanded = value;
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsExpanded)));
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ExpandLabel)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsFlowExpanded)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsStudioExpanded)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsStudioSummary)));
             }
         }
     }

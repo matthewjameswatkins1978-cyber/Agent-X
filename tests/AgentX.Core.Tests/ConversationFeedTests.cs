@@ -244,6 +244,21 @@ public sealed class ConversationFeedTests
     }
 
     [Fact]
+    public void Feed_CopySource_PreservesMultilineToolOutput_ByteForByte()
+    {
+        // Luna acceptance (clipboard): multiline tool output must round-
+        // trip through both copy paths with newlines and spacing intact.
+        var feed = new ConversationFeed();
+        feed.AddUser("list files");
+        var tool = feed.BeginAssistantTurn();
+        var output = "alpha.txt\n  beta gamma.txt\n\ttrailing  spaces  \n\u4e2d\u6587";
+        feed.AppendDelta(tool, output);
+        feed.EndAssistantTurn(tool, new PiRunReceipt(true, false, 0, 9, 2));
+        Assert.Equal(output, feed.GetEntryText(tool));
+        Assert.Contains(output, feed.BuildTranscriptText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Map_DerivesMilestonesChangedFilesAndTests_WithoutFabricatingDecisions()
     {
         var feed = new ConversationFeed();
@@ -739,6 +754,26 @@ public sealed class ConversationFeedTests
         Assert.Equal("call-abc|fc-1", entries[0].CallId); // Restored rows keep identity.
         Assert.Null(entries[1].CallId);
         Assert.Null(entries[2].CallId);
+    }
+
+    [Fact]
+    public void History_RestoredFailuresCountLikeLiveOnes()
+    {
+        // Pi's own persisted isError flag propagates: restored failures
+        // count in the session map exactly like live tool failures —
+        // observed evidence, never inferred from text.
+        using var response = JsonDocument.Parse(
+            """{"data":{"messages":[{"role":"user","content":"go"},{"role":"toolResult","toolCallId":"c1","toolName":"exec","content":[{"type":"text","text":"boom"}],"isError":true},{"role":"toolResult","toolCallId":"c2","toolName":"read","content":[{"type":"text","text":"ok"}],"isError":false},{"role":"bashExecution","command":"Get-Date","output":"...","isError":false}]}}""");
+        var history = PiConversation.ParseHistory(response);
+        Assert.Equal(4, history.Count);
+        Assert.True(history[1].IsError);
+        Assert.False(history[2].IsError);
+        Assert.False(history[3].IsError);
+        var feed = new ConversationFeed();
+        feed.LoadHistory(history);
+        var map = feed.BuildMap();
+        Assert.Equal(1, map.ErrorCount);
+        Assert.Contains(map.Milestones, m => m.Kind == "error");
     }
 
     [Fact]

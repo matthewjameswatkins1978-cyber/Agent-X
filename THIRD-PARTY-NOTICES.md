@@ -23,8 +23,9 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 The following bundled icons derive from the Feather project and carry the
 MIT License (MIT), Copyright (c) 2013-present Cole Bemis:
-`terminal`, `trash` (remove), `check` (unused — not bundled), `copy`
-(Feather `copy` is NOT used; the bundled copy geometry is Lucide ISC).
+`check`, `x` (close), `chevron-up`, `chevron-down`, `alert-triangle`
+(warn). (`terminal`, `trash`, `copy` are NOT used; those geometries are
+Lucide ISC.)
 
 Full MIT text for the Feather-derived icons: permission is granted, free of
 charge, to use, copy, modify, merge, publish, distribute, sublicense and/or

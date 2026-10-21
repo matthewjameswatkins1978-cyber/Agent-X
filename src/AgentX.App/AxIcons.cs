@@ -20,14 +20,28 @@ public enum AxIconKind
     Add,
     Collapse,
     Remove,
+    Rabbit,
+    Search,
+    Sliders,
+    Grid,
+    Chat,
+    Branch,
+    Send,
+    Target,
+    Cpu,
+    Check,
+    Warn,
+    ChevronUp,
+    ChevronDown,
+    Close,
 }
 
 /// <summary>
 /// Bundled Lucide-style stroke geometries (24x24 viewBox, 2px round stroke),
-/// licensed ISC (Lucide) + MIT (Feather-derived: check, terminal, trash, x —
-/// see THIRD-PARTY-NOTICES.md). Only the icons the chrome actually uses are
-/// bundled: no icon package, no emoji, no dead glyphs. Path data verified by
-/// <c>AxDesignTests</c> via <see cref="Geometry.Parse"/>.
+/// licensed ISC (Lucide) + MIT (Feather-derived: check, x, chevrons,
+/// alert-triangle — see THIRD-PARTY-NOTICES.md). Only the icons the chrome
+/// actually uses are bundled: no icon package, no emoji, no dead glyphs.
+/// Path data verified by <c>AxDesignTests</c> via <see cref="Geometry.Parse"/>.
 /// </summary>
 public static class AxIcons
 {
@@ -58,6 +72,38 @@ public static class AxIcons
 
     public const string Remove = "M10 11v6 M14 11v6 M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6 M3 6h18 M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2";
 
+    /// Rabbit-head anchor (redrawn): two distinct capped ears over a rounded
+    /// head, symmetric about x=12. Same 2px round-stroke language as the nav
+    /// family; the ink bounds centre on the slot, so no per-slot nudge is
+    /// needed to balance it against the icons below.
+    public const string Rabbit = "M7.5 10.5V5.2a1.7 1.7 0 0 1 3.4 0v5.3 M13.1 10.5V5.2a1.7 1.7 0 0 1 3.4 0v5.3 M6.5 15.5a5.5 5.5 0 1 0 11 0 5.5 5.5 0 1 0-11 0";
+
+    public const string Search = "M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z M21 21l-4.3-4.3";
+
+    public const string Sliders = "M21 4h-7 M10 4H3 M21 12h-9 M8 12H3 M21 20h-5 M12 20H3 M14 2v4 M8 10v4 M16 18v4";
+
+    public const string Grid = "M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M13 13h7v7h-7z";
+
+    public const string Chat = "M7.9 20A9 9 0 1 0 4 16.1L2 22Z";
+
+    public const string Branch = "M6 3v12 M18 9a9 9 0 0 1-9 9 M15 6a3 3 0 1 0 6 0 3 3 0 1 0-6 0 M3 18a3 3 0 1 0 6 0 3 3 0 1 0-6 0";
+
+    public const string Send = "M3.714 3.048a.498.498 0 0 0-.683.627l2.843 7.627a2 2 0 0 1 0 1.396l-2.842 7.627a.498.498 0 0 0 .682.627l18-8.5a.5.5 0 0 0 0-.904z M6 12h16";
+
+    public const string Target = "M2 12a10 10 0 1 0 20 0 10 10 0 1 0-20 0 M6 12a6 6 0 1 0 12 0 6 6 0 1 0-12 0 M10 12a2 2 0 1 0 4 0 2 2 0 1 0-4 0";
+
+    public const string Cpu = "M6 4h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z M9 9h6v6H9z M9 2v2 M9 20v2 M15 2v2 M15 20v2 M2 9h2 M2 15h2 M20 9h2 M20 15h2";
+
+    public const string Check = "M20 6 9 17l-5-5";
+
+    public const string Warn = "M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z M12 9v4 M12 17h.01";
+
+    public const string ChevronUp = "M18 15l-6-6-6 6";
+
+    public const string ChevronDown = "M6 9l6 6 6-6";
+
+    public const string Close = "M18 6 6 18 M6 6l12 12";
+
     public static string DataFor(AxIconKind kind) => kind switch
     {
         AxIconKind.Connect => Connect,
@@ -73,6 +119,20 @@ public static class AxIcons
         AxIconKind.Add => Add,
         AxIconKind.Collapse => Collapse,
         AxIconKind.Remove => Remove,
+        AxIconKind.Rabbit => Rabbit,
+        AxIconKind.Search => Search,
+        AxIconKind.Sliders => Sliders,
+        AxIconKind.Grid => Grid,
+        AxIconKind.Chat => Chat,
+        AxIconKind.Branch => Branch,
+        AxIconKind.Send => Send,
+        AxIconKind.Target => Target,
+        AxIconKind.Cpu => Cpu,
+        AxIconKind.Check => Check,
+        AxIconKind.Warn => Warn,
+        AxIconKind.ChevronUp => ChevronUp,
+        AxIconKind.ChevronDown => ChevronDown,
+        AxIconKind.Close => Close,
         _ => More,
     };
 }
@@ -91,10 +151,36 @@ public sealed class AxIcon : Avalonia.Controls.Shapes.Path
     public static readonly StyledProperty<bool> FilledProperty =
         AvaloniaProperty.Register<AxIcon, bool>(nameof(Filled));
 
+    public static readonly StyledProperty<IBrush?> TintProperty =
+        AvaloniaProperty.Register<AxIcon, IBrush?>(nameof(Tint));
+
+    /// Centering translation for Uniform-fit geometry. Measured rendering
+    /// fits the ink box to the slot from its top-left, so narrow or tall
+    /// art (the rabbit) would hug the top-left while full-bleed icons look
+    /// centred. This pad centres every icon in its slot at the system
+    /// level — no per-icon nudges, no slot changes. Full-bleed icons
+    /// compute zero and keep a null transform. Pure so it is tested.
+    internal static Vector CenteringOffset(Size slot, Rect ink)
+    {
+        if (slot.Width <= 0 || slot.Height <= 0 || ink.Width <= 0 || ink.Height <= 0)
+        {
+            return new Vector(0, 0);
+        }
+
+        var scale = Math.Min(slot.Width / ink.Width, slot.Height / ink.Height);
+        if (!(scale > 0) || double.IsInfinity(scale))
+        {
+            return new Vector(0, 0);
+        }
+
+        return new Vector((slot.Width - ink.Width * scale) / 2, (slot.Height - ink.Height * scale) / 2);
+    }
+
     static AxIcon()
     {
         KindProperty.Changed.AddClassHandler<AxIcon>((c, _) => c.Refresh());
         FilledProperty.Changed.AddClassHandler<AxIcon>((c, _) => c.Refresh());
+        TintProperty.Changed.AddClassHandler<AxIcon>((c, _) => c.Refresh());
     }
 
     public AxIcon()
@@ -121,6 +207,45 @@ public sealed class AxIcon : Avalonia.Controls.Shapes.Path
         set => SetValue(FilledProperty, value);
     }
 
+    /// Optional ink override (verification states): null keeps the shared
+    /// icon brush so section anchors stay in the family by default.
+    public IBrush? Tint
+    {
+        get => GetValue(TintProperty);
+        set => SetValue(TintProperty, value);
+    }
+
+    protected override Size ArrangeOverride(Size finalSize)
+    {
+        var arranged = base.ArrangeOverride(finalSize);
+        ApplyOpticalCentering(finalSize);
+        return arranged;
+    }
+
+    /// Render-only centering (never layout): the transform moves ink
+    /// without moving the slot, so every datum check keeps measuring the
+    /// untouched geometry. Skipped while unlaid-out or full-bleed.
+    private void ApplyOpticalCentering(Size size)
+    {
+        var offset = Data is null ? new Vector(0, 0) : CenteringOffset(size, Data.Bounds);
+        if (offset.X == 0 && offset.Y == 0)
+        {
+            if (RenderTransform is not null)
+            {
+                RenderTransform = null;
+            }
+
+            return;
+        }
+
+        if (RenderTransform is not TranslateTransform current
+            || Math.Abs(current.X - offset.X) > 0.001
+            || Math.Abs(current.Y - offset.Y) > 0.001)
+        {
+            RenderTransform = new TranslateTransform(offset.X, offset.Y);
+        }
+    }
+
     private void Refresh()
     {
         try
@@ -132,15 +257,18 @@ public sealed class AxIcon : Avalonia.Controls.Shapes.Path
             Data = null;
         }
 
+        ApplyOpticalCentering(Bounds.Size);
+
+        var ink = Tint ?? AxTheme.IconBrush;
         if (Filled)
         {
-            Fill = AxTheme.IconBrush;
+            Fill = ink;
             Stroke = null;
         }
         else
         {
             Fill = null;
-            Stroke = AxTheme.IconBrush;
+            Stroke = ink;
         }
     }
 }

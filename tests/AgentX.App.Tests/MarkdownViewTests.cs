@@ -89,6 +89,16 @@ public sealed class MarkdownViewTests
     }
 
     [Fact]
+    public void CodeFence_StringOrangeNumberGreenPerPiTheme()
+    {
+        var runs = Runs(Build("```csharp\nvar s = \"hi\";\nvar n = 42;\n```"));
+        var str = Assert.Single(runs, r => r.Text == "\"hi\"");
+        Assert.Same(AxTheme.StringBrush, str.Foreground);
+        var num = Assert.Single(runs, r => r.Text == "42");
+        Assert.Same(AxTheme.GreenBrush, num.Foreground);
+    }
+
+    [Fact]
     public void NestedListItems_IndentByDepth()
     {
         var runs = Runs(Build("- top\n  - child"));
@@ -126,6 +136,20 @@ public sealed class MarkdownViewTests
             var monoRun = Assert.Single(Runs(mono));
             Assert.Equal(AxTheme.MonoFont, monoRun.FontFamily);
         });
+    }
+
+    [Fact]
+    public void Dim_QuietsUncolouredMonoOnly()
+    {
+        var view = new MarkdownView { MonoText = "plain line", Dim = true };
+        Assert.Equal(AxTheme.FeedMonoSize - 1.5, view.FontSize);
+        var quiet = Assert.Single(Runs(view));
+        Assert.Same(AxTheme.MutedBrush, quiet.Foreground);
+        // Explicit ANSI colours and diff verdicts survive the quieting.
+        var ansi = new MarkdownView { MonoText = "\x1b[31mred line", Dim = true };
+        Assert.NotSame(AxTheme.MutedBrush, Assert.Single(Runs(ansi)).Foreground);
+        var diff = new MarkdownView { MonoText = "+added line", DiffTint = true, Dim = true };
+        Assert.Same(AxTheme.GreenBrush, Assert.Single(Runs(diff)).Foreground);
     }
 
     [Fact]
