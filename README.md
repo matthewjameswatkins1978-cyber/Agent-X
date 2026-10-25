@@ -1,17 +1,21 @@
 # Agent X
 
-**Release plan:** [Road to 1.0 RC1](docs/roadmap-1-0-rc1.md) (evidence-gated, Windows-first; roadmap is not a release claim).
+**A native workspace where coding agents do the work and the evidence stays visible.**
 
-Agent X is an AI-first, native agent environment. A resident AI should operate the environment through dependable, typed capabilities; the managed Garden will own toolchains and plugin admission. Pi is the protected, initially unmodified agent kernel. Third-party plugins target Agent X rather than Pi internals. Human and AI clients share the same typed operations and verifiable outcomes.
+Agent X is an experimental desktop environment for working with AI agents. The long-term idea is straightforward: people and agents should use the same dependable operations, the same workspace state, and inspectable results, instead of forcing a human to reconstruct what happened from a wall of chat messages.
 
-This repository is a deliberately small bootstrap. The first vertical slice is a native Avalonia desktop transcript viewer: import a large packet from the clipboard, index its lines without duplicating the source text, render the line list through a virtualized control, and copy or export the complete original text.
+Today, the repository is a **Windows-first Avalonia/.NET prototype**, not that complete vision. It began as a fast, accurate transcript viewer and now includes Pi RPC/session foundations, workspace identity and a conversation feed. The planned resident AI, managed toolchain “Garden”, and plugin-admission runtime are **not yet complete**.
+
+The transcript viewer is immediately useful: paste a large packet, scroll its virtualized lines, and copy or export the original source text without losing it. This is also the test bed for making the rest of the environment robust.
+
+[Road to 1.0 RC1](docs/roadmap-1-0-rc1.md) lays out the evidence-gated release plan, not a promise that RC1 is already here.
 
 ## Current status
 
 - GUI prototype: Avalonia 12.1.4, .NET 10, C#.
 - Framework license: MIT. [Avalonia license](https://github.com/AvaloniaUI/Avalonia/blob/main/licence.md)
 - Core import operation and transcript model are independent of Avalonia.
-- A protected Pi 1.1.0 JSONL RPC connection, Pi-native sessions, workspace identity/recovery, conversation feed and Session Map are now merged. The Garden, resident AI and Agent X plugin admission runtime remain deferred. See the RC1 roadmap for release gates and the two active PRs (observability and native desktop shell).
+- A protected Pi 1.1.0 JSONL RPC connection, Pi-native sessions, workspace identity/recovery, conversation feed and Session Map are now merged. The Garden, resident AI and Agent X plugin admission runtime remain deferred. See the RC1 roadmap for remaining release gates; PR status should be checked live rather than treated as a permanent README fact.
 - A user-run Windows smoke check loaded the 100,000-line view, scrolled to the final rows, and confirmed the copy/export actions completed immediately. Larger packet sizes still need measured verification; see the performance plan below.
 
 ## Build and run
